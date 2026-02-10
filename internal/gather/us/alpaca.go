@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/alpacahq/alpaca-trade-api-go/v3/marketdata"
+	"github.com/parquet-go/parquet-go"
 
 	"jupitor/internal/domain"
 	"jupitor/internal/gather"
@@ -492,7 +493,8 @@ func (g *DailyBarGatherer) fetchMultiBars(ctx context.Context, symbols []string,
 
 // tradeBackfillStep finds the latest universe date with missing trade files
 // and processes it. Returns (true, nil) if work was done, (false, nil) if
-// all dates are complete.
+// all dates are complete. Only symbols without existing trade files are
+// fetched, so new symbols added to historical universe files are picked up.
 func (g *DailyBarGatherer) tradeBackfillStep(ctx context.Context) (bool, error) {
 	universeDir := filepath.Join(g.dataDir(), "us", "universe")
 	dates, err := ListUniverseDates(universeDir)
@@ -500,16 +502,9 @@ func (g *DailyBarGatherer) tradeBackfillStep(ctx context.Context) (bool, error) 
 		return false, fmt.Errorf("listing universe dates: %w", err)
 	}
 
-	doneDir := filepath.Join(g.dataDir(), "us", "trades", ".done")
-
 	for _, date := range dates {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
-		}
-
-		// Skip dates already fully processed.
-		if _, err := os.Stat(filepath.Join(doneDir, date)); err == nil {
-			continue
 		}
 
 		symbols, err := ReadUniverseFile(filepath.Join(universeDir, date+".txt"))
@@ -523,25 +518,33 @@ func (g *DailyBarGatherer) tradeBackfillStep(ctx context.Context) (bool, error) 
 			continue
 		}
 
+		// Find symbols missing trade files for this date.
+		var missing []string
+		for _, sym := range symbols {
+			tradePath := g.tradePath(sym, dayTime)
+			if _, err := os.Stat(tradePath); os.IsNotExist(err) {
+				missing = append(missing, sym)
+			}
+		}
+
+		if len(missing) == 0 {
+			continue
+		}
+
 		g.log.Info("trade backfill",
 			"date", date,
-			"symbols", len(symbols),
+			"missing", len(missing),
+			"total", len(symbols),
 		)
 
-		count, err := g.ProcessTradeDay(ctx, dayTime, symbols)
+		count, err := g.ProcessTradeDay(ctx, dayTime, missing)
 		if err != nil {
 			return true, fmt.Errorf("processing trade day %s: %w", date, err)
 		}
 
-		// Mark date as fully processed.
-		if ctx.Err() == nil {
-			os.MkdirAll(doneDir, 0o755)
-			os.WriteFile(filepath.Join(doneDir, date), nil, 0o644)
-		}
-
 		g.log.Info("trade backfill done",
 			"date", date,
-			"symbols", len(symbols),
+			"symbols", len(missing),
 			"trades", count,
 		)
 		return true, nil
@@ -650,13 +653,33 @@ func (g *DailyBarGatherer) ProcessTradeDay(ctx context.Context, day time.Time, s
 				<-ticker.C
 
 				batch := batches[batchIdx]
-				trades, err := g.fetchMultiTrades(ctx, batch, day)
-				if err != nil {
-					g.log.Error("trade fetch failed",
+
+				var trades []domain.Trade
+				var fetchErr error
+				for attempt := 1; attempt <= 3; attempt++ {
+					trades, fetchErr = g.fetchMultiTrades(ctx, batch, day)
+					if fetchErr == nil {
+						break
+					}
+					g.log.Warn("trade fetch failed, retrying",
 						"date", day.Format("2006-01-02"),
 						"batch", fmt.Sprintf("%d/%d", batchIdx+1, totalBatches),
 						"symbols", len(batch),
-						"err", err,
+						"attempt", fmt.Sprintf("%d/3", attempt),
+						"err", fetchErr,
+					)
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(5 * time.Second):
+					}
+				}
+				if fetchErr != nil {
+					g.log.Error("trade fetch failed, skipping batch",
+						"date", day.Format("2006-01-02"),
+						"batch", fmt.Sprintf("%d/%d", batchIdx+1, totalBatches),
+						"symbols", len(batch),
+						"err", fetchErr,
 					)
 					continue
 				}
@@ -669,6 +692,18 @@ func (g *DailyBarGatherer) ProcessTradeDay(ctx context.Context, day time.Time, s
 							"err", err,
 						)
 						continue
+					}
+				}
+
+				// Write empty parquet files for symbols with no qualifying
+				// trades so they are not retried on subsequent runs.
+				tradeSymbols := make(map[string]struct{})
+				for _, t := range trades {
+					tradeSymbols[t.Symbol] = struct{}{}
+				}
+				for _, sym := range batch {
+					if _, ok := tradeSymbols[sym]; !ok {
+						g.writeEmptyTradeFile(sym, day)
 					}
 				}
 
@@ -693,6 +728,20 @@ func (g *DailyBarGatherer) ProcessTradeDay(ctx context.Context, day time.Time, s
 	}
 
 	return totalCount, nil
+}
+
+// writeEmptyTradeFile creates an empty parquet file (schema only, zero rows)
+// for a symbol-date pair so backfill knows it was already processed.
+func (g *DailyBarGatherer) writeEmptyTradeFile(symbol string, day time.Time) {
+	path := g.tradePath(symbol, day)
+	if _, err := os.Stat(path); err == nil {
+		return // already exists
+	}
+	// WriteTrades with an empty slice is a no-op, so write directly.
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	_ = parquet.WriteFile(path, []store.TradeRecord{})
 }
 
 // fetchMultiTrades fetches trades for multiple symbols for a single day.
