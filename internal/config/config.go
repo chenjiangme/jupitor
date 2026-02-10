@@ -110,11 +110,11 @@ func applyEnvOverrides(cfg *Config) {
 		cfg.Storage.SQLitePath = v
 	}
 
-	if v := os.Getenv("ALPACA_API_KEY"); v != "" {
+	if v := os.Getenv("APCA_API_KEY_ID"); v != "" {
 		cfg.Alpaca.APIKey = v
 	}
 
-	if v := os.Getenv("ALPACA_API_SECRET"); v != "" {
+	if v := os.Getenv("APCA_API_SECRET_KEY"); v != "" {
 		cfg.Alpaca.APISecret = v
 	}
 
@@ -132,13 +132,5 @@ func applyEnvOverrides(cfg *Config) {
 
 	if v := os.Getenv("LOG_LEVEL"); v != "" {
 		cfg.Logging.Level = v
-	}
-
-	// Standard Alpaca env vars (highest priority — canonical names used by SDK).
-	if v := os.Getenv("APCA_API_KEY_ID"); v != "" {
-		cfg.Alpaca.APIKey = v
-	}
-	if v := os.Getenv("APCA_API_SECRET_KEY"); v != "" {
-		cfg.Alpaca.APISecret = v
 	}
 }

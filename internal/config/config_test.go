@@ -57,8 +57,6 @@ trading:
 	}
 
 	// Clear any environment overrides that might interfere.
-	os.Unsetenv("ALPACA_API_KEY")
-	os.Unsetenv("ALPACA_API_SECRET")
 	os.Unsetenv("APCA_API_KEY_ID")
 	os.Unsetenv("APCA_API_SECRET_KEY")
 	os.Unsetenv("DATA_DIR")
@@ -150,11 +148,9 @@ storage:
 	tmpFile.Close()
 
 	// Set environment overrides.
-	os.Setenv("ALPACA_API_KEY", "env-key")
+	os.Setenv("APCA_API_KEY_ID", "env-key")
 	os.Setenv("DATA_DIR", "/env/data")
-	os.Unsetenv("APCA_API_KEY_ID")
-	os.Unsetenv("APCA_API_SECRET_KEY")
-	defer os.Unsetenv("ALPACA_API_KEY")
+	defer os.Unsetenv("APCA_API_KEY_ID")
 	defer os.Unsetenv("DATA_DIR")
 
 	cfg, err := Load(tmpFile.Name())

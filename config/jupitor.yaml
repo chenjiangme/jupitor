@@ -13,8 +13,8 @@ server:
   grpc_port: 9090
 
 alpaca:
-  api_key: "${ALPACA_API_KEY}"
-  api_secret: "${ALPACA_API_SECRET}"
+  api_key: "${APCA_API_KEY_ID}"
+  api_secret: "${APCA_API_SECRET_KEY}"
   base_url: "https://api.alpaca.markets"
   data_url: "https://data.alpaca.markets"
   stream_url: "wss://stream.data.alpaca.markets/v2"
