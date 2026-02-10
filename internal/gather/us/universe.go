@@ -91,6 +91,45 @@ func (u *universeWriter) Finalize() error {
 	return nil
 }
 
+// ReadUniverseFile reads a universe file and returns the list of symbols.
+func ReadUniverseFile(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	lines := strings.Split(string(data), "\n")
+	var symbols []string
+	for _, line := range lines {
+		sym := strings.TrimSpace(line)
+		if sym != "" {
+			symbols = append(symbols, sym)
+		}
+	}
+	return symbols, nil
+}
+
+// ListUniverseDates returns all dates that have universe files in the given
+// directory, sorted in descending order (latest first).
+func ListUniverseDates(dir string) ([]string, error) {
+	matches, err := filepath.Glob(filepath.Join(dir, "*.txt"))
+	if err != nil {
+		return nil, fmt.Errorf("globbing universe files: %w", err)
+	}
+
+	var dates []string
+	for _, m := range matches {
+		base := filepath.Base(m)
+		date := strings.TrimSuffix(base, ".txt")
+		// Validate date format.
+		if len(date) == 10 && date[4] == '-' && date[7] == '-' {
+			dates = append(dates, date)
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(dates)))
+	return dates, nil
+}
+
 // sortDedup reads lines from the file, sorts them, removes duplicates, and
 // writes them back.
 func sortDedup(path string) error {

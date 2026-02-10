@@ -170,6 +170,45 @@ func TestParquetStoreListSymbols(t *testing.T) {
 	}
 }
 
+func TestMergeTradeRecords(t *testing.T) {
+	existing := []TradeRecord{
+		{Symbol: "AAPL", Timestamp: 1000, Price: 150.0, Size: 200, Exchange: "V", ID: "1"},
+		{Symbol: "AAPL", Timestamp: 2000, Price: 151.0, Size: 300, Exchange: "V", ID: "2"},
+	}
+	incoming := []TradeRecord{
+		{Symbol: "AAPL", Timestamp: 2000, Price: 151.5, Size: 300, Exchange: "V", ID: "2"}, // duplicate
+		{Symbol: "AAPL", Timestamp: 3000, Price: 152.0, Size: 400, Exchange: "N", ID: "3"}, // new
+	}
+
+	merged := mergeTradeRecords(existing, incoming)
+
+	if len(merged) != 3 {
+		t.Fatalf("mergeTradeRecords returned %d records, want 3", len(merged))
+	}
+
+	// Should be sorted by timestamp.
+	for i := 1; i < len(merged); i++ {
+		if merged[i].Timestamp < merged[i-1].Timestamp {
+			t.Errorf("merged[%d].Timestamp (%d) < merged[%d].Timestamp (%d)",
+				i, merged[i].Timestamp, i-1, merged[i-1].Timestamp)
+		}
+	}
+
+	// Duplicate (ID "2") should prefer incoming (price 151.5).
+	if merged[1].Price != 151.5 {
+		t.Errorf("merged[1].Price = %v, want 151.5 (incoming should win)", merged[1].Price)
+	}
+}
+
+func TestMergeTradeRecordsEmpty(t *testing.T) {
+	merged := mergeTradeRecords(nil, []TradeRecord{
+		{Symbol: "MSFT", Timestamp: 1000, Price: 400.0, Size: 500, ID: "1"},
+	})
+	if len(merged) != 1 {
+		t.Fatalf("mergeTradeRecords with nil existing returned %d, want 1", len(merged))
+	}
+}
+
 func TestSQLiteStoreOpen(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")

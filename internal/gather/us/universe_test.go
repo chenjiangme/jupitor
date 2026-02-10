@@ -47,6 +47,83 @@ func TestUniverseWriterAddBars(t *testing.T) {
 	}
 }
 
+func TestReadUniverseFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "2025-01-06.txt")
+	if err := os.WriteFile(path, []byte("AAPL\nGOOGL\nMSFT\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	symbols, err := ReadUniverseFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"AAPL", "GOOGL", "MSFT"}
+	if len(symbols) != len(want) {
+		t.Fatalf("ReadUniverseFile returned %d symbols, want %d", len(symbols), len(want))
+	}
+	for i, s := range symbols {
+		if s != want[i] {
+			t.Errorf("symbol[%d] = %q, want %q", i, s, want[i])
+		}
+	}
+}
+
+func TestReadUniverseFileEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.txt")
+	if err := os.WriteFile(path, []byte("\n\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	symbols, err := ReadUniverseFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(symbols) != 0 {
+		t.Errorf("expected 0 symbols, got %d", len(symbols))
+	}
+}
+
+func TestListUniverseDates(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create universe files.
+	for _, date := range []string{"2025-01-03", "2025-01-06", "2025-01-02"} {
+		path := filepath.Join(dir, date+".txt")
+		if err := os.WriteFile(path, []byte("AAPL\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dates, err := ListUniverseDates(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"2025-01-06", "2025-01-03", "2025-01-02"}
+	if len(dates) != len(want) {
+		t.Fatalf("ListUniverseDates returned %d dates, want %d", len(dates), len(want))
+	}
+	for i, d := range dates {
+		if d != want[i] {
+			t.Errorf("date[%d] = %q, want %q", i, d, want[i])
+		}
+	}
+}
+
+func TestListUniverseDatesEmpty(t *testing.T) {
+	dir := t.TempDir()
+
+	dates, err := ListUniverseDates(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dates) != 0 {
+		t.Errorf("expected 0 dates, got %d", len(dates))
+	}
+}
+
 func TestUniverseWriterFinalize(t *testing.T) {
 	dir := t.TempDir()
 	uw := newUniverseWriter(dir)

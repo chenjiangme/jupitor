@@ -199,7 +199,7 @@ func (s *ParquetStore) WriteTrades(_ context.Context, trades []domain.Trade) err
 		path := s.tradePath(k.symbol, t)
 
 		existing, _ := readParquetFile[TradeRecord](path)
-		merged := append(existing, records...)
+		merged := mergeTradeRecords(existing, records)
 
 		if err := writeParquetFile(path, merged); err != nil {
 			return fmt.Errorf("writing trades for %s/%s: %w", k.symbol, k.date, err)
@@ -287,6 +287,31 @@ func mergeBarRecords(existing, incoming []BarRecord) []BarRecord {
 	}
 
 	merged := make([]BarRecord, 0, len(seen))
+	for _, r := range seen {
+		merged = append(merged, r)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].Timestamp < merged[j].Timestamp
+	})
+	return merged
+}
+
+// mergeTradeRecords deduplicates trade records by (symbol, id), preferring
+// new records over existing ones. Results are sorted by timestamp.
+func mergeTradeRecords(existing, incoming []TradeRecord) []TradeRecord {
+	type key struct {
+		symbol string
+		id     string
+	}
+	seen := make(map[key]TradeRecord, len(existing)+len(incoming))
+	for _, r := range existing {
+		seen[key{r.Symbol, r.ID}] = r
+	}
+	for _, r := range incoming {
+		seen[key{r.Symbol, r.ID}] = r
+	}
+
+	merged := make([]TradeRecord, 0, len(seen))
 	for _, r := range seen {
 		merged = append(merged, r)
 	}

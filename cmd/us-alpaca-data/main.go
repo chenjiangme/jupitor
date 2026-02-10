@@ -28,7 +28,7 @@ func main() {
 	}
 
 	// Dual logger: stdout + /tmp log file.
-	logFileName := fmt.Sprintf("/tmp/us-daily-%s.log", time.Now().Format("2006-01-02"))
+	logFileName := fmt.Sprintf("/tmp/us-alpaca-data-%s.log", time.Now().Format("2006-01-02"))
 	logFile, err := os.Create(logFileName)
 	if err != nil {
 		log.Fatalf("failed to create log file: %v", err)
@@ -47,9 +47,12 @@ func main() {
 		cfg.Alpaca.APIKey,
 		cfg.Alpaca.APISecret,
 		cfg.Alpaca.DataURL,
-		pstore,
-		cfg.Gather.USDaily.BatchSize,
-		cfg.Gather.USDaily.MaxWorkers,
+		pstore,                          // barStore
+		pstore,                          // tradeStore
+		cfg.Gather.USDaily.BatchSize,    // bar batch size
+		cfg.Gather.USDaily.MaxWorkers,   // bar workers
+		cfg.Gather.USTrade.BatchSize,    // trade batch size
+		cfg.Gather.USTrade.MaxWorkers,   // trade workers
 		cfg.Gather.USDaily.StartDate,
 		csvPath,
 		cfg.Alpaca.BaseURL,
@@ -58,8 +61,8 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	slog.Info("starting gatherer", "name", gatherer.Name(), "logFile", logFileName)
+	slog.Info("starting us-alpaca-data daemon", "logFile", logFileName)
 	if err := gatherer.Run(ctx); err != nil {
-		log.Fatalf("gatherer error: %v", err)
+		log.Fatalf("daemon error: %v", err)
 	}
 }

@@ -30,8 +30,8 @@ gather:
     max_workers: 10
     rate_limit_per_min: 200
   us_trade:
-    start_date: "2024-01-01"
     batch_size: 50
+    max_workers: 16
     rate_limit_per_min: 200
   cn_daily:
     start_date: "2020-01-01"
