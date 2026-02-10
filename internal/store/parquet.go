@@ -47,12 +47,14 @@ type BarRecord struct {
 
 // TradeRecord is the Parquet schema for trade tick data.
 type TradeRecord struct {
-	Symbol    string  `parquet:"symbol"`
-	Timestamp int64   `parquet:"timestamp,timestamp(millisecond)"` // Unix ms
-	Price     float64 `parquet:"price"`
-	Size      int64   `parquet:"size"`
-	Exchange  string  `parquet:"exchange"`
-	ID        string  `parquet:"id"`
+	Symbol     string  `parquet:"symbol"`
+	Timestamp  int64   `parquet:"timestamp,timestamp(millisecond)"` // Unix ms
+	Price      float64 `parquet:"price"`
+	Size       int64   `parquet:"size"`
+	Exchange   string  `parquet:"exchange"`
+	ID         string  `parquet:"id"`
+	Conditions string  `parquet:"conditions"` // comma-joined condition codes
+	Update     string  `parquet:"update"`
 }
 
 // ---------------------------------------------------------------------------
@@ -185,12 +187,14 @@ func (s *ParquetStore) WriteTrades(_ context.Context, trades []domain.Trade) err
 	for _, t := range trades {
 		k := key{symbol: t.Symbol, date: t.Timestamp.Format("2006-01-02")}
 		groups[k] = append(groups[k], TradeRecord{
-			Symbol:    t.Symbol,
-			Timestamp: t.Timestamp.UnixMilli(),
-			Price:     t.Price,
-			Size:      t.Size,
-			Exchange:  t.Exchange,
-			ID:        t.ID,
+			Symbol:     t.Symbol,
+			Timestamp:  t.Timestamp.UnixMilli(),
+			Price:      t.Price,
+			Size:       t.Size,
+			Exchange:   t.Exchange,
+			ID:         t.ID,
+			Conditions: t.Conditions,
+			Update:     t.Update,
 		})
 	}
 
@@ -221,12 +225,14 @@ func (s *ParquetStore) ReadTrades(_ context.Context, symbol string, start, end t
 			ts := time.UnixMilli(r.Timestamp)
 			if (ts.Equal(start) || ts.After(start)) && (ts.Equal(end) || ts.Before(end)) {
 				trades = append(trades, domain.Trade{
-					Symbol:    r.Symbol,
-					Timestamp: ts,
-					Price:     r.Price,
-					Size:      r.Size,
-					Exchange:  r.Exchange,
-					ID:        r.ID,
+					Symbol:     r.Symbol,
+					Timestamp:  ts,
+					Price:      r.Price,
+					Size:       r.Size,
+					Exchange:   r.Exchange,
+					ID:         r.ID,
+					Conditions: r.Conditions,
+					Update:     r.Update,
 				})
 			}
 		}

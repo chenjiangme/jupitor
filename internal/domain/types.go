@@ -90,12 +90,14 @@ type Bar struct {
 
 // Trade represents a single executed trade on an exchange.
 type Trade struct {
-	Symbol    string
-	Timestamp time.Time
-	Price     float64
-	Size      int64
-	Exchange  string
-	ID        string
+	Symbol     string
+	Timestamp  time.Time
+	Price      float64
+	Size       int64
+	Exchange   string
+	ID         string
+	Conditions string // comma-joined condition codes
+	Update     string // update type (empty for normal trades)
 }
 
 // Quote represents a bid/ask quote for a symbol at a point in time.

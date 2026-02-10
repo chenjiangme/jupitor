@@ -47,12 +47,11 @@ func main() {
 		cfg.Alpaca.APIKey,
 		cfg.Alpaca.APISecret,
 		cfg.Alpaca.DataURL,
-		pstore,                          // barStore
-		pstore,                          // tradeStore
-		cfg.Gather.USDaily.BatchSize,    // bar batch size
-		cfg.Gather.USDaily.MaxWorkers,   // bar workers
-		cfg.Gather.USTrade.BatchSize,    // trade batch size
-		cfg.Gather.USTrade.MaxWorkers,   // trade workers
+		pstore,                        // barStore
+		pstore,                        // tradeStore
+		cfg.Gather.USDaily.BatchSize,  // bar batch size
+		cfg.Gather.USDaily.MaxWorkers, // bar workers
+		cfg.Gather.USTrade.MaxWorkers, // trade workers
 		cfg.Gather.USDaily.StartDate,
 		csvPath,
 		cfg.Alpaca.BaseURL,

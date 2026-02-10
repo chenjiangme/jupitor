@@ -40,8 +40,7 @@ type DailyBarGatherer struct {
 	batchSize  int // symbols per bar API call (5000)
 	maxWorkers int // concurrent goroutines for bar fetch (10)
 
-	tradeBatchSize int // symbols per trade API call (50)
-	tradeWorkers   int // concurrent goroutines for trade fetch (16)
+	tradeWorkers int // concurrent goroutines for trade fetch (16)
 
 	startDate string
 	csvPath   string
@@ -58,7 +57,7 @@ func NewDailyBarGatherer(
 	barStore store.BarStore,
 	tradeStore store.TradeStore,
 	batchSize, maxWorkers int,
-	tradeBatchSize, tradeWorkers int,
+	tradeWorkers int,
 	startDate, csvPath, baseURL string,
 ) *DailyBarGatherer {
 	opts := marketdata.ClientOpts{
@@ -70,19 +69,18 @@ func NewDailyBarGatherer(
 	}
 
 	return &DailyBarGatherer{
-		client:         marketdata.NewClient(opts),
-		barStore:       barStore,
-		tradeStore:     tradeStore,
-		batchSize:      batchSize,
-		maxWorkers:     maxWorkers,
-		tradeBatchSize: tradeBatchSize,
-		tradeWorkers:   tradeWorkers,
-		startDate:      startDate,
-		csvPath:        csvPath,
-		apiKey:         apiKey,
-		apiSecret:      apiSecret,
-		baseURL:        baseURL,
-		log:            slog.Default().With("daemon", "us-alpaca-data"),
+		client:       marketdata.NewClient(opts),
+		barStore:     barStore,
+		tradeStore:   tradeStore,
+		batchSize:    batchSize,
+		maxWorkers:   maxWorkers,
+		tradeWorkers: tradeWorkers,
+		startDate:    startDate,
+		csvPath:      csvPath,
+		apiKey:       apiKey,
+		apiSecret:    apiSecret,
+		baseURL:      baseURL,
+		log:          slog.Default().With("daemon", "us-alpaca-data"),
 	}
 }
 
@@ -502,9 +500,16 @@ func (g *DailyBarGatherer) tradeBackfillStep(ctx context.Context) (bool, error) 
 		return false, fmt.Errorf("listing universe dates: %w", err)
 	}
 
+	doneDir := filepath.Join(g.dataDir(), "us", "trades", ".done")
+
 	for _, date := range dates {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
+		}
+
+		// Skip dates already fully processed.
+		if _, err := os.Stat(filepath.Join(doneDir, date)); err == nil {
+			continue
 		}
 
 		symbols, err := ReadUniverseFile(filepath.Join(universeDir, date+".txt"))
@@ -513,41 +518,30 @@ func (g *DailyBarGatherer) tradeBackfillStep(ctx context.Context) (bool, error) 
 			continue
 		}
 
-		// Find symbols missing trade files for this date.
-		var missing []string
-		for _, sym := range symbols {
-			dayTime, err := time.Parse("2006-01-02", date)
-			if err != nil {
-				continue
-			}
-			tradePath := g.tradePath(sym, dayTime)
-			if _, err := os.Stat(tradePath); os.IsNotExist(err) {
-				missing = append(missing, sym)
-			}
-		}
-
-		if len(missing) == 0 {
+		dayTime, err := time.Parse("2006-01-02", date)
+		if err != nil {
 			continue
 		}
 
-		// Sort missing symbols by trade_count descending (read from bar data).
-		dayTime, _ := time.Parse("2006-01-02", date)
-		g.sortByTradeCount(ctx, missing, dayTime)
-
 		g.log.Info("trade backfill",
 			"date", date,
-			"missing", len(missing),
-			"total", len(symbols),
+			"symbols", len(symbols),
 		)
 
-		count, err := g.processTradeDay(ctx, dayTime, missing)
+		count, err := g.ProcessTradeDay(ctx, dayTime, symbols)
 		if err != nil {
 			return true, fmt.Errorf("processing trade day %s: %w", date, err)
 		}
 
+		// Mark date as fully processed.
+		if ctx.Err() == nil {
+			os.MkdirAll(doneDir, 0o755)
+			os.WriteFile(filepath.Join(doneDir, date), nil, 0o644)
+		}
+
 		g.log.Info("trade backfill done",
 			"date", date,
-			"symbols", len(missing),
+			"symbols", len(symbols),
 			"trades", count,
 		)
 		return true, nil
@@ -556,29 +550,68 @@ func (g *DailyBarGatherer) tradeBackfillStep(ctx context.Context) (bool, error) 
 	return false, nil
 }
 
-// sortByTradeCount sorts symbols by their trade_count for the given date,
-// highest first. Symbols without bar data sort last.
-func (g *DailyBarGatherer) sortByTradeCount(ctx context.Context, symbols []string, day time.Time) {
+// symbolTradeCounts reads the trade_count from bar data for each symbol on
+// the given date. Returns a map of symbol → trade_count.
+func (g *DailyBarGatherer) symbolTradeCounts(ctx context.Context, symbols []string, day time.Time) map[string]int64 {
+	// Alpaca daily bar timestamps are at 05:00 UTC (midnight ET), not midnight
+	// UTC. Use a full-day range to capture the bar regardless of exact timestamp.
+	dayEnd := day.AddDate(0, 0, 1)
 	counts := make(map[string]int64, len(symbols))
 	for _, sym := range symbols {
-		bars, err := g.barStore.ReadBars(ctx, sym, "us", day, day)
+		bars, err := g.barStore.ReadBars(ctx, sym, "us", day, dayEnd)
 		if err == nil && len(bars) > 0 {
 			counts[sym] = bars[0].TradeCount
 		}
 	}
+	return counts
+}
+
+// buildTradeBatches groups symbols into batches targeting ~100K total trades
+// each (based on trade_count from bar data). Symbols must be sorted by
+// trade_count descending. Each batch has at least 1 symbol.
+func buildTradeBatches(symbols []string, counts map[string]int64) [][]string {
+	const targetTradesPerBatch = 500_000
+
+	var batches [][]string
+	var batch []string
+	var batchCount int64
+
+	for _, sym := range symbols {
+		tc := counts[sym]
+		if tc <= 0 {
+			tc = 1
+		}
+
+		// Start a new batch if adding this symbol would exceed the target
+		// and the current batch already has symbols.
+		if len(batch) > 0 && batchCount+tc > targetTradesPerBatch {
+			batches = append(batches, batch)
+			batch = nil
+			batchCount = 0
+		}
+
+		batch = append(batch, sym)
+		batchCount += tc
+	}
+
+	if len(batch) > 0 {
+		batches = append(batches, batch)
+	}
+
+	return batches
+}
+
+// ProcessTradeDay fetches trades for a single date using a worker pool.
+// Symbols are sorted by trade_count descending and grouped into batches
+// targeting ~100K trades each. Returns the total number of trades written.
+func (g *DailyBarGatherer) ProcessTradeDay(ctx context.Context, day time.Time, symbols []string) (int, error) {
+	// Read trade counts and sort symbols by trade_count descending.
+	counts := g.symbolTradeCounts(ctx, symbols, day)
 	sort.Slice(symbols, func(i, j int) bool {
 		return counts[symbols[i]] > counts[symbols[j]]
 	})
-}
 
-// processTradeDay fetches trades for a single date using a worker pool.
-// Returns the total number of trades written.
-func (g *DailyBarGatherer) processTradeDay(ctx context.Context, day time.Time, symbols []string) (int, error) {
-	var batches [][]string
-	for i := 0; i < len(symbols); i += g.tradeBatchSize {
-		e := min(i+g.tradeBatchSize, len(symbols))
-		batches = append(batches, symbols[i:e])
-	}
+	batches := buildTradeBatches(symbols, counts)
 
 	totalBatches := len(batches)
 	batchCh := make(chan int, len(batches))
@@ -596,6 +629,13 @@ func (g *DailyBarGatherer) processTradeDay(ctx context.Context, day time.Time, s
 	workers := min(g.tradeWorkers, len(batches))
 	ticker := time.NewTicker(300 * time.Millisecond) // ~200/min rate limit
 	defer ticker.Stop()
+
+	g.log.Info("trade day started",
+		"date", day.Format("2006-01-02"),
+		"symbols", len(symbols),
+		"batches", totalBatches,
+		"workers", workers,
+	)
 
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
@@ -615,6 +655,7 @@ func (g *DailyBarGatherer) processTradeDay(ctx context.Context, day time.Time, s
 					g.log.Error("trade fetch failed",
 						"date", day.Format("2006-01-02"),
 						"batch", fmt.Sprintf("%d/%d", batchIdx+1, totalBatches),
+						"symbols", len(batch),
 						"err", err,
 					)
 					continue
@@ -631,17 +672,6 @@ func (g *DailyBarGatherer) processTradeDay(ctx context.Context, day time.Time, s
 					}
 				}
 
-				// Write empty marker files for symbols with no qualifying trades.
-				tradeSymbols := make(map[string]struct{})
-				for _, t := range trades {
-					tradeSymbols[t.Symbol] = struct{}{}
-				}
-				for _, sym := range batch {
-					if _, ok := tradeSymbols[sym]; !ok {
-						g.writeEmptyTradeMarker(sym, day)
-					}
-				}
-
 				mu.Lock()
 				totalCount += len(trades)
 				mu.Unlock()
@@ -649,6 +679,7 @@ func (g *DailyBarGatherer) processTradeDay(ctx context.Context, day time.Time, s
 				g.log.Info("trade batch done",
 					"date", day.Format("2006-01-02"),
 					"batch", fmt.Sprintf("%d/%d", batchIdx+1, totalBatches),
+					"symbols", len(batch),
 					"trades", len(trades),
 				)
 			}
@@ -662,20 +693,6 @@ func (g *DailyBarGatherer) processTradeDay(ctx context.Context, day time.Time, s
 	}
 
 	return totalCount, nil
-}
-
-// writeEmptyTradeMarker creates an empty parquet file for a symbol-date pair
-// so the backfill knows this pair was already processed.
-func (g *DailyBarGatherer) writeEmptyTradeMarker(symbol string, day time.Time) {
-	// Write an empty trade set to create the file.
-	emptyTrade := []domain.Trade{{
-		Symbol:    symbol,
-		Timestamp: day,
-		Price:     0,
-		Size:      0,
-		ID:        "_empty",
-	}}
-	_ = g.tradeStore.WriteTrades(context.Background(), emptyTrade)
 }
 
 // fetchMultiTrades fetches trades for multiple symbols for a single day.
@@ -703,12 +720,14 @@ func (g *DailyBarGatherer) fetchMultiTrades(ctx context.Context, symbols []strin
 			amount := t.Price * float64(size)
 			if size > 100 && amount >= 100 {
 				trades = append(trades, domain.Trade{
-					Symbol:    strings.ToUpper(symbol),
-					Timestamp: t.Timestamp,
-					Price:     t.Price,
-					Size:      size,
-					Exchange:  t.Exchange,
-					ID:        strconv.FormatInt(t.ID, 10),
+					Symbol:     strings.ToUpper(symbol),
+					Timestamp:  t.Timestamp,
+					Price:      t.Price,
+					Size:       size,
+					Exchange:   t.Exchange,
+					ID:         strconv.FormatInt(t.ID, 10),
+					Conditions: strings.Join(t.Conditions, ","),
+					Update:     t.Update,
 				})
 			}
 		}
