@@ -1,0 +1,42 @@
+# Go
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test
+*.test
+*.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+
+# Data directory (large files, symlinked to $DATA_1)
+data/
+
+# Python
+python/.venv/
+python/venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db

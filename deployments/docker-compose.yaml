@@ -1,0 +1,56 @@
+# Docker Compose for Jupitor services
+# Usage: docker-compose up -d
+
+version: "3.8"
+
+services:
+  jupitor-server:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile
+      args:
+        CMD: jupitor-server
+    ports:
+      - "${JUPITOR_PORT:-8080}:8080"
+      - "${JUPITOR_GRPC_PORT:-9090}:9090"
+    volumes:
+      - ${DATA_1}:/data
+    env_file:
+      - ../.env
+    restart: unless-stopped
+
+  us-daily:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile
+      args:
+        CMD: us-daily
+    volumes:
+      - ${DATA_1}:/data
+    env_file:
+      - ../.env
+    restart: "no"
+
+  us-stream:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile
+      args:
+        CMD: us-stream
+    volumes:
+      - ${DATA_1}:/data
+    env_file:
+      - ../.env
+    restart: unless-stopped
+
+  jupitor-trader:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile
+      args:
+        CMD: jupitor-trader
+    volumes:
+      - ${DATA_1}:/data
+    env_file:
+      - ../.env
+    restart: unless-stopped

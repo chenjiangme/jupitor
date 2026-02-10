@@ -1,0 +1,14 @@
+[Unit]
+Description=Jupitor Server
+After=network.target
+
+[Service]
+Type=simple
+User=jupitor
+EnvironmentFile=/etc/jupitor/env
+ExecStart=/usr/local/bin/jupitor-server
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

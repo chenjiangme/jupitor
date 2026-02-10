@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package jupitor.marketdata;
+
+option go_package = "jupitor/internal/api/pb";
+
+import "google/protobuf/timestamp.proto";
+
+// MarketData service provides real-time and historical market data.
+service MarketData {
+  // Subscribe to live trade updates for given symbols.
+  rpc StreamTrades(StreamTradesRequest) returns (stream Trade);
+
+  // Subscribe to live bar updates for given symbols.
+  rpc StreamBars(StreamBarsRequest) returns (stream Bar);
+
+  // Get historical daily bars.
+  rpc GetDailyBars(GetDailyBarsRequest) returns (GetDailyBarsResponse);
+
+  // Get latest quote for a symbol.
+  rpc GetLatestQuote(GetLatestQuoteRequest) returns (Quote);
+}
+
+message StreamTradesRequest {
+  repeated string symbols = 1;
+}
+
+message StreamBarsRequest {
+  repeated string symbols = 1;
+  string timeframe = 2; // e.g., "1Min", "5Min", "1Day"
+}
+
+message GetDailyBarsRequest {
+  string symbol = 1;
+  google.protobuf.Timestamp start = 2;
+  google.protobuf.Timestamp end = 3;
+  string market = 4; // "us" or "cn"
+}
+
+message GetDailyBarsResponse {
+  repeated Bar bars = 1;
+}
+
+message GetLatestQuoteRequest {
+  string symbol = 1;
+}
+
+message Bar {
+  string symbol = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  double open = 3;
+  double high = 4;
+  double low = 5;
+  double close = 6;
+  int64 volume = 7;
+  int64 trade_count = 8;
+  double vwap = 9;
+}
+
+message Trade {
+  string symbol = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  double price = 3;
+  int64 size = 4;
+  string exchange = 5;
+  string id = 6;
+}
+
+message Quote {
+  string symbol = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  double bid_price = 3;
+  double ask_price = 4;
+  int64 bid_size = 5;
+  int64 ask_size = 6;
+}

@@ -1,0 +1,44 @@
+# Jupitor main configuration
+# Environment variables override these values (e.g., JUPITOR_PORT overrides server.port)
+
+storage:
+  data_dir: "${DATA_1}"
+  # Additional volumes (future)
+  # overflow_dir: "${DATA_2}"
+  sqlite_path: "${DATA_1}/jupitor.db"
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  grpc_port: 9090
+
+alpaca:
+  api_key: "${ALPACA_API_KEY}"
+  api_secret: "${ALPACA_API_SECRET}"
+  base_url: "https://api.alpaca.markets"
+  data_url: "https://data.alpaca.markets"
+  stream_url: "wss://stream.data.alpaca.markets/v2"
+
+logging:
+  level: "info"
+  format: "json"
+
+gather:
+  us_daily:
+    start_date: "2016-01-01"
+    batch_size: 5000
+    max_workers: 10
+    rate_limit_per_min: 200
+  us_trade:
+    start_date: "2024-01-01"
+    batch_size: 50
+    rate_limit_per_min: 200
+  cn_daily:
+    start_date: "2020-01-01"
+    baostock_host: "www.baostock.com"
+    baostock_port: 10001
+
+trading:
+  max_position_pct: 0.05     # Max 5% of portfolio per position
+  max_daily_loss_pct: 0.02   # Stop trading if daily loss exceeds 2%
+  paper_mode: true

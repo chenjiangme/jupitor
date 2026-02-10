@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jupitor"
+version = "0.1.0"
+description = "Jupitor financial platform — Python analysis tools"
+requires-python = ">=3.9"
+dependencies = [
+    "pandas>=2.0",
+    "pyarrow>=14.0",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+    "typer>=0.9",
+    "requests>=2.31",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1",
+]
+grpc = [
+    "grpcio>=1.60",
+    "grpcio-tools>=1.60",
+]
+notebook = [
+    "jupyterlab>=4.0",
+]
+
+[project.scripts]
+jupitor = "jupitor.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jupitor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+src = ["src"]
+line-length = 100

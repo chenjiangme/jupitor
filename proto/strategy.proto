@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package jupitor.strategy;
+
+option go_package = "jupitor/internal/api/pb";
+
+import "google/protobuf/timestamp.proto";
+
+// Strategy service manages trading strategies and backtesting.
+service Strategy {
+  // List registered strategies.
+  rpc ListStrategies(ListStrategiesRequest) returns (ListStrategiesResponse);
+
+  // Get strategy status and performance.
+  rpc GetStrategy(GetStrategyRequest) returns (StrategyInfo);
+
+  // Start a strategy.
+  rpc StartStrategy(StartStrategyRequest) returns (StrategyResponse);
+
+  // Stop a strategy.
+  rpc StopStrategy(StopStrategyRequest) returns (StrategyResponse);
+
+  // Run a backtest.
+  rpc RunBacktest(RunBacktestRequest) returns (BacktestResult);
+
+  // Stream strategy signals.
+  rpc StreamSignals(StreamSignalsRequest) returns (stream Signal);
+}
+
+message ListStrategiesRequest {}
+
+message ListStrategiesResponse {
+  repeated StrategyInfo strategies = 1;
+}
+
+message GetStrategyRequest {
+  string strategy_id = 1;
+}
+
+message StrategyInfo {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string status = 4; // "running", "stopped", "error"
+  repeated string symbols = 5;
+  map<string, string> params = 6;
+}
+
+message StartStrategyRequest {
+  string strategy_id = 1;
+  repeated string symbols = 2;
+  map<string, string> params = 3;
+}
+
+message StopStrategyRequest {
+  string strategy_id = 1;
+}
+
+message StrategyResponse {
+  string strategy_id = 1;
+  string status = 2;
+  string message = 3;
+}
+
+message RunBacktestRequest {
+  string strategy_id = 1;
+  repeated string symbols = 2;
+  google.protobuf.Timestamp start = 3;
+  google.protobuf.Timestamp end = 4;
+  double initial_capital = 5;
+  map<string, string> params = 6;
+}
+
+message BacktestResult {
+  string strategy_id = 1;
+  double total_return = 2;
+  double sharpe_ratio = 3;
+  double max_drawdown = 4;
+  int32 total_trades = 5;
+  double win_rate = 6;
+  double profit_factor = 7;
+  repeated Signal signals = 8;
+}
+
+message Signal {
+  string strategy_id = 1;
+  string symbol = 2;
+  SignalType type = 3;
+  double strength = 4; // -1.0 to 1.0
+  google.protobuf.Timestamp timestamp = 5;
+  map<string, string> metadata = 6;
+}
+
+message StreamSignalsRequest {
+  string strategy_id = 1; // Empty for all strategies
+}
+
+enum SignalType {
+  SIGNAL_TYPE_UNSPECIFIED = 0;
+  SIGNAL_TYPE_BUY = 1;
+  SIGNAL_TYPE_SELL = 2;
+  SIGNAL_TYPE_HOLD = 3;
+}

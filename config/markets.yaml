@@ -1,0 +1,34 @@
+# Market definitions for US equities and China A-shares
+
+markets:
+  us:
+    name: "US Equities"
+    timezone: "America/New_York"
+    currency: "USD"
+    trading_hours:
+      regular:
+        open: "09:30"
+        close: "16:00"
+      extended:
+        pre_open: "04:00"
+        post_close: "20:00"
+    holidays_calendar: "NYSE"
+    data_sources:
+      - provider: "alpaca"
+        types: ["daily", "trade", "stream"]
+
+  cn:
+    name: "China A-Shares"
+    timezone: "Asia/Shanghai"
+    currency: "CNY"
+    trading_hours:
+      morning:
+        open: "09:30"
+        close: "11:30"
+      afternoon:
+        open: "13:00"
+        close: "15:00"
+    holidays_calendar: "SSE"
+    data_sources:
+      - provider: "baostock"
+        types: ["daily"]
