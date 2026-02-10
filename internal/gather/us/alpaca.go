@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/alpacahq/alpaca-trade-api-go/v3/marketdata"
@@ -73,11 +72,12 @@ func NewDailyBarGatherer(apiKey, apiSecret, dataURL string, s store.BarStore, ba
 // Name returns the gatherer identifier.
 func (g *DailyBarGatherer) Name() string { return "us-daily" }
 
-// Run fetches daily bars for all brute-force US equity symbols from the
-// Alpaca API and writes them to the Parquet store. It is resumable and
-// idempotent within a day.
+// Run fetches daily bars for all US equity symbols from the Alpaca API using
+// a three-phase approach: (1) update known symbols with only missing days,
+// (2) discover new symbols via brute-force, (3) backfill full history for
+// newly discovered symbols. This is resumable and idempotent within a day.
 func (g *DailyBarGatherer) Run(ctx context.Context) error {
-	start, err := time.Parse("2006-01-02", g.startDate)
+	startDate, err := time.Parse("2006-01-02", g.startDate)
 	if err != nil {
 		return fmt.Errorf("parsing start date %q: %w", g.startDate, err)
 	}
@@ -106,24 +106,66 @@ func (g *DailyBarGatherer) Run(ctx context.Context) error {
 	// 4. New day vs resume.
 	lastCompleted := tracker.LastCompleted()
 	if lastCompleted != "" && lastCompleted != endDateStr {
-		// New day — stale .tried-empty, delete and start fresh.
 		if err := tracker.Reset(); err != nil {
 			return fmt.Errorf("resetting tracker: %w", err)
 		}
 	}
-	// If lastCompleted is empty, this is first run or mid-day crash — keep .tried-empty as-is.
 
-	// 5. Build skip set: tried-empty ∪ existing symbols.
-	existing, err := g.store.ListSymbols(ctx, "us")
+	// 5. Compute fetchStart: only fetch what's missing.
+	var fetchStart time.Time
+	if lastCompleted != "" {
+		lc, err := time.Parse("2006-01-02", lastCompleted)
+		if err != nil {
+			return fmt.Errorf("parsing last completed date %q: %w", lastCompleted, err)
+		}
+		fetchStart = lc.AddDate(0, 0, 1)
+	} else {
+		fetchStart = startDate // first run: full history
+	}
+
+	// 6. Set up universe writer.
+	universeDir := filepath.Join(g.store.(*store.ParquetStore).DataDir, "us", "universe")
+	universe := newUniverseWriter(universeDir)
+
+	runStart := time.Now()
+
+	// --- Phase 1: Update known symbols with missing days only ---
+	known, err := g.store.ListSymbols(ctx, "us")
 	if err != nil {
-		return fmt.Errorf("listing existing symbols: %w", err)
-	}
-	skipSet := make(map[string]struct{}, len(existing))
-	for _, sym := range existing {
-		skipSet[sym] = struct{}{}
+		return fmt.Errorf("listing known symbols: %w", err)
 	}
 
-	// 6. Generate all brute-force symbols, filter, shuffle.
+	knownSet := make(map[string]struct{}, len(known))
+	for _, sym := range known {
+		knownSet[sym] = struct{}{}
+	}
+
+	if len(known) > 0 {
+		totalBatches := (len(known) + g.batchSize - 1) / max(g.batchSize, 1)
+		g.log.Info("phase=update",
+			"known", len(known),
+			"batches", totalBatches,
+			"fetchStart", fetchStart.Format("2006-01-02"),
+			"fetchEnd", endDateStr,
+		)
+
+		updateHits, err := g.processBatches(ctx, known, fetchStart, endDate,
+			tracker, universe, false, "update", runStart)
+		if err != nil {
+			return fmt.Errorf("phase update: %w", err)
+		}
+
+		g.log.Info("phase=update complete",
+			"hits", len(updateHits),
+			"elapsed", time.Since(runStart).Round(time.Second),
+		)
+	}
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	// --- Phase 2: Discover new symbols via brute-force ---
 	allSymbols, err := AllBruteSymbols(g.csvPath)
 	if err != nil {
 		return fmt.Errorf("generating symbols: %w", err)
@@ -131,7 +173,7 @@ func (g *DailyBarGatherer) Run(ctx context.Context) error {
 
 	var remaining []string
 	for _, sym := range allSymbols {
-		if _, skip := skipSet[sym]; skip {
+		if _, isKnown := knownSet[sym]; isKnown {
 			continue
 		}
 		if tracker.IsTriedEmpty(sym) {
@@ -140,36 +182,89 @@ func (g *DailyBarGatherer) Run(ctx context.Context) error {
 		remaining = append(remaining, sym)
 	}
 
-	totalSymbols := len(allSymbols)
-	totalBatches := (len(remaining) + g.batchSize - 1) / max(g.batchSize, 1)
+	var newDiscoveries []string
 
-	g.log.Info("starting us-daily",
-		"endDate", endDateStr,
-		"total", totalSymbols,
-		"remaining", len(remaining),
-		"batches", totalBatches,
-	)
+	if len(remaining) > 0 {
+		totalBatches := (len(remaining) + g.batchSize - 1) / max(g.batchSize, 1)
+		g.log.Info("phase=discover",
+			"remaining", len(remaining),
+			"batches", totalBatches,
+			"fetchStart", fetchStart.Format("2006-01-02"),
+			"fetchEnd", endDateStr,
+		)
 
-	if len(remaining) == 0 {
-		if err := tracker.MarkCompleted(endDateStr); err != nil {
-			return fmt.Errorf("marking completed: %w", err)
+		newDiscoveries, err = g.processBatches(ctx, remaining, fetchStart, endDate,
+			tracker, universe, true, "discover", runStart)
+		if err != nil {
+			return fmt.Errorf("phase discover: %w", err)
 		}
-		g.log.Info("no remaining symbols to process")
-		return nil
+
+		g.log.Info("phase=discover complete",
+			"newSymbols", len(newDiscoveries),
+			"elapsed", time.Since(runStart).Round(time.Second),
+		)
 	}
 
-	// 7. Split into batches.
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	// --- Phase 3: Backfill full history for newly discovered symbols ---
+	if len(newDiscoveries) > 0 {
+		g.log.Info("phase=backfill",
+			"symbols", len(newDiscoveries),
+			"fetchStart", startDate.Format("2006-01-02"),
+			"fetchEnd", endDateStr,
+		)
+
+		backfillHits, err := g.processBatches(ctx, newDiscoveries, startDate, endDate,
+			tracker, universe, false, "backfill", runStart)
+		if err != nil {
+			return fmt.Errorf("phase backfill: %w", err)
+		}
+
+		g.log.Info("phase=backfill complete",
+			"hits", len(backfillHits),
+			"elapsed", time.Since(runStart).Round(time.Second),
+		)
+	}
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	// Finalize universe files.
+	if err := universe.Finalize(); err != nil {
+		return fmt.Errorf("finalizing universe: %w", err)
+	}
+
+	// Mark completed.
+	if err := tracker.MarkCompleted(endDateStr); err != nil {
+		return fmt.Errorf("marking completed: %w", err)
+	}
+
+	g.log.Info("complete",
+		"endDate", endDateStr,
+		"elapsed", time.Since(runStart).Round(time.Second),
+	)
+	return nil
+}
+
+// processBatches splits symbols into batches and processes them concurrently.
+// It returns the list of symbols that had bar data (hits). If markEmpty is
+// true, symbols with no data are recorded in the progress tracker.
+func (g *DailyBarGatherer) processBatches(ctx context.Context, symbols []string,
+	start, end time.Time, tracker *progressTracker, universe *universeWriter,
+	markEmpty bool, phase string, runStart time.Time) ([]string, error) {
+
 	var batches [][]string
-	for i := 0; i < len(remaining); i += g.batchSize {
-		end := min(i+g.batchSize, len(remaining))
-		batches = append(batches, remaining[i:end])
+	for i := 0; i < len(symbols); i += g.batchSize {
+		e := min(i+g.batchSize, len(symbols))
+		batches = append(batches, symbols[i:e])
 	}
 
-	// 8. Set up universe writer.
-	universeDir := filepath.Join(g.store.(*store.ParquetStore).DataDir, "us", "universe")
-	universe := newUniverseWriter(universeDir)
+	totalBatches := len(batches)
 
-	// 9. Feed batches to workers.
 	batchCh := make(chan int, len(batches))
 	for i := range batches {
 		batchCh <- i
@@ -177,10 +272,9 @@ func (g *DailyBarGatherer) Run(ctx context.Context) error {
 	close(batchCh)
 
 	var (
-		wg        sync.WaitGroup
-		totalHits atomic.Int64
-		totalMiss atomic.Int64
-		runStart  = time.Now()
+		mu      sync.Mutex
+		allHits []string
+		wg      sync.WaitGroup
 	)
 
 	workers := min(g.maxWorkers, len(batches))
@@ -194,56 +288,62 @@ func (g *DailyBarGatherer) Run(ctx context.Context) error {
 				}
 
 				batch := batches[batchIdx]
-				bars, err := g.fetchMultiBars(ctx, batch, start, endDate)
+				bars, err := g.fetchMultiBars(ctx, batch, start, end)
 				if err != nil {
 					g.log.Error("batch fetch failed",
+						"phase", phase,
 						"batch", fmt.Sprintf("%d/%d", batchIdx+1, totalBatches),
 						"err", err,
 					)
 					continue
 				}
 
-				// Determine hits and misses.
 				hitSymbols := make(map[string]struct{})
 				for _, b := range bars {
 					hitSymbols[b.Symbol] = struct{}{}
 				}
 
-				var emptySymbols []string
-				for _, sym := range batch {
-					if _, hit := hitSymbols[sym]; !hit {
-						emptySymbols = append(emptySymbols, sym)
-					}
-				}
-
 				// Write bars to store.
 				if len(bars) > 0 {
 					if err := g.store.WriteBars(ctx, bars); err != nil {
-						g.log.Error("writing bars failed", "err", err)
+						g.log.Error("writing bars failed", "phase", phase, "err", err)
 						continue
 					}
 					universe.AddBars(bars)
 					if err := universe.Flush(); err != nil {
-						g.log.Error("flushing universe failed", "err", err)
+						g.log.Error("flushing universe failed", "phase", phase, "err", err)
 					}
 				}
 
 				// Mark empty symbols.
-				if len(emptySymbols) > 0 {
-					if err := tracker.MarkEmpty(emptySymbols); err != nil {
-						g.log.Error("marking empty failed", "err", err)
+				if markEmpty {
+					var emptySymbols []string
+					for _, sym := range batch {
+						if _, hit := hitSymbols[sym]; !hit {
+							emptySymbols = append(emptySymbols, sym)
+						}
+					}
+					if len(emptySymbols) > 0 {
+						if err := tracker.MarkEmpty(emptySymbols); err != nil {
+							g.log.Error("marking empty failed", "phase", phase, "err", err)
+						}
 					}
 				}
 
-				hits := int64(len(hitSymbols))
-				misses := int64(len(emptySymbols))
-				totalHits.Add(hits)
-				totalMiss.Add(misses)
+				// Collect hit symbol names for return.
+				if len(hitSymbols) > 0 {
+					mu.Lock()
+					for sym := range hitSymbols {
+						allHits = append(allHits, sym)
+					}
+					mu.Unlock()
+				}
 
 				g.log.Info("batch done",
+					"phase", phase,
 					"batch", fmt.Sprintf("%d/%d", batchIdx+1, totalBatches),
-					"hits", hits,
-					"empty", misses,
+					"hits", len(hitSymbols),
+					"empty", len(batch)-len(hitSymbols),
 					"elapsed", time.Since(runStart).Round(time.Second),
 				)
 			}
@@ -253,25 +353,10 @@ func (g *DailyBarGatherer) Run(ctx context.Context) error {
 	wg.Wait()
 
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
 
-	// 10. Finalize universe files.
-	if err := universe.Finalize(); err != nil {
-		return fmt.Errorf("finalizing universe: %w", err)
-	}
-
-	// 11. Mark completed.
-	if err := tracker.MarkCompleted(endDateStr); err != nil {
-		return fmt.Errorf("marking completed: %w", err)
-	}
-
-	g.log.Info("complete",
-		"hits", totalHits.Load(),
-		"empty", totalMiss.Load(),
-		"elapsed", time.Since(runStart).Round(time.Second),
-	)
-	return nil
+	return allHits, nil
 }
 
 // fetchMultiBars fetches daily bars for multiple symbols in a single API call.
@@ -280,10 +365,12 @@ func (g *DailyBarGatherer) fetchMultiBars(ctx context.Context, symbols []string,
 		return nil, ctx.Err()
 	}
 
+	// Alpaca's End is exclusive for daily bars, so add one day to include
+	// bars on the end date itself.
 	multiBars, err := g.client.GetMultiBars(symbols, marketdata.GetBarsRequest{
 		TimeFrame: marketdata.OneDay,
 		Start:     start,
-		End:       end,
+		End:       end.AddDate(0, 0, 1),
 		Feed:      "sip",
 	})
 	if err != nil {

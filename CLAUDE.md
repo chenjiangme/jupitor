@@ -33,6 +33,22 @@ make python-test # pytest
 - Client API: REST + gRPC + WebSocket
 - Python reads Parquet files and calls jupitor-server API (no direct data gathering)
 
+## US Daily Gatherer Architecture
+
+The `DailyBarGatherer` in `internal/gather/us/alpaca.go` uses a three-phase approach:
+
+1. **Phase 1 — Update known**: `ListSymbols("us")` → fetch only `[lastCompleted+1, endDate]` for ~18K known symbols (~4 API calls, ~1 bar each)
+2. **Phase 2 — Discover**: Brute-force all A-Z 1-4 char + CSV symbols, minus known & tried-empty → fetch same narrow window (~92 API calls, mostly empty responses)
+3. **Phase 3 — Backfill**: Newly discovered symbols only → fetch full `[startDate, endDate]` history (typically 0-5 symbols/day)
+
+Key helpers:
+- `processBatches()` — shared worker pool for all three phases (batch splitting, concurrent fetch, WriteBars, universe tracking, optional MarkEmpty)
+- `fetchMultiBars()` — single Alpaca multi-symbol API call
+- `progressTracker` — `.tried-empty` and `.last-completed` files for crash recovery
+- `universeWriter` — per-date symbol lists in `us/universe/YYYY-MM-DD.txt`
+
+Historical bar data is immutable — once written, it never changes. `WriteBars` uses merge-on-write deduplication.
+
 ## Dependencies
 
 Go: alpaca-trade-api-go, parquet-go, grpc, protobuf, yaml.v3, modernc.org/sqlite
