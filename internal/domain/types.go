@@ -162,6 +162,29 @@ type Asset struct {
 	AssetClass string
 }
 
+// CNBaoBar represents a daily bar from BaoStock for China A-shares.
+// Contains all 18 fields available from the BaoStock daily query.
+type CNBaoBar struct {
+	Symbol      string
+	Date        string  // "2024-01-15"
+	Open        float64
+	High        float64
+	Low         float64
+	Close       float64
+	PreClose    float64
+	Volume      int64
+	Amount      float64
+	AdjustFlag  string
+	Turn        float64
+	TradeStatus string  // "1" normal, "0" suspended
+	PctChg      float64
+	PeTTM       float64
+	PsTTM       float64
+	PcfNcfTTM   float64
+	PbMRQ       float64
+	IsST        string  // "1" ST, "0" normal
+}
+
 // AccountInfo holds a snapshot of account-level financial metrics.
 type AccountInfo struct {
 	Equity         float64

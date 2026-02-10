@@ -17,6 +17,7 @@ import (
 // Compile-time interface checks.
 var _ BarStore = (*ParquetStore)(nil)
 var _ TradeStore = (*ParquetStore)(nil)
+var _ CNBaoBarStore = (*ParquetStore)(nil)
 
 // ParquetStore implements BarStore and TradeStore using Parquet files on disk.
 type ParquetStore struct {
@@ -43,6 +44,28 @@ type BarRecord struct {
 	Volume     int64   `parquet:"volume"`
 	TradeCount int64   `parquet:"trade_count"`
 	VWAP       float64 `parquet:"vwap"`
+}
+
+// CNBaoBarRecord is the Parquet schema for China A-share daily bars from BaoStock.
+type CNBaoBarRecord struct {
+	Symbol      string  `parquet:"symbol"`
+	Date        string  `parquet:"date"`
+	Open        float64 `parquet:"open"`
+	High        float64 `parquet:"high"`
+	Low         float64 `parquet:"low"`
+	Close       float64 `parquet:"close"`
+	PreClose    float64 `parquet:"preclose"`
+	Volume      int64   `parquet:"volume"`
+	Amount      float64 `parquet:"amount"`
+	AdjustFlag  string  `parquet:"adjustflag"`
+	Turn        float64 `parquet:"turn"`
+	TradeStatus string  `parquet:"tradestatus"`
+	PctChg      float64 `parquet:"pctChg"`
+	PeTTM       float64 `parquet:"peTTM"`
+	PsTTM       float64 `parquet:"psTTM"`
+	PcfNcfTTM   float64 `parquet:"pcfNcfTTM"`
+	PbMRQ       float64 `parquet:"pbMRQ"`
+	IsST        string  `parquet:"isST"`
 }
 
 // TradeRecord is the Parquet schema for trade tick data.
@@ -238,6 +261,54 @@ func (s *ParquetStore) ReadTrades(_ context.Context, symbol string, start, end t
 		}
 	}
 	return trades, nil
+}
+
+// ---------------------------------------------------------------------------
+// CNBaoBarStore implementation
+// ---------------------------------------------------------------------------
+
+// ReadCNBaoBars reads China A-share daily bars from Parquet files written by
+// the Python cn-baostock-data daemon. Symbol is used as-is (e.g. "sh.600000").
+func (s *ParquetStore) ReadCNBaoBars(_ context.Context, symbol string, start, end time.Time) ([]domain.CNBaoBar, error) {
+	var bars []domain.CNBaoBar
+	for year := start.Year(); year <= end.Year(); year++ {
+		path := filepath.Join(s.DataDir, "cn", "daily", symbol, fmt.Sprintf("%d.parquet", year))
+
+		records, err := readParquetFile[CNBaoBarRecord](path)
+		if err != nil {
+			continue
+		}
+
+		for _, r := range records {
+			d, err := time.Parse("2006-01-02", r.Date)
+			if err != nil {
+				continue
+			}
+			if (d.Equal(start) || d.After(start)) && (d.Equal(end) || d.Before(end)) {
+				bars = append(bars, domain.CNBaoBar{
+					Symbol:      r.Symbol,
+					Date:        r.Date,
+					Open:        r.Open,
+					High:        r.High,
+					Low:         r.Low,
+					Close:       r.Close,
+					PreClose:    r.PreClose,
+					Volume:      r.Volume,
+					Amount:      r.Amount,
+					AdjustFlag:  r.AdjustFlag,
+					Turn:        r.Turn,
+					TradeStatus: r.TradeStatus,
+					PctChg:      r.PctChg,
+					PeTTM:       r.PeTTM,
+					PsTTM:       r.PsTTM,
+					PcfNcfTTM:   r.PcfNcfTTM,
+					PbMRQ:       r.PbMRQ,
+					IsST:        r.IsST,
+				})
+			}
+		}
+	}
+	return bars, nil
 }
 
 // ---------------------------------------------------------------------------

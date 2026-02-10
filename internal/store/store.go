@@ -60,6 +60,15 @@ type PositionStore interface {
 	DeletePosition(ctx context.Context, symbol string) error
 }
 
+// CNBaoBarStore reads China A-share daily bars written by the Python daemon.
+type CNBaoBarStore interface {
+	// ReadCNBaoBars returns BaoStock bars for the given symbol within [start, end].
+	ReadCNBaoBars(ctx context.Context, symbol string, start, end time.Time) ([]domain.CNBaoBar, error)
+
+	// ListSymbols returns all distinct symbols available in the given market.
+	ListSymbols(ctx context.Context, market string) ([]string, error)
+}
+
 // SignalStore persists and retrieves trading signals.
 type SignalStore interface {
 	// SaveSignal inserts a new signal into storage.

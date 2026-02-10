@@ -34,9 +34,7 @@ gather:
     max_workers: 16
     rate_limit_per_min: 200
   cn_daily:
-    start_date: "2020-01-01"
-    baostock_host: "www.baostock.com"
-    baostock_port: 10001
+    start_date: "2005-01-01"
 
 trading:
   max_position_pct: 0.05     # Max 5% of portfolio per position
