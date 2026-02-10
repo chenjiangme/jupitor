@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """cn-baostock-data: daemon for China A-share daily bar collection via BaoStock.
 
 Collects CSI 300 and CSI 500 constituent history and daily bars.
@@ -105,6 +107,19 @@ def _bs_logout():
     """Logout from BaoStock."""
     bs.logout()
     log.info("BaoStock logout")
+
+
+def _query_trading_days(start_date: str, end_date: str) -> list[str]:
+    """Query trading calendar from BaoStock. Returns sorted list of trading day strings."""
+    rs = bs.query_trade_dates(start_date=start_date, end_date=end_date)
+    if rs.error_code != "0":
+        raise RuntimeError(f"trade calendar query failed: {rs.error_msg}")
+    days = []
+    while rs.next():
+        row = rs.get_row_data()
+        if row[1] == "1":  # is_trading_day
+            days.append(row[0])
+    return days
 
 
 def _query_index_constituents(index_name: str, query_date: str) -> list[str]:
@@ -310,31 +325,56 @@ class CNBaoStockDaemon:
     # Phase 1: Build index constituent history
     # -------------------------------------------------------------------
 
+    def _index_scan_progress_path(self) -> Path:
+        return self.data_dir / "cn" / "index" / ".scan-progress"
+
+    def _read_scan_progress(self) -> str | None:
+        """Read the last fully-scanned date from the progress file."""
+        p = self._index_scan_progress_path()
+        if p.exists():
+            return p.read_text().strip() or None
+        return None
+
+    def _write_scan_progress(self, date_str: str):
+        """Save the last fully-scanned date."""
+        p = self._index_scan_progress_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(date_str + "\n")
+
     def _index_history_complete(self) -> bool:
-        """Check if index history is built up to yesterday."""
+        """Check if index scan has reached yesterday."""
         yesterday = (date.today() - timedelta(days=1)).isoformat()
-        for index_name in _INDEXES:
-            index_dir = self.data_dir / "cn" / "index" / index_name
-            dates = _list_index_dates(index_dir)
-            if not dates or dates[-1] < yesterday:
-                return False
-        return True
+        progress = self._read_scan_progress()
+        return progress is not None and progress >= yesterday
 
     def _build_index_history(self):
-        """Build CSI 300 + CSI 500 constituent history from start_date to today.
+        """Build CSI 300 + CSI 500 constituent history.
 
-        Iterates over every date, querying BaoStock for constituents.
-        Skips dates that already have files. Writes only when data is returned
-        (i.e. trading days).
+        Uses BaoStock trading calendar to query only actual trading days.
+        Resumes from .scan-progress. Skips dates with existing files.
         """
-        log.info("building index constituent history from %s", self.start_date)
-        start = date.fromisoformat(self.start_date)
-        end = date.today()
+        # Determine start date from progress or config
+        progress = self._read_scan_progress()
+        if progress:
+            scan_start = (date.fromisoformat(progress) + timedelta(days=1)).isoformat()
+            log.info("resuming index history from %s", scan_start)
+        else:
+            scan_start = self.start_date
+            log.info("building index constituent history from %s", scan_start)
 
-        current = start
-        while current <= end and not _shutdown:
-            date_str = current.isoformat()
+        end_str = date.today().isoformat()
+        if scan_start > end_str:
+            return
 
+        # Fetch trading calendar (single fast query)
+        trading_days = _query_trading_days(scan_start, end_str)
+        log.info("trading calendar: %d trading days in [%s, %s]", len(trading_days), scan_start, end_str)
+
+        for i, date_str in enumerate(trading_days):
+            if _shutdown:
+                break
+
+            queried = False
             for index_name in _INDEXES:
                 if _shutdown:
                     break
@@ -345,12 +385,18 @@ class CNBaoStockDaemon:
                     continue
 
                 symbols = _query_index_constituents(index_name, date_str)
+                queried = True
 
                 if symbols:
                     _write_index_file(file_path, symbols)
                     log.info("index %s %s: %d symbols", index_name, date_str, len(symbols))
 
-            current += timedelta(days=1)
+            # Save scan progress
+            self._write_scan_progress(date_str)
+
+            if (i + 1) % 100 == 0:
+                log.info("index scan: %d/%d trading days done (%s)",
+                         i + 1, len(trading_days), date_str)
 
         if not _shutdown:
             log.info("index history build complete")
