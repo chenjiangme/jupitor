@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-"""us_index_data: build per-date SPX and NDX constituent files.
+"""us_index_data: download reference CSVs and build per-date SPX/NDX files.
 
-Downloads S&P 500 historical components from GitHub (fja05680/sp500) and
-reconstructs NASDAQ-100 membership from Wikipedia. Writes one text file per
-trading day containing sorted member symbols.
+Steps (in order):
+  1. Download US stock/ETF reference CSVs from Dropbox (date-stamped)
+  2. Build S&P 500 per-date constituent files from GitHub (fja05680/sp500)
+  3. Build NASDAQ-100 per-date constituent files from Wikipedia
+  4. Validate Dropbox index column against GitHub/Wikipedia files
 
 One-shot build (not a daemon). Re-run to update; existing dates are skipped.
 
 Output:
-  $DATA_1/us/index/spx/<YYYY-MM-DD>.txt   (~500 symbols per file)
-  $DATA_1/us/index/ndx/<YYYY-MM-DD>.txt   (~100 symbols per file)
+  reference/us/us_stock_YYYY-MM-DD.csv   (from Dropbox)
+  reference/us/us_etf_YYYY-MM-DD.csv     (from Dropbox)
+  $DATA_1/us/index/spx/<YYYY-MM-DD>.txt  (~500 symbols per file)
+  $DATA_1/us/index/ndx/<YYYY-MM-DD>.txt  (~100 symbols per file)
 
 Usage:
   python python/scripts/us_index_data.py [--config config/jupitor.yaml]
@@ -24,6 +28,7 @@ import logging
 import os
 import re
 import sys
+import zipfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -32,25 +37,13 @@ import yaml
 
 log = logging.getLogger("us-index-data")
 
-# US federal holidays (fixed dates + observed rules are complex; use a simple
-# set of known holidays by year-month-day pattern). For production accuracy we
-# generate weekday dates and accept minor over-generation — the per-date files
-# that correspond to non-trading days will simply list the same constituents.
-
-_US_HOLIDAYS_FIXED = {
-    (1, 1),   # New Year's Day
-    (7, 4),   # Independence Day
-    (12, 25), # Christmas Day
-}
-
 
 def _is_weekday(d: date) -> bool:
     return d.weekday() < 5
 
 
 def _trading_days(start: date, end: date) -> list[date]:
-    """Generate weekday dates in [start, end]. Not holiday-aware (good enough
-    for constituent file generation — extra dates are harmless)."""
+    """Generate weekday dates in [start, end]."""
     days = []
     d = start
     while d <= end:
@@ -61,7 +54,69 @@ def _trading_days(start: date, end: date) -> list[date]:
 
 
 # ---------------------------------------------------------------------------
-# S&P 500 from GitHub (fja05680/sp500)
+# Step 1: Dropbox reference download
+# ---------------------------------------------------------------------------
+
+_DROPBOX_URL_ENV = "DROPBOX_INFO_FOLDER"
+
+
+def _download_dropbox_zip(url: str) -> bytes:
+    """Download a Dropbox shared folder as a zip."""
+    dl_url = url.replace("dl=0", "dl=1")
+    log.info("downloading from Dropbox...")
+    resp = requests.get(dl_url, timeout=120)
+    resp.raise_for_status()
+    log.info("downloaded %d bytes", len(resp.content))
+    return resp.content
+
+
+def _extract_csv_from_zip(zip_data: bytes, prefix: str) -> bytes:
+    """Extract a CSV file matching the given prefix from a zip archive."""
+    with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+        for name in zf.namelist():
+            basename = name.rsplit("/", 1)[-1]
+            if basename.startswith(prefix) and basename.endswith(".csv"):
+                return zf.read(name)
+    raise FileNotFoundError(f"no file matching '{prefix}*.csv' in zip")
+
+
+def _find_latest_ref_file(ref_dir: Path, prefix: str) -> Path | None:
+    """Find the latest date-stamped file matching prefix_YYYY-MM-DD.csv."""
+    matches = sorted(ref_dir.glob(f"{prefix}_????-??-??.csv"))
+    return matches[-1] if matches else None
+
+
+def download_reference(ref_dir: Path):
+    """Download US stock/ETF reference CSVs from Dropbox with date stamps."""
+    log.info("=== Step 1: Download reference CSVs from Dropbox ===")
+
+    dropbox_url = os.environ.get(_DROPBOX_URL_ENV)
+    if not dropbox_url:
+        log.warning("%s env var not set, skipping Dropbox download", _DROPBOX_URL_ENV)
+        return
+
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    today = date.today().isoformat()
+
+    stock_path = ref_dir / f"us_stock_{today}.csv"
+    etf_path = ref_dir / f"us_etf_{today}.csv"
+    if stock_path.exists() and etf_path.exists():
+        log.info("today's files already exist, skipping download")
+        return
+
+    zip_data = _download_dropbox_zip(dropbox_url)
+
+    stock_data = _extract_csv_from_zip(zip_data, "us_stock")
+    stock_path.write_bytes(stock_data)
+    log.info("saved %s (%d bytes)", stock_path, len(stock_data))
+
+    etf_data = _extract_csv_from_zip(zip_data, "us_etf")
+    etf_path.write_bytes(etf_data)
+    log.info("saved %s (%d bytes)", etf_path, len(etf_data))
+
+
+# ---------------------------------------------------------------------------
+# Step 2: S&P 500 from GitHub (fja05680/sp500)
 # ---------------------------------------------------------------------------
 
 _SP500_CSV_URL = (
@@ -100,16 +155,13 @@ def _parse_sp500_csv(text: str) -> list[tuple[date, list[str]]]:
         except ValueError:
             continue
 
-        # Tickers are in a single comma-separated field (the second column)
         raw_tickers = line[1] if len(line) == 2 else ",".join(line[1:])
         symbols = []
         for ticker in raw_tickers.split(","):
             ticker = ticker.strip()
             if not ticker:
                 continue
-            # Strip -YYYYMM suffix (historical name marker)
             ticker = re.sub(r"-\d{6}$", "", ticker)
-            # Normalize: uppercase, replace . with .
             ticker = ticker.upper().strip()
             if ticker:
                 symbols.append(ticker)
@@ -117,17 +169,12 @@ def _parse_sp500_csv(text: str) -> list[tuple[date, list[str]]]:
         if symbols:
             rows.append((d, sorted(set(symbols))))
 
-    # Sort by date ascending
     rows.sort(key=lambda x: x[0])
     return rows
 
 
 def _build_spx_files(data_dir: Path, rows: list[tuple[date, list[str]]]):
-    """Write per-date SPX constituent files.
-
-    The CSV provides snapshots at change dates. For each snapshot, we write
-    all trading days from that snapshot date until the next snapshot date.
-    """
+    """Write per-date SPX constituent files."""
     spx_dir = data_dir / "us" / "index" / "spx"
     spx_dir.mkdir(parents=True, exist_ok=True)
 
@@ -138,15 +185,12 @@ def _build_spx_files(data_dir: Path, rows: list[tuple[date, list[str]]]):
     written = 0
     skipped = 0
 
-    # For each pair of consecutive snapshots, fill trading days with the earlier
-    # snapshot's constituent list.
     for i, (snap_date, symbols) in enumerate(rows):
         if i + 1 < len(rows):
             next_date = rows[i + 1][0]
         else:
             next_date = date.today()
 
-        # Generate trading days for [snap_date, next_date)
         end = next_date - timedelta(days=1) if i + 1 < len(rows) else next_date
         for d in _trading_days(snap_date, end):
             path = spx_dir / f"{d.isoformat()}.txt"
@@ -159,8 +203,20 @@ def _build_spx_files(data_dir: Path, rows: list[tuple[date, list[str]]]):
     log.info("SPX: wrote %d files, skipped %d existing", written, skipped)
 
 
+def build_spx(data_dir: Path):
+    """Download and build S&P 500 per-date constituent files."""
+    log.info("=== Step 2: Build S&P 500 constituent history ===")
+    csv_text = _download_sp500_csv()
+    rows = _parse_sp500_csv(csv_text)
+    log.info("parsed %d S&P 500 snapshots (%s to %s)",
+             len(rows),
+             rows[0][0].isoformat() if rows else "?",
+             rows[-1][0].isoformat() if rows else "?")
+    _build_spx_files(data_dir, rows)
+
+
 # ---------------------------------------------------------------------------
-# NASDAQ-100 from Wikipedia
+# Step 3: NASDAQ-100 from Wikipedia
 # ---------------------------------------------------------------------------
 
 _NDX_CURRENT_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
@@ -174,23 +230,14 @@ def _fetch_wikipedia_page(url: str) -> str:
 
 
 def _parse_ndx_current_members(html: str) -> list[str]:
-    """Extract current NASDAQ-100 member tickers from the Wikipedia page.
-
-    Looks for the constituents table with 'Ticker' column.
-    """
-    # Use simple regex to find table rows with ticker symbols
-    # The constituents table typically has columns: Company, Ticker, GICS Sector/Sub-Industry
+    """Extract current NASDAQ-100 member tickers from the Wikipedia page."""
     symbols = []
-
-    # Find all tables
     tables = re.findall(r"<table[^>]*>.*?</table>", html, re.DOTALL)
 
     for table in tables:
-        # Look for a table that has "Ticker" in the header
         if "Ticker" not in table and "ticker" not in table.lower():
             continue
 
-        # Find header row to identify Ticker column index
         header_match = re.search(r"<tr>(.*?)</tr>", table, re.DOTALL)
         if not header_match:
             continue
@@ -207,9 +254,8 @@ def _parse_ndx_current_members(html: str) -> list[str]:
         if ticker_idx is None:
             continue
 
-        # Extract data rows
         data_rows = re.findall(r"<tr>(.*?)</tr>", table, re.DOTALL)
-        for row in data_rows[1:]:  # skip header
+        for row in data_rows[1:]:
             cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.DOTALL)
             if len(cells) > ticker_idx:
                 raw = re.sub(r"<[^>]+>", "", cells[ticker_idx]).strip()
@@ -220,21 +266,11 @@ def _parse_ndx_current_members(html: str) -> list[str]:
 
 
 def _parse_ndx_changes(html: str) -> list[tuple[date, str, str]]:
-    """Parse NASDAQ-100 changes from Wikipedia.
-
-    Returns list of (effective_date, action, ticker) where action is 'added' or 'removed'.
-    Sorted by date descending (most recent first).
-    """
+    """Parse NASDAQ-100 changes from Wikipedia."""
     changes = []
-
-    # Find the "Changes to the composition" or similar section
-    # Look for tables after a heading about changes
-    # The changes table typically has: Date, Added, Removed columns
-
     tables = re.findall(r"<table[^>]*class=\"wikitable[^\"]*\"[^>]*>.*?</table>", html, re.DOTALL)
 
     for table in tables:
-        # Look for tables with date, added/removed pattern
         header_match = re.search(r"<tr>(.*?)</tr>", table, re.DOTALL)
         if not header_match:
             continue
@@ -242,7 +278,6 @@ def _parse_ndx_changes(html: str) -> list[tuple[date, str, str]]:
         headers = re.findall(r"<th[^>]*>(.*?)</th>", header_match.group(1), re.DOTALL)
         headers = [re.sub(r"<[^>]+>", "", h).strip().lower() for h in headers]
 
-        # We need Date, Added, Removed columns
         date_idx = None
         added_idx = None
         removed_idx = None
@@ -266,10 +301,8 @@ def _parse_ndx_changes(html: str) -> list[tuple[date, str, str]]:
             if not cells:
                 continue
 
-            # Handle rowspan: if we have fewer cells, the date cell is spanning
             if len(cells) > date_idx:
                 raw_date = re.sub(r"<[^>]+>", "", cells[date_idx]).strip()
-                # Try to parse various date formats
                 parsed = _try_parse_date(raw_date)
                 if parsed:
                     current_date = parsed
@@ -277,29 +310,22 @@ def _parse_ndx_changes(html: str) -> list[tuple[date, str, str]]:
             if current_date is None:
                 continue
 
-            # Extract added ticker
             if added_idx is not None and len(cells) > added_idx:
                 raw = re.sub(r"<[^>]+>", "", cells[added_idx]).strip()
-                tickers = _extract_tickers(raw)
-                for t in tickers:
+                for t in _extract_tickers(raw):
                     changes.append((current_date, "added", t))
 
-            # Extract removed ticker
             if removed_idx is not None and len(cells) > removed_idx:
                 raw = re.sub(r"<[^>]+>", "", cells[removed_idx]).strip()
-                tickers = _extract_tickers(raw)
-                for t in tickers:
+                for t in _extract_tickers(raw):
                     changes.append((current_date, "removed", t))
 
-    # Sort by date descending
     changes.sort(key=lambda x: x[0], reverse=True)
     return changes
 
 
 def _try_parse_date(s: str) -> date | None:
-    """Try parsing a date string from various Wikipedia formats."""
     s = s.strip()
-    # Remove references like [1], [2]
     s = re.sub(r"\[.*?\]", "", s).strip()
     for fmt in ("%B %d, %Y", "%b %d, %Y", "%Y-%m-%d", "%d %B %Y", "%d %b %Y"):
         try:
@@ -310,13 +336,9 @@ def _try_parse_date(s: str) -> date | None:
 
 
 def _extract_tickers(raw: str) -> list[str]:
-    """Extract ticker symbols from a cell that may contain names and tickers."""
-    # Common patterns: "AAPL", "Apple Inc. (AAPL)", just text
     tickers = []
-    # Look for explicit ticker patterns (all caps, 1-5 chars)
     for match in re.finditer(r"\b([A-Z]{1,5})\b", raw):
         candidate = match.group(1)
-        # Filter out common non-ticker words
         if candidate not in {"THE", "AND", "FOR", "INC", "LTD", "LLC", "CO",
                              "ETF", "LP", "NV", "SA", "SE", "PLC", "AG",
                              "NA", "DE", "NEW", "OLD", "AS", "AB", "IN",
@@ -331,33 +353,23 @@ def _reconstruct_ndx_history(
     changes: list[tuple[date, str, str]],
     start_date: date,
 ) -> list[tuple[date, list[str]]]:
-    """Reconstruct NDX membership history by working backwards from current.
-
-    Returns (date, [symbols]) pairs for each change date, sorted ascending.
-    """
-    # Start from current membership
     members = set(current_members)
     snapshots = [(date.today(), sorted(members))]
 
-    # Work backwards through changes (already sorted descending)
     for change_date, action, ticker in changes:
         if change_date < start_date:
             break
         if action == "added":
-            # Was added on this date, so before this date it wasn't there
             members.discard(ticker)
         elif action == "removed":
-            # Was removed on this date, so before this date it was there
             members.add(ticker)
         snapshots.append((change_date, sorted(members)))
 
-    # Sort ascending by date
     snapshots.sort(key=lambda x: x[0])
     return snapshots
 
 
 def _build_ndx_files(data_dir: Path, snapshots: list[tuple[date, list[str]]]):
-    """Write per-date NDX constituent files from snapshots."""
     ndx_dir = data_dir / "us" / "index" / "ndx"
     ndx_dir.mkdir(parents=True, exist_ok=True)
 
@@ -386,25 +398,9 @@ def _build_ndx_files(data_dir: Path, snapshots: list[tuple[date, list[str]]]):
     log.info("NDX: wrote %d files, skipped %d existing", written, skipped)
 
 
-# ---------------------------------------------------------------------------
-# Main build functions
-# ---------------------------------------------------------------------------
-
-def build_spx(data_dir: Path):
-    """Download and build S&P 500 per-date constituent files."""
-    log.info("=== Building S&P 500 constituent history ===")
-    csv_text = _download_sp500_csv()
-    rows = _parse_sp500_csv(csv_text)
-    log.info("parsed %d S&P 500 snapshots (%s to %s)",
-             len(rows),
-             rows[0][0].isoformat() if rows else "?",
-             rows[-1][0].isoformat() if rows else "?")
-    _build_spx_files(data_dir, rows)
-
-
 def build_ndx(data_dir: Path):
     """Scrape Wikipedia and build NASDAQ-100 per-date constituent files."""
-    log.info("=== Building NASDAQ-100 constituent history ===")
+    log.info("=== Step 3: Build NASDAQ-100 constituent history ===")
     html = _fetch_wikipedia_page(_NDX_CURRENT_URL)
 
     current = _parse_ndx_current_members(html)
@@ -416,7 +412,6 @@ def build_ndx(data_dir: Path):
     changes = _parse_ndx_changes(html)
     log.info("parsed %d NDX changes from Wikipedia", len(changes))
 
-    # Reconstruct from earliest change date
     earliest = min((c[0] for c in changes), default=date.today()) if changes else date.today()
     log.info("reconstructing NDX history from %s", earliest.isoformat())
 
@@ -424,6 +419,83 @@ def build_ndx(data_dir: Path):
     log.info("generated %d NDX snapshots", len(snapshots))
 
     _build_ndx_files(data_dir, snapshots)
+
+
+# ---------------------------------------------------------------------------
+# Step 4: Validate Dropbox index column against GitHub/Wikipedia
+# ---------------------------------------------------------------------------
+
+def _parse_spx_ndx_from_stock_csv(path: Path) -> tuple[set[str], set[str]]:
+    """Parse the index column from us_stock CSV to extract SPX and NDX members."""
+    spx = set()
+    ndx = set()
+
+    with open(path, encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            symbol = row.get("\u5546\u54c1\u4ee3\u7801", "").strip().upper()  # 商品代码
+            indexes = row.get("\u6307\u6570", "")  # 指数
+            if not symbol:
+                continue
+            if "S&P 500" in indexes:
+                spx.add(symbol)
+            if "NASDAQ 100" in indexes:
+                ndx.add(symbol)
+
+    return spx, ndx
+
+
+def _read_index_file_set(path: Path) -> set[str]:
+    """Read symbols from an index file."""
+    if not path.exists():
+        return set()
+    symbols = set()
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line:
+            symbols.add(line.split(",")[0].upper())
+    return symbols
+
+
+def validate_index(data_dir: Path, ref_dir: Path):
+    """Compare Dropbox-sourced SPX/NDX membership against index files."""
+    log.info("=== Step 4: Validate SPX/NDX against Dropbox ===")
+
+    latest_stock = _find_latest_ref_file(ref_dir, "us_stock")
+    if not latest_stock:
+        log.warning("no us_stock reference file found, skipping validation")
+        return
+
+    dropbox_spx, dropbox_ndx = _parse_spx_ndx_from_stock_csv(latest_stock)
+    log.info("dropbox SPX: %d members, NDX: %d members", len(dropbox_spx), len(dropbox_ndx))
+
+    spx_dir = data_dir / "us" / "index" / "spx"
+    ndx_dir = data_dir / "us" / "index" / "ndx"
+
+    for label, index_dir, dropbox_set in [
+        ("SPX", spx_dir, dropbox_spx),
+        ("NDX", ndx_dir, dropbox_ndx),
+    ]:
+        files = sorted(index_dir.glob("*.txt"))
+        if not files:
+            log.warning("no %s index files found for validation", label)
+            continue
+
+        latest_path = files[-1]
+        index_set = _read_index_file_set(latest_path)
+        only_index = index_set - dropbox_set
+        only_dropbox = dropbox_set - index_set
+
+        if not only_index and not only_dropbox:
+            log.info("%s validation OK: %d members match (index date: %s)",
+                     label, len(index_set), latest_path.stem)
+        else:
+            log.warning("%s validation MISMATCH (index date: %s):", label, latest_path.stem)
+            log.warning("  index: %d, dropbox: %d", len(index_set), len(dropbox_set))
+            if only_index:
+                log.warning("  only in index file: %s", ", ".join(sorted(only_index)))
+            if only_dropbox:
+                log.warning("  only in dropbox: %s", ", ".join(sorted(only_dropbox)))
 
 
 # ---------------------------------------------------------------------------
@@ -454,10 +526,13 @@ def load_config(config_path: str) -> str:
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Build US index constituent history (SPX + NDX)")
+    parser = argparse.ArgumentParser(
+        description="Download reference CSVs and build US index constituent history")
     parser.add_argument("--config", default="config/jupitor.yaml", help="Config file path")
+    parser.add_argument("--ref-dir", default="reference/us", help="Reference directory")
     parser.add_argument("--spx-only", action="store_true", help="Only build S&P 500")
     parser.add_argument("--ndx-only", action="store_true", help="Only build NASDAQ-100")
+    parser.add_argument("--skip-download", action="store_true", help="Skip Dropbox download")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -467,12 +542,45 @@ def main():
     )
 
     data_dir = Path(load_config(args.config))
-    log.info("data_dir=%s", data_dir)
+    ref_dir = Path(args.ref_dir)
+    log.info("data_dir=%s ref_dir=%s", data_dir, ref_dir)
 
+    errors = []
+
+    # Step 1: Download reference CSVs
+    if not args.skip_download:
+        try:
+            download_reference(ref_dir)
+        except Exception as e:
+            log.error("Dropbox download failed: %s", e)
+            errors.append(f"Dropbox: {e}")
+
+    # Step 2: Build SPX
     if not args.ndx_only:
-        build_spx(data_dir)
+        try:
+            build_spx(data_dir)
+        except Exception as e:
+            log.error("SPX build failed: %s", e)
+            errors.append(f"SPX: {e}")
+
+    # Step 3: Build NDX
     if not args.spx_only:
-        build_ndx(data_dir)
+        try:
+            build_ndx(data_dir)
+        except Exception as e:
+            log.error("NDX build failed: %s", e)
+            errors.append(f"NDX: {e}")
+
+    # Step 4: Validate
+    try:
+        validate_index(data_dir, ref_dir)
+    except Exception as e:
+        log.error("validation failed: %s", e)
+        errors.append(f"validation: {e}")
+
+    if errors:
+        log.error("FAILED — %d error(s): %s", len(errors), "; ".join(errors))
+        sys.exit(1)
 
     log.info("done")
 

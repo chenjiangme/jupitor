@@ -136,10 +136,11 @@ def _query_trading_days(start_date: str, end_date: str) -> list[str]:
     return days
 
 
-def _query_index_constituents(index_name: str, query_date: str) -> list[str]:
+def _query_index_constituents(index_name: str, query_date: str) -> list[tuple[str, str]]:
     """Query constituents for a given index on a given date.
 
-    Returns a sorted list of symbol codes (e.g. ["sh.600000", "sh.600016", ...]).
+    Returns a sorted list of (code, name) tuples,
+    e.g. [("sh.600000", "浦发银行"), ("sh.600016", "民生银行"), ...].
     Returns empty list if no data for that date (holiday / weekend).
     """
     fn = getattr(bs, _INDEXES[index_name])
@@ -147,12 +148,15 @@ def _query_index_constituents(index_name: str, query_date: str) -> list[str]:
     if rs.error_code != "0":
         return []
 
-    symbols = []
+    seen = set()
+    results = []
     while rs.next():
         row = rs.get_row_data()
-        if len(row) >= 2 and row[1]:
-            symbols.append(row[1])
-    return sorted(set(symbols))
+        if len(row) >= 3 and row[1] and row[1] not in seen:
+            seen.add(row[1])
+            results.append((row[1], row[2]))
+    results.sort(key=lambda x: x[0])
+    return results
 
 
 def _query_daily_bars(symbol: str, start_date: str, end_date: str) -> list[dict]:
@@ -205,10 +209,10 @@ def _task_fetch_index(args: tuple) -> tuple | None:
     if file_path.exists():
         return None
 
-    symbols = _query_index_constituents(index_name, date_str)
-    if symbols:
-        _write_index_file(file_path, symbols)
-        return (index_name, date_str, len(symbols))
+    constituents = _query_index_constituents(index_name, date_str)
+    if constituents:
+        _write_index_file(file_path, constituents)
+        return (index_name, date_str, len(constituents))
     return None
 
 
@@ -293,17 +297,23 @@ def _read_latest_bar_date(symbol: str, daily_dir: Path) -> str | None:
 # Index history file I/O
 # ---------------------------------------------------------------------------
 
-def _write_index_file(path: Path, symbols: list[str]):
-    """Write sorted symbol list to a text file, one per line."""
+def _write_index_file(path: Path, constituents: list[tuple[str, str]]):
+    """Write sorted constituent list to a text file, one per line as 'code,name'."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(sorted(set(symbols))) + "\n")
+    lines = sorted(set(f"{code},{name}" for code, name in constituents))
+    path.write_text("\n".join(lines) + "\n")
 
 
 def _read_index_file(path: Path) -> list[str]:
-    """Read symbol list from a text file."""
+    """Read symbol codes from an index file. Handles both 'code,name' and plain 'code' formats."""
     if not path.exists():
         return []
-    return [line.strip() for line in path.read_text().splitlines() if line.strip()]
+    symbols = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line:
+            symbols.append(line.split(",")[0])
+    return symbols
 
 
 def _all_index_symbols(data_dir: Path) -> list[str]:
@@ -521,14 +531,14 @@ class CNBaoStockDaemon:
         for index_name in _INDEXES:
             if _shutdown:
                 return
-            symbols = _query_index_constituents(index_name, today_str)
-            if symbols:
+            constituents = _query_index_constituents(index_name, today_str)
+            if constituents:
                 index_dir = self.data_dir / "cn" / "index" / index_name
-                _write_index_file(index_dir / f"{today_str}.txt", symbols)
-                log.info("daily index %s: %d symbols", index_name, len(symbols))
-                for s in symbols:
-                    if s not in known_symbols:
-                        new_symbols.add(s)
+                _write_index_file(index_dir / f"{today_str}.txt", constituents)
+                log.info("daily index %s: %d symbols", index_name, len(constituents))
+                for code, _name in constituents:
+                    if code not in known_symbols:
+                        new_symbols.add(code)
 
         # 2. Backfill new symbols fully (parallel)
         if new_symbols and not _shutdown:
