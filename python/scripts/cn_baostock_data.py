@@ -4,6 +4,7 @@ from __future__ import annotations
 """cn-baostock-data: daemon for China A-share daily bar collection via BaoStock.
 
 Collects CSI 300 and CSI 500 constituent history and daily bars.
+Uses 4 worker processes for parallel BaoStock queries.
 
 Priority:
   1. Build CSI 300 + CSI 500 constituent history (as far back as BaoStock allows)
@@ -22,6 +23,7 @@ Usage:
 
 import argparse
 import logging
+import multiprocessing
 import os
 import signal
 import sys
@@ -35,6 +37,8 @@ import pyarrow.parquet as pq
 import yaml
 
 log = logging.getLogger("cn-baostock-data")
+
+NUM_WORKERS = 4
 
 # ---------------------------------------------------------------------------
 # Parquet schema (all 18 BaoStock daily bar fields)
@@ -92,6 +96,16 @@ def _handle_signal(signum, frame):
 
 
 # ---------------------------------------------------------------------------
+# Worker process init (each worker gets its own BaoStock login)
+# ---------------------------------------------------------------------------
+
+def _worker_init():
+    """Initialize BaoStock connection in worker process."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)  # parent handles signals
+    bs.login()
+
+
+# ---------------------------------------------------------------------------
 # BaoStock helpers
 # ---------------------------------------------------------------------------
 
@@ -131,13 +145,11 @@ def _query_index_constituents(index_name: str, query_date: str) -> list[str]:
     fn = getattr(bs, _INDEXES[index_name])
     rs = fn(date=query_date)
     if rs.error_code != "0":
-        log.warning("index query error: %s %s → %s", index_name, query_date, rs.error_msg)
         return []
 
     symbols = []
     while rs.next():
         row = rs.get_row_data()
-        # row[1] is the stock code (e.g. "sh.600000")
         if len(row) >= 2 and row[1]:
             symbols.append(row[1])
     return sorted(set(symbols))
@@ -157,7 +169,6 @@ def _query_daily_bars(symbol: str, start_date: str, end_date: str) -> list[dict]
         adjustflag="3",
     )
     if rs.error_code != "0":
-        log.warning("bar query error: %s [%s, %s] → %s", symbol, start_date, end_date, rs.error_msg)
         return []
 
     field_names = BAR_FIELDS.split(",")
@@ -181,6 +192,49 @@ def _query_daily_bars(symbol: str, start_date: str, end_date: str) -> list[dict]
 
 
 # ---------------------------------------------------------------------------
+# Worker tasks (module-level functions for multiprocessing pickling)
+# ---------------------------------------------------------------------------
+
+def _task_fetch_index(args: tuple) -> tuple | None:
+    """Worker task: fetch index constituents for one (date, index_name) pair.
+
+    Returns (index_name, date_str, count) on success, None if skipped/empty.
+    """
+    date_str, index_name, index_dir_str = args
+    file_path = Path(index_dir_str) / f"{date_str}.txt"
+    if file_path.exists():
+        return None
+
+    symbols = _query_index_constituents(index_name, date_str)
+    if symbols:
+        _write_index_file(file_path, symbols)
+        return (index_name, date_str, len(symbols))
+    return None
+
+
+def _task_fetch_bars(args: tuple) -> tuple:
+    """Worker task: fetch and write bars for one symbol.
+
+    Returns (symbol, num_bars_written).
+    """
+    symbol, fetch_start, fetch_end, daily_dir_str = args
+    daily_dir = Path(daily_dir_str)
+
+    rows = _query_daily_bars(symbol, fetch_start, fetch_end)
+    if rows:
+        # Group by year and write with merge-on-write
+        by_year: dict[str, list[dict]] = {}
+        for r in rows:
+            year = r["date"][:4]
+            by_year.setdefault(year, []).append(r)
+        for year, year_rows in by_year.items():
+            path = daily_dir / symbol / f"{year}.parquet"
+            _write_bars_parquet(path, year_rows)
+        return (symbol, len(rows))
+    return (symbol, 0)
+
+
+# ---------------------------------------------------------------------------
 # Parquet I/O
 # ---------------------------------------------------------------------------
 
@@ -197,8 +251,8 @@ def _write_bars_parquet(path: Path, rows: list[dict]):
         try:
             table = pq.read_table(path, schema=BAR_SCHEMA)
             existing_rows = table.to_pylist()
-        except Exception as e:
-            log.warning("reading existing parquet %s: %s", path, e)
+        except Exception:
+            pass
 
     # Merge: new rows overwrite existing rows with same (symbol, date)
     by_key = {}
@@ -209,7 +263,6 @@ def _write_bars_parquet(path: Path, rows: list[dict]):
 
     merged = sorted(by_key.values(), key=lambda r: r["date"])
 
-    # Build columnar arrays
     arrays = []
     for field in BAR_SCHEMA:
         col = [r.get(field.name) for r in merged]
@@ -220,27 +273,20 @@ def _write_bars_parquet(path: Path, rows: list[dict]):
 
 
 def _read_latest_bar_date(symbol: str, daily_dir: Path) -> str | None:
-    """Find the latest bar date for a symbol from its parquet files.
-
-    Returns date string like "2024-12-31" or None if no data.
-    """
+    """Find the latest bar date for a symbol from its parquet files."""
     sym_dir = daily_dir / symbol
     if not sym_dir.exists():
         return None
 
-    latest = None
     for pf in sorted(sym_dir.glob("*.parquet"), reverse=True):
         try:
             table = pq.read_table(pf, columns=["date"])
             dates = table.column("date").to_pylist()
             if dates:
-                max_date = max(dates)
-                if latest is None or max_date > latest:
-                    latest = max_date
-                break  # files are sorted descending by year, first hit is enough
+                return max(dates)
         except Exception:
             continue
-    return latest
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -258,17 +304,6 @@ def _read_index_file(path: Path) -> list[str]:
     if not path.exists():
         return []
     return [line.strip() for line in path.read_text().splitlines() if line.strip()]
-
-
-def _list_index_dates(index_dir: Path) -> list[str]:
-    """List all dates that have index constituent files, sorted ascending."""
-    if not index_dir.exists():
-        return []
-    dates = []
-    for f in index_dir.iterdir():
-        if f.suffix == ".txt" and len(f.stem) == 10:
-            dates.append(f.stem)
-    return sorted(dates)
 
 
 def _all_index_symbols(data_dir: Path) -> list[str]:
@@ -290,7 +325,7 @@ class CNBaoStockDaemon:
         self.data_dir = Path(data_dir)
         self.start_date = start_date
         self.daily_dir = self.data_dir / "cn" / "daily"
-        self._daily_update_done_today = None  # date when last daily update ran
+        self._daily_update_done_today = None
 
     def run(self):
         """Main daemon loop."""
@@ -300,7 +335,7 @@ class CNBaoStockDaemon:
         _bs_login()
         try:
             while not _shutdown:
-                # 1. Build index history (runs to completion)
+                # 1. Build index history
                 if not self._index_history_complete():
                     self._build_index_history()
                     continue
@@ -310,8 +345,8 @@ class CNBaoStockDaemon:
                     self._run_daily_update()
                     continue
 
-                # 3. Bar backfill (one symbol per iteration)
-                did_work = self._bar_backfill_step()
+                # 3. Bar backfill
+                did_work = self._bar_backfill()
 
                 if not did_work:
                     log.info("no work available, sleeping 60s")
@@ -322,38 +357,34 @@ class CNBaoStockDaemon:
         log.info("daemon stopped")
 
     # -------------------------------------------------------------------
-    # Phase 1: Build index constituent history
+    # Phase 1: Build index constituent history (4 workers)
     # -------------------------------------------------------------------
 
     def _index_scan_progress_path(self) -> Path:
         return self.data_dir / "cn" / "index" / ".scan-progress"
 
     def _read_scan_progress(self) -> str | None:
-        """Read the last fully-scanned date from the progress file."""
         p = self._index_scan_progress_path()
         if p.exists():
             return p.read_text().strip() or None
         return None
 
     def _write_scan_progress(self, date_str: str):
-        """Save the last fully-scanned date."""
         p = self._index_scan_progress_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(date_str + "\n")
 
     def _index_history_complete(self) -> bool:
-        """Check if index scan has reached yesterday."""
         yesterday = (date.today() - timedelta(days=1)).isoformat()
         progress = self._read_scan_progress()
         return progress is not None and progress >= yesterday
 
     def _build_index_history(self):
-        """Build CSI 300 + CSI 500 constituent history.
+        """Build CSI 300 + CSI 500 constituent history with 4 workers.
 
-        Uses BaoStock trading calendar to query only actual trading days.
-        Resumes from .scan-progress. Skips dates with existing files.
+        Uses BaoStock trading calendar. Resumes from .scan-progress.
+        Skips dates with existing files.
         """
-        # Determine start date from progress or config
         progress = self._read_scan_progress()
         if progress:
             scan_start = (date.fromisoformat(progress) + timedelta(days=1)).isoformat()
@@ -366,47 +397,50 @@ class CNBaoStockDaemon:
         if scan_start > end_str:
             return
 
-        # Fetch trading calendar (single fast query)
         trading_days = _query_trading_days(scan_start, end_str)
         log.info("trading calendar: %d trading days in [%s, %s]", len(trading_days), scan_start, end_str)
 
-        for i, date_str in enumerate(trading_days):
-            if _shutdown:
-                break
-
-            queried = False
+        # Build work items: (date_str, index_name, index_dir) for each missing file
+        work = []
+        for date_str in trading_days:
             for index_name in _INDEXES:
-                if _shutdown:
-                    break
                 index_dir = self.data_dir / "cn" / "index" / index_name
                 file_path = index_dir / f"{date_str}.txt"
+                if not file_path.exists():
+                    work.append((date_str, index_name, str(index_dir)))
 
-                if file_path.exists():
-                    continue
+        if not work:
+            log.info("index history: all files exist, nothing to do")
+            if trading_days:
+                self._write_scan_progress(trading_days[-1])
+            return
 
-                symbols = _query_index_constituents(index_name, date_str)
-                queried = True
+        log.info("index history: %d items to fetch with %d workers", len(work), NUM_WORKERS)
 
-                if symbols:
-                    _write_index_file(file_path, symbols)
-                    log.info("index %s %s: %d symbols", index_name, date_str, len(symbols))
+        completed = True
+        with multiprocessing.Pool(NUM_WORKERS, initializer=_worker_init) as pool:
+            done = 0
+            for result in pool.imap_unordered(_task_fetch_index, work, chunksize=4):
+                if _shutdown:
+                    pool.terminate()
+                    completed = False
+                    break
+                done += 1
+                if result:
+                    log.info("index %s %s: %d symbols", *result)
+                if done % 200 == 0:
+                    log.info("index scan: %d/%d items done", done, len(work))
 
-            # Save scan progress
-            self._write_scan_progress(date_str)
-
-            if (i + 1) % 100 == 0:
-                log.info("index scan: %d/%d trading days done (%s)",
-                         i + 1, len(trading_days), date_str)
-
-        if not _shutdown:
-            log.info("index history build complete")
+        if completed and trading_days:
+            self._write_scan_progress(trading_days[-1])
+            log.info("index history build complete (%d items)", len(work))
 
     # -------------------------------------------------------------------
-    # Phase 2: Bar backfill
+    # Phase 2: Bar backfill (4 workers)
     # -------------------------------------------------------------------
 
-    def _bar_backfill_step(self) -> bool:
-        """Backfill bars for the next symbol missing data.
+    def _bar_backfill(self) -> bool:
+        """Backfill bars for all symbols missing data, using 4 workers.
 
         Returns True if work was done.
         """
@@ -416,38 +450,39 @@ class CNBaoStockDaemon:
 
         today_str = date.today().isoformat()
 
+        # Build work list: symbols needing bar data
+        work = []
         for symbol in all_symbols:
-            if _shutdown:
-                return False
-
             latest = _read_latest_bar_date(symbol, self.daily_dir)
-
             if latest is not None and latest >= today_str:
-                continue  # up to date
-
-            # Determine fetch range
+                continue
             if latest is None:
                 fetch_start = self.start_date
             else:
-                # Start from the day after the latest bar
-                next_day = date.fromisoformat(latest) + timedelta(days=1)
-                fetch_start = next_day.isoformat()
-
+                fetch_start = (date.fromisoformat(latest) + timedelta(days=1)).isoformat()
             if fetch_start > today_str:
                 continue
+            work.append((symbol, fetch_start, today_str, str(self.daily_dir)))
 
-            log.info("backfill %s from %s", symbol, fetch_start)
-            rows = _query_daily_bars(symbol, fetch_start, today_str)
+        if not work:
+            return False
 
-            if rows:
-                self._write_bars(symbol, rows)
-                log.info("backfill %s: wrote %d bars", symbol, len(rows))
-            else:
-                log.debug("backfill %s: no data in [%s, %s]", symbol, fetch_start, today_str)
+        log.info("bar backfill: %d symbols to process with %d workers", len(work), NUM_WORKERS)
 
-            return True  # did work (even if no data, we queried)
+        with multiprocessing.Pool(NUM_WORKERS, initializer=_worker_init) as pool:
+            done = 0
+            for result in pool.imap_unordered(_task_fetch_bars, work, chunksize=1):
+                if _shutdown:
+                    pool.terminate()
+                    break
+                done += 1
+                sym, count = result
+                if count > 0:
+                    log.info("backfill %s: %d bars (%d/%d)", sym, count, done, len(work))
+                if done % 50 == 0 and count == 0:
+                    log.info("bar backfill progress: %d/%d symbols done", done, len(work))
 
-        return False  # all symbols up to date
+        return True
 
     # -------------------------------------------------------------------
     # Phase 3: Daily update
@@ -458,11 +493,9 @@ class CNBaoStockDaemon:
         now = datetime.now()
         today = now.date()
 
-        # Already ran today
         if self._daily_update_done_today == today:
             return False
 
-        # Check .last-completed
         lc_path = self.daily_dir / ".last-completed"
         if lc_path.exists():
             lc = lc_path.read_text().strip()
@@ -470,8 +503,6 @@ class CNBaoStockDaemon:
                 self._daily_update_done_today = today
                 return False
 
-        # Only run after 16:30 CST (UTC+8)
-        # We approximate by checking local time — assumes running in CST timezone
         cutoff_hour, cutoff_min = 16, 30
         if now.hour < cutoff_hour or (now.hour == cutoff_hour and now.minute < cutoff_min):
             return False
@@ -479,11 +510,11 @@ class CNBaoStockDaemon:
         return True
 
     def _run_daily_update(self):
-        """Daily update: refresh today's constituents, detect new symbols, update bars."""
+        """Daily update: refresh constituents, detect new symbols, update bars."""
         today_str = date.today().isoformat()
         log.info("daily update started for %s", today_str)
 
-        # 1. Refresh today's index constituents
+        # 1. Refresh today's index constituents (just 2 queries, serial)
         new_symbols = set()
         known_symbols = set(_all_index_symbols(self.data_dir))
 
@@ -499,57 +530,47 @@ class CNBaoStockDaemon:
                     if s not in known_symbols:
                         new_symbols.add(s)
 
-        # 2. Backfill new symbols fully
-        if new_symbols:
+        # 2. Backfill new symbols fully (parallel)
+        if new_symbols and not _shutdown:
             log.info("detected %d new symbols, backfilling", len(new_symbols))
-            for symbol in sorted(new_symbols):
-                if _shutdown:
-                    return
-                rows = _query_daily_bars(symbol, self.start_date, today_str)
-                if rows:
-                    self._write_bars(symbol, rows)
-                    log.info("new symbol backfill %s: %d bars", symbol, len(rows))
+            work = [(sym, self.start_date, today_str, str(self.daily_dir))
+                    for sym in sorted(new_symbols)]
+            with multiprocessing.Pool(NUM_WORKERS, initializer=_worker_init) as pool:
+                for result in pool.imap_unordered(_task_fetch_bars, work, chunksize=1):
+                    if _shutdown:
+                        pool.terminate()
+                        break
+                    sym, count = result
+                    if count > 0:
+                        log.info("new symbol backfill %s: %d bars", sym, count)
 
-        # 3. Update bars for all current constituents
+        # 3. Update bars for all current constituents (parallel)
         current_symbols = set()
         for index_name in _INDEXES:
             index_dir = self.data_dir / "cn" / "index" / index_name
             file_path = index_dir / f"{today_str}.txt"
             current_symbols.update(_read_index_file(file_path))
 
-        if current_symbols:
+        if current_symbols and not _shutdown:
             log.info("updating bars for %d current constituents", len(current_symbols))
+            work = [(sym, today_str, today_str, str(self.daily_dir))
+                    for sym in sorted(current_symbols)]
             count = 0
-            for symbol in sorted(current_symbols):
-                if _shutdown:
-                    return
-                rows = _query_daily_bars(symbol, today_str, today_str)
-                if rows:
-                    self._write_bars(symbol, rows)
-                    count += 1
+            with multiprocessing.Pool(NUM_WORKERS, initializer=_worker_init) as pool:
+                for result in pool.imap_unordered(_task_fetch_bars, work, chunksize=4):
+                    if _shutdown:
+                        pool.terminate()
+                        break
+                    if result[1] > 0:
+                        count += 1
             log.info("daily bar update: %d/%d symbols had data", count, len(current_symbols))
 
         # 4. Mark completed
-        self.daily_dir.mkdir(parents=True, exist_ok=True)
-        (self.daily_dir / ".last-completed").write_text(today_str + "\n")
-        self._daily_update_done_today = date.today()
-        log.info("daily update complete for %s", today_str)
-
-    # -------------------------------------------------------------------
-    # Bar writing helper
-    # -------------------------------------------------------------------
-
-    def _write_bars(self, symbol: str, rows: list[dict]):
-        """Write bar rows to per-year parquet files with merge-on-write."""
-        # Group by year
-        by_year: dict[str, list[dict]] = {}
-        for r in rows:
-            year = r["date"][:4]
-            by_year.setdefault(year, []).append(r)
-
-        for year, year_rows in by_year.items():
-            path = self.daily_dir / symbol / f"{year}.parquet"
-            _write_bars_parquet(path, year_rows)
+        if not _shutdown:
+            self.daily_dir.mkdir(parents=True, exist_ok=True)
+            (self.daily_dir / ".last-completed").write_text(today_str + "\n")
+            self._daily_update_done_today = date.today()
+            log.info("daily update complete for %s", today_str)
 
     # -------------------------------------------------------------------
     # Utility
@@ -568,10 +589,7 @@ class CNBaoStockDaemon:
 # ---------------------------------------------------------------------------
 
 def load_config(config_path: str) -> tuple[str, str]:
-    """Load data_dir and start_date from config YAML + env overrides.
-
-    Returns (data_dir, start_date).
-    """
+    """Load data_dir and start_date from config YAML + env overrides."""
     data_dir = os.environ.get("DATA_1", "")
     start_date = "2005-01-01"
 
@@ -582,7 +600,6 @@ def load_config(config_path: str) -> tuple[str, str]:
         storage = cfg.get("storage", {})
         if not data_dir:
             raw = storage.get("data_dir", "")
-            # Expand ${DATA_1} style references
             data_dir = os.path.expandvars(raw)
 
         gather = cfg.get("gather", {})
@@ -606,7 +623,6 @@ def main():
     parser.add_argument("--config", default="config/jupitor.yaml", help="Config file path")
     args = parser.parse_args()
 
-    # Set up logging
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -614,7 +630,7 @@ def main():
     )
 
     data_dir, start_date = load_config(args.config)
-    log.info("data_dir=%s start_date=%s", data_dir, start_date)
+    log.info("data_dir=%s start_date=%s workers=%d", data_dir, start_date, NUM_WORKERS)
 
     daemon = CNBaoStockDaemon(data_dir=data_dir, start_date=start_date)
     daemon.run()
