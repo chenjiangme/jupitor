@@ -55,6 +55,7 @@ func main() {
 		cfg.Gather.USDaily.StartDate,
 		csvPath,
 		cfg.Alpaca.BaseURL,
+		"reference/us",
 	)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

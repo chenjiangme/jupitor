@@ -48,6 +48,7 @@ type DailyBarGatherer struct {
 	apiKey    string
 	apiSecret string
 	baseURL   string // live trading API for calendar
+	refData   *ReferenceData
 	log       *slog.Logger
 }
 
@@ -59,7 +60,7 @@ func NewDailyBarGatherer(
 	tradeStore store.TradeStore,
 	batchSize, maxWorkers int,
 	tradeWorkers int,
-	startDate, csvPath, baseURL string,
+	startDate, csvPath, baseURL, refDir string,
 ) *DailyBarGatherer {
 	opts := marketdata.ClientOpts{
 		APIKey:    apiKey,
@@ -81,6 +82,7 @@ func NewDailyBarGatherer(
 		apiKey:       apiKey,
 		apiSecret:    apiSecret,
 		baseURL:      baseURL,
+		refData:      LoadReferenceData(refDir),
 		log:          slog.Default().With("daemon", "us-alpaca-data"),
 	}
 }
@@ -528,6 +530,11 @@ func (g *DailyBarGatherer) tradeBackfillStep(ctx context.Context) (bool, error) 
 		}
 
 		if len(missing) == 0 {
+			// All trades present — generate trade-universe CSV if missing.
+			csvPath := tradeUniversePath(g.dataDir(), date)
+			if _, err := os.Stat(csvPath); os.IsNotExist(err) {
+				_ = generateTradeUniverseForDate(g.dataDir(), date, symbols, g.refData, g.log)
+			}
 			continue
 		}
 
@@ -547,6 +554,13 @@ func (g *DailyBarGatherer) tradeBackfillStep(ctx context.Context) (bool, error) 
 			"symbols", len(missing),
 			"trades", count,
 		)
+
+		// Generate trade-universe CSV now that this date is complete.
+		csvPath := tradeUniversePath(g.dataDir(), date)
+		if _, err := os.Stat(csvPath); os.IsNotExist(err) {
+			_ = generateTradeUniverseForDate(g.dataDir(), date, symbols, g.refData, g.log)
+		}
+
 		return true, nil
 	}
 

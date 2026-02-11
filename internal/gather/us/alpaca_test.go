@@ -5,7 +5,7 @@ import "testing"
 func TestDailyBarGathererName(t *testing.T) {
 	g := NewDailyBarGatherer("key", "secret", "https://data.alpaca.markets",
 		nil, nil, 5000, 10, 16,
-		"2016-01-01", "", "https://api.alpaca.markets")
+		"2016-01-01", "", "https://api.alpaca.markets", "")
 	if got := g.Name(); got != "us-alpaca-data" {
 		t.Errorf("DailyBarGatherer.Name() = %q, want %q", got, "us-alpaca-data")
 	}
