@@ -74,7 +74,7 @@ func TestBuildTradeBatchesMinOneSymbol(t *testing.T) {
 }
 
 func TestStreamGathererName(t *testing.T) {
-	g := NewStreamGatherer("key", "secret", "wss://stream.data.alpaca.markets", nil)
+	g := NewStreamGatherer("key", "secret", "https://api.alpaca.markets", "/tmp", "", "")
 	if got := g.Name(); got != "us-stream" {
 		t.Errorf("StreamGatherer.Name() = %q, want %q", got, "us-stream")
 	}

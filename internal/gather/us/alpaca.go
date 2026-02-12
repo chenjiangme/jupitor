@@ -4,19 +4,25 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	alpacaapi "github.com/alpacahq/alpaca-trade-api-go/v3/alpaca"
 	"github.com/alpacahq/alpaca-trade-api-go/v3/marketdata"
+	"github.com/alpacahq/alpaca-trade-api-go/v3/marketdata/stream"
 	"github.com/parquet-go/parquet-go"
 
 	"jupitor/internal/domain"
 	"jupitor/internal/gather"
+	"jupitor/internal/live"
 	"jupitor/internal/store"
 )
 
@@ -814,42 +820,504 @@ func (g *DailyBarGatherer) tradePath(symbol string, day time.Time) string {
 }
 
 // ---------------------------------------------------------------------------
-// StreamGatherer — live WebSocket streaming of trades from the Alpaca feed.
+// StreamGatherer — live WebSocket streaming + REST backfill of trades.
 // ---------------------------------------------------------------------------
 
-// StreamGatherer connects to the Alpaca real-time WebSocket feed and
-// persists incoming trades.
+// StreamGatherer connects to the Alpaca real-time WebSocket feed, backfills
+// today's trades via the REST API, and maintains a shared LiveModel.
 type StreamGatherer struct {
 	apiKey    string
 	apiSecret string
-	streamURL string
-	store     store.TradeStore
+	baseURL   string // Alpaca trading API base URL (for GetAssets)
+	dataDir   string
+	csvPath   string // path to symbol_5_chars.csv
+	refDir    string // path to reference/us/ directory
+	model     *live.LiveModel
 	log       *slog.Logger
+	ready     chan struct{}
+
+	stockSyms    map[string]bool // ex-index stock symbols (fast lookup)
+	loc          *time.Location
+	today        string    // "YYYY-MM-DD"
+	prevDate     string    // previous trading day
+	prevCloseUTC time.Time // prevDate 4PM ET in UTC
 }
 
-// NewStreamGatherer creates a StreamGatherer configured with the given
-// Alpaca credentials, WebSocket URL, and target store.
-func NewStreamGatherer(apiKey, apiSecret, streamURL string, s store.TradeStore) *StreamGatherer {
+// NewStreamGatherer creates a StreamGatherer that loads symbols from the
+// Alpaca API, backfills per-symbol via REST, and streams via WebSocket.
+func NewStreamGatherer(apiKey, apiSecret, baseURL, dataDir, csvPath, refDir string) *StreamGatherer {
 	return &StreamGatherer{
 		apiKey:    apiKey,
 		apiSecret: apiSecret,
-		streamURL: streamURL,
-		store:     s,
+		baseURL:   baseURL,
+		dataDir:   dataDir,
+		csvPath:   csvPath,
+		refDir:    refDir,
 		log:       slog.Default().With("gatherer", "us-stream"),
+		ready:     make(chan struct{}),
 	}
 }
 
 // Name returns the gatherer identifier.
 func (g *StreamGatherer) Name() string { return "us-stream" }
 
-// Run connects to the Alpaca WebSocket feed and streams trades into the
-// store. It blocks until ctx is cancelled.
+// Model returns the shared LiveModel (available after Run starts).
+func (g *StreamGatherer) Model() *live.LiveModel { return g.model }
+
+// Ready returns a channel that is closed once the model is created and the
+// WebSocket stream is connected. Use this instead of sleeping in main.
+func (g *StreamGatherer) Ready() <-chan struct{} { return g.ready }
+
+// Run starts backfill + streaming. It blocks until ctx is cancelled.
 func (g *StreamGatherer) Run(ctx context.Context) error {
-	// TODO: Implement WebSocket streaming from Alpaca.
-	//  1. Dial streamURL and authenticate with apiKey/apiSecret.
-	//  2. Subscribe to trade updates for configured symbols.
-	//  3. Decode incoming messages into domain.Trade and write to g.store.
-	//  4. Reconnect with backoff on transient errors.
-	_ = ctx
-	return fmt.Errorf("StreamGatherer.Run: not implemented")
+	var err error
+	g.loc, err = time.LoadLocation("America/New_York")
+	if err != nil {
+		return fmt.Errorf("loading timezone: %w", err)
+	}
+
+	// Determine today's date (ET) and the previous trading day.
+	now := time.Now().In(g.loc)
+	g.today = now.Format("2006-01-02")
+
+	g.prevDate, err = g.findPrevTradingDay()
+	if err != nil {
+		return fmt.Errorf("finding previous trading day: %w", err)
+	}
+
+	g.log.Info("dates determined", "today", g.today, "prevDate", g.prevDate)
+
+	// Load symbols dynamically from Alpaca API.
+	stockSyms, err := g.loadSymbolsFromAPI()
+	if err != nil {
+		return fmt.Errorf("loading symbols from API: %w", err)
+	}
+	g.stockSyms = stockSyms
+
+	g.log.Info("loaded symbols", "exIndexStocks", len(g.stockSyms))
+
+	// Compute todayCutoff = D 4PM ET as Unix ms.
+	todayCutoff, err := regularClose(g.today)
+	if err != nil {
+		return fmt.Errorf("computing today cutoff: %w", err)
+	}
+
+	prevCloseMS, err := regularClose(g.prevDate)
+	if err != nil {
+		return fmt.Errorf("computing prev close: %w", err)
+	}
+	g.prevCloseUTC = time.UnixMilli(prevCloseMS).UTC()
+
+	g.model = live.NewLiveModel(todayCutoff)
+
+	// Load backfill cache from /tmp (if exists from earlier run today).
+	g.loadBackfillCache()
+
+	// Start WebSocket stream immediately (captures from NOW).
+	streamClient := stream.NewStocksClient(
+		marketdata.SIP,
+		stream.WithCredentials(g.apiKey, g.apiSecret),
+		stream.WithTrades(func(t stream.Trade) {
+			g.handleStreamTrade(t)
+		}, "*"),
+	)
+
+	if err := streamClient.Connect(ctx); err != nil {
+		return fmt.Errorf("connecting WebSocket: %w", err)
+	}
+
+	g.log.Info("WebSocket stream connected")
+
+	// Signal readiness — model is created and stream is connected.
+	close(g.ready)
+
+	// Start background backfill goroutine.
+	go g.runBackfill(ctx)
+
+	// Start periodic status logging.
+	go g.logStatus(ctx)
+
+	// Wait for context cancellation or stream termination.
+	select {
+	case <-ctx.Done():
+		g.log.Info("context cancelled, shutting down")
+	case err := <-streamClient.Terminated():
+		if err != nil {
+			g.log.Error("stream terminated", "error", err)
+			return fmt.Errorf("stream terminated: %w", err)
+		}
+	}
+
+	tIdx, tExIdx, nIdx, nExIdx := g.model.Counts()
+	g.log.Info("final counts",
+		"todayIndex", tIdx,
+		"todayExIndex", tExIdx,
+		"nextIndex", nIdx,
+		"nextExIndex", nExIdx,
+		"seen", g.model.SeenCount(),
+	)
+
+	return nil
+}
+
+// loadSymbolsFromAPI fetches active US equity assets from the Alpaca trading
+// API and filters to ex-index stocks (tradable, not ETF, not SPX/NDX).
+func (g *StreamGatherer) loadSymbolsFromAPI() (map[string]bool, error) {
+	client := alpacaapi.NewClient(alpacaapi.ClientOpts{
+		APIKey:    g.apiKey,
+		APISecret: g.apiSecret,
+		BaseURL:   g.baseURL,
+	})
+
+	assets, err := client.GetAssets(alpacaapi.GetAssetsRequest{
+		Status:     "active",
+		AssetClass: "us_equity",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("GetAssets: %w", err)
+	}
+
+	g.log.Info("fetched assets from Alpaca API", "total", len(assets))
+
+	// Build set of allowed 5+ char symbols from CSV.
+	fiveCharSet := make(map[string]bool)
+	if csvSyms, err := LoadCSVSymbols(g.csvPath); err == nil {
+		for _, s := range csvSyms {
+			if len(s) >= 5 {
+				fiveCharSet[s] = true
+			}
+		}
+		g.log.Info("loaded 5+ char symbols from CSV", "count", len(fiveCharSet))
+	} else {
+		g.log.Warn("could not load CSV symbols", "path", g.csvPath, "error", err)
+	}
+
+	// Load ETF reference data.
+	refData := LoadReferenceData(g.refDir)
+
+	// Load SPX/NDX index sets for today.
+	spxPath := filepath.Join(g.dataDir, "us", "index", "spx", g.today+".txt")
+	ndxPath := filepath.Join(g.dataDir, "us", "index", "ndx", g.today+".txt")
+	spxSet := readIndexSet(spxPath)
+	ndxSet := readIndexSet(ndxPath)
+
+	g.log.Info("loaded index constituents", "spx", len(spxSet), "ndx", len(ndxSet))
+
+	// Filter: tradable, len<=4 or in fiveCharSet, not ETF, not index.
+	stockSyms := make(map[string]bool, len(assets)/2)
+	for _, a := range assets {
+		sym := a.Symbol
+		if !a.Tradable {
+			continue
+		}
+		if len(sym) > 4 && !fiveCharSet[sym] {
+			continue
+		}
+		if refData.ETFs[sym] {
+			continue
+		}
+		if spxSet[sym] || ndxSet[sym] {
+			continue
+		}
+		stockSyms[sym] = true
+	}
+
+	return stockSyms, nil
+}
+
+// handleStreamTrade processes a single trade from the WebSocket stream.
+func (g *StreamGatherer) handleStreamTrade(t stream.Trade) {
+	if !g.stockSyms[t.Symbol] {
+		return
+	}
+
+	// Apply size filter: size > 100 AND price*size >= 100.
+	if int64(t.Size) <= 100 || t.Price*float64(t.Size) < 100 {
+		return
+	}
+
+	conditions := strings.Join(t.Conditions, ",")
+	record := store.TradeRecord{
+		Symbol:     t.Symbol,
+		Timestamp:  g.utcToETMilli(t.Timestamp),
+		Price:      t.Price,
+		Size:       int64(t.Size),
+		Exchange:   t.Exchange,
+		ID:         strconv.FormatInt(t.ID, 10),
+		Conditions: conditions,
+	}
+
+	// Apply exchange/condition filter.
+	if !filterTradeRecord(record) {
+		return
+	}
+
+	// Always ex-index (index stocks are excluded from stockSyms).
+	g.model.Add(record, t.ID, false)
+}
+
+// runBackfill uses 4 workers to fetch trades per-symbol from prevDate 4PM ET
+// → now. Each symbol gets its own cache file for incremental resume. After a
+// full scan, waits 5 min and rescans (stream fills the gap).
+func (g *StreamGatherer) runBackfill(ctx context.Context) {
+	client := marketdata.NewClient(marketdata.ClientOpts{
+		APIKey:    g.apiKey,
+		APISecret: g.apiSecret,
+		HTTPClient: &http.Client{
+			Timeout: 30 * time.Second, // default is 10s, too short for paginated calls
+		},
+	})
+
+	for {
+		// Build shuffled symbol list for fair distribution.
+		symbols := make([]string, 0, len(g.stockSyms))
+		for sym := range g.stockSyms {
+			symbols = append(symbols, sym)
+		}
+		rand.Shuffle(len(symbols), func(i, j int) {
+			symbols[i], symbols[j] = symbols[j], symbols[i]
+		})
+
+		symCh := make(chan string, len(symbols))
+		for _, s := range symbols {
+			symCh <- s
+		}
+		close(symCh)
+
+		var (
+			wg        sync.WaitGroup
+			total     atomic.Int64
+			completed atomic.Int64
+		)
+		scanStart := time.Now()
+
+		for i := 0; i < 4; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for sym := range symCh {
+					if ctx.Err() != nil {
+						return
+					}
+					n := g.backfillSymbol(ctx, client, sym)
+					total.Add(int64(n))
+					done := completed.Add(1)
+					if done%500 == 0 {
+						g.log.Info("backfill progress",
+							"done", done,
+							"total", len(symbols),
+							"newTrades", total.Load(),
+							"elapsed", time.Since(scanStart).Round(time.Second),
+						)
+					}
+				}
+			}()
+		}
+		wg.Wait()
+
+		g.log.Info("backfill scan complete",
+			"symbols", len(symbols),
+			"newTrades", total.Load(),
+			"elapsed", time.Since(scanStart).Round(time.Second),
+		)
+
+		if ctx.Err() != nil {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Minute):
+		}
+	}
+}
+
+// backfillSymbol fetches trades for a single symbol, resuming from the latest
+// cached timestamp if a per-symbol cache file exists. Returns the number of
+// new trades added to the model.
+func (g *StreamGatherer) backfillSymbol(ctx context.Context, client *marketdata.Client, sym string) int {
+	if ctx.Err() != nil {
+		return 0
+	}
+
+	cachePath := filepath.Join(g.cacheDir(), "backfill", sym+".parquet")
+
+	// Read existing cache to determine start time.
+	var existing []store.TradeRecord
+	start := g.prevCloseUTC
+
+	if records, err := parquet.ReadFile[store.TradeRecord](cachePath); err == nil && len(records) > 0 {
+		existing = records
+		// Find latest timestamp (ET ms) and convert back to UTC.
+		var latestET int64
+		for _, r := range records {
+			if r.Timestamp > latestET {
+				latestET = r.Timestamp
+			}
+		}
+		start = g.etMilliToUTC(latestET).Add(time.Millisecond)
+	}
+
+	end := time.Now().UTC()
+	if !start.Before(end) {
+		return 0
+	}
+
+	trades, err := client.GetTrades(sym, marketdata.GetTradesRequest{
+		Start: start,
+		End:   end,
+		Feed:  marketdata.SIP,
+	})
+	if err != nil {
+		g.log.Error("backfill fetch failed", "symbol", sym, "error", err)
+		return 0
+	}
+
+	// Filter and convert.
+	var newRecords []store.TradeRecord
+	var newIDs []int64
+	for _, t := range trades {
+		if int64(t.Size) <= 100 || t.Price*float64(t.Size) < 100 {
+			continue
+		}
+
+		conditions := strings.Join(t.Conditions, ",")
+		record := store.TradeRecord{
+			Symbol:     sym,
+			Timestamp:  g.utcToETMilli(t.Timestamp),
+			Price:      t.Price,
+			Size:       int64(t.Size),
+			Exchange:   t.Exchange,
+			ID:         strconv.FormatInt(t.ID, 10),
+			Conditions: conditions,
+			Update:     t.Update,
+		}
+
+		if !filterTradeRecord(record) {
+			continue
+		}
+
+		newRecords = append(newRecords, record)
+		newIDs = append(newIDs, t.ID)
+	}
+
+	if len(newRecords) == 0 {
+		return 0
+	}
+
+	// Append to existing cache and write back.
+	all := append(existing, newRecords...)
+	g.writeSymbolCache(cachePath, all)
+
+	// Add only new records to model.
+	return g.model.AddBatch(newRecords, newIDs, false)
+}
+
+// writeSymbolCache writes trade records to a per-symbol cache parquet file.
+func (g *StreamGatherer) writeSymbolCache(path string, records []store.TradeRecord) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		g.log.Error("creating backfill cache dir", "error", err)
+		return
+	}
+	if err := parquet.WriteFile(path, records); err != nil {
+		g.log.Error("writing backfill cache", "path", path, "error", err)
+	}
+}
+
+// logStatus periodically logs model counts.
+func (g *StreamGatherer) logStatus(ctx context.Context) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			tIdx, tExIdx, nIdx, nExIdx := g.model.Counts()
+			g.log.Info("model status",
+				"todayIndex", tIdx,
+				"todayExIndex", tExIdx,
+				"nextIndex", nIdx,
+				"nextExIndex", nExIdx,
+				"seen", g.model.SeenCount(),
+			)
+		}
+	}
+}
+
+// findPrevTradingDay returns the most recent trading day before today by
+// looking at existing trade-universe CSV files.
+func (g *StreamGatherer) findPrevTradingDay() (string, error) {
+	tuDir := filepath.Join(g.dataDir, "us", "trade-universe")
+	dates, err := listTradeUniverseDates(tuDir)
+	if err != nil {
+		return "", err
+	}
+
+	for i := len(dates) - 1; i >= 0; i-- {
+		if dates[i] < g.today {
+			return dates[i], nil
+		}
+	}
+	return "", fmt.Errorf("no previous trading day found before %s", g.today)
+}
+
+// utcToETMilli converts a UTC time.Time to ET Unix milliseconds.
+func (g *StreamGatherer) utcToETMilli(t time.Time) int64 {
+	et := t.In(g.loc)
+	_, offset := et.Zone()
+	return t.UnixMilli() + int64(offset)*1000
+}
+
+// etMilliToUTC converts an ET Unix millisecond timestamp back to a UTC time.
+func (g *StreamGatherer) etMilliToUTC(etMs int64) time.Time {
+	approx := time.UnixMilli(etMs)
+	_, offset := approx.In(g.loc).Zone()
+	return time.UnixMilli(etMs - int64(offset)*1000)
+}
+
+// ---------------------------------------------------------------------------
+// Backfill cache: /tmp/us-stream/<YYYY-MM-DD>/backfill/<SYMBOL>.parquet
+// ---------------------------------------------------------------------------
+
+func (g *StreamGatherer) cacheDir() string {
+	return filepath.Join(os.TempDir(), "us-stream", g.today)
+}
+
+// loadBackfillCache scans per-symbol cache files from a previous run today
+// and populates the model's seen set so stream dedup works correctly.
+func (g *StreamGatherer) loadBackfillCache() {
+	dir := filepath.Join(g.cacheDir(), "backfill")
+	matches, err := filepath.Glob(filepath.Join(dir, "*.parquet"))
+	if err != nil || len(matches) == 0 {
+		return
+	}
+
+	totalRecords := 0
+	totalAdded := 0
+	for _, path := range matches {
+		records, err := parquet.ReadFile[store.TradeRecord](path)
+		if err != nil || len(records) == 0 {
+			continue
+		}
+
+		ids := make([]int64, len(records))
+		for i := range records {
+			id, _ := strconv.ParseInt(records[i].ID, 10, 64)
+			ids[i] = id
+		}
+
+		added := g.model.AddBatch(records, ids, false)
+		totalRecords += len(records)
+		totalAdded += added
+	}
+
+	if totalRecords > 0 {
+		g.log.Info("loaded backfill cache",
+			"files", len(matches),
+			"records", totalRecords,
+			"added", totalAdded,
+		)
+	}
 }

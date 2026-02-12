@@ -19,6 +19,9 @@ service MarketData {
 
   // Get latest quote for a symbol.
   rpc GetLatestQuote(GetLatestQuoteRequest) returns (Quote);
+
+  // Stream live stock trades (snapshot + live updates).
+  rpc StreamLiveTrades(StreamLiveTradesRequest) returns (stream LiveTrade);
 }
 
 message StreamTradesRequest {
@@ -73,4 +76,20 @@ message Quote {
   double ask_price = 4;
   int64 bid_size = 5;
   int64 ask_size = 6;
+}
+
+message StreamLiveTradesRequest {
+  bool ex_index_only = 1;
+}
+
+message LiveTrade {
+  string symbol = 1;
+  int64 timestamp = 2;      // Unix ms (ET)
+  double price = 3;
+  int64 size = 4;
+  string exchange = 5;
+  string id = 6;
+  string conditions = 7;
+  bool is_index = 8;
+  bool is_today = 9;
 }
