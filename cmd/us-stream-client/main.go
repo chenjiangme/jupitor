@@ -90,11 +90,14 @@ func main() {
 type symbolStats struct {
 	Symbol    string
 	Trades    int
-	DollarVol float64
 	High      float64
 	Low       float64
+	Open      float64 // first trade price (by timestamp)
+	Close     float64 // last trade price (by timestamp)
+	OpenTS    int64   // timestamp of first trade
+	CloseTS   int64   // timestamp of last trade
 	TotalSize int64
-	Turnover  float64 // sum(price * size) for VWAP
+	Turnover  float64 // sum(price * size)
 }
 
 func printDashboard(model *live.LiveModel, tierMap map[string]string, loc *time.Location) {
@@ -137,8 +140,8 @@ func printDashboard(model *live.LiveModel, tierMap map[string]string, loc *time.
 		ss := tiers[tier]
 		fmt.Printf("%s (top 10 by trades)%stotal: %s symbols\n",
 			tier, strings.Repeat(" ", 40-len(tier)-len("(top 10 by trades)")), formatInt(tierCounts[tier]))
-		fmt.Printf("  %-3s %-8s %8s %12s %9s %9s %9s\n",
-			"#", "Symbol", "Trades", "Dollar Vol", "VWAP", "Low", "High")
+		fmt.Printf("  %-3s %-8s %8s %8s %8s %8s %8s %8s %12s %7s\n",
+			"#", "Symbol", "O", "H", "L", "C", "VWAP", "Trades", "Turnover", "Gain%")
 
 		n := len(ss)
 		if n > 10 {
@@ -150,14 +153,21 @@ func printDashboard(model *live.LiveModel, tierMap map[string]string, loc *time.
 			if s.TotalSize > 0 {
 				vwap = s.Turnover / float64(s.TotalSize)
 			}
-			fmt.Printf("  %-3d %-8s %8s %12s %9s %9s %9s\n",
+			gain := ""
+			if s.Open > 0 {
+				gain = fmt.Sprintf("%+.1f%%", (s.High-s.Open)/s.Open*100)
+			}
+			fmt.Printf("  %-3d %-8s %8s %8s %8s %8s %8s %8s %12s %7s\n",
 				i+1,
 				s.Symbol,
-				formatInt(s.Trades),
-				formatDollarVol(s.DollarVol),
-				formatPrice(vwap),
-				formatPrice(s.Low),
+				formatPrice(s.Open),
 				formatPrice(s.High),
+				formatPrice(s.Low),
+				formatPrice(s.Close),
+				formatPrice(vwap),
+				formatInt(s.Trades),
+				formatTurnover(s.Turnover),
+				gain,
 			)
 		}
 		fmt.Println()
@@ -171,21 +181,31 @@ func aggregateTrades(records []store.TradeRecord) map[string]*symbolStats {
 		s, ok := m[r.Symbol]
 		if !ok {
 			s = &symbolStats{
-				Symbol: r.Symbol,
-				Low:    math.MaxFloat64,
+				Symbol:  r.Symbol,
+				Low:     math.MaxFloat64,
+				Open:    r.Price,
+				OpenTS:  r.Timestamp,
+				Close:   r.Price,
+				CloseTS: r.Timestamp,
 			}
 			m[r.Symbol] = s
 		}
 		s.Trades++
-		dv := r.Price * float64(r.Size)
-		s.DollarVol += dv
-		s.Turnover += dv
+		s.Turnover += r.Price * float64(r.Size)
 		s.TotalSize += r.Size
 		if r.Price > s.High {
 			s.High = r.Price
 		}
 		if r.Price < s.Low {
 			s.Low = r.Price
+		}
+		if r.Timestamp < s.OpenTS {
+			s.OpenTS = r.Timestamp
+			s.Open = r.Price
+		}
+		if r.Timestamp >= s.CloseTS {
+			s.CloseTS = r.Timestamp
+			s.Close = r.Price
 		}
 	}
 	return m
@@ -262,7 +282,7 @@ func formatInt(n int) string {
 	return b.String()
 }
 
-func formatDollarVol(v float64) string {
+func formatTurnover(v float64) string {
 	switch {
 	case v >= 1e9:
 		return fmt.Sprintf("$%.1fB", v/1e9)
