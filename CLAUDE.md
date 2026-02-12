@@ -79,6 +79,52 @@ Bar progress: `.tried-empty` + `.last-completed` in `<DataDir>/us/daily/`
 - `progressTracker` — `.tried-empty` and `.last-completed` for bar crash recovery
 - `universeWriter` / `ReadUniverseFile` / `ListUniverseDates` — per-date symbol lists
 
+## us-stream Daemon Architecture
+
+The `StreamGatherer` in `internal/gather/us/alpaca.go` is a long-running daemon (`cmd/us-stream/`) that streams live trades via WebSocket and backfills via REST, maintaining a shared `LiveModel` (`internal/live/model.go`).
+
+### LiveModel
+
+In-memory trade store with today/next-day buckets, dedup by `(trade_id, exchange)`, and pub/sub for gRPC streaming.
+
+- Trades with `timestamp <= todayCutoff` (D 4PM ET) → today bucket; `> cutoff` → next bucket
+- Each bucket has index and ex-index slices
+- `SwitchDay(newCutoff)` — promotes next→today, rebuilds seen map, updates cutoff
+
+### Main Loop
+
+```
+Run(ctx):
+  1. Determine today/prevDate, load symbols from Alpaca API
+  2. Create LiveModel with todayCutoff = today 4PM ET
+  3. Load backfill cache from /tmp (resume from earlier run)
+  4. Connect WebSocket stream (captures from NOW)
+  5. Start goroutines: runBackfill, runDaySwitch, logStatus
+  6. Wait for ctx cancellation or stream termination
+```
+
+### Day Switching
+
+- `runDaySwitch` fires at 3:50 AM ET daily
+- On trading days (Alpaca Calendar API check): calls `model.SwitchDay()`, updates date fields under `dateMu`, cleans old cache dir
+- On non-trading days: skips (next bucket accumulates weekend trades)
+- `dateMu sync.RWMutex` protects `today`, `prevDate`, `prevCloseUTC`
+
+### Backfill
+
+- `runBackfill` — 4 workers fetch per-symbol trades from `prevDate 4PM ET → now`
+- Snapshots date fields per scan (thread-safe with day switching)
+- Per-symbol cache files in `/tmp/us-stream/<YYYY-MM-DD>/backfill/<SYMBOL>.parquet`
+- Rescans every 5 min (stream fills the gap)
+
+### Key Functions
+
+- `loadSymbolsFromAPI()` — fetches active US equities, filters to ex-index stocks
+- `handleStreamTrade()` — processes WebSocket trades with size/exchange filter
+- `backfillSymbol()` — per-symbol REST fetch with incremental cache resume
+- `isTradingDay()` — Alpaca Calendar API check
+- `runDaySwitch()` — 3:50 AM ET day-switch goroutine
+
 ## Dependencies
 
 Go: alpaca-trade-api-go, parquet-go, grpc, protobuf, yaml.v3, modernc.org/sqlite
