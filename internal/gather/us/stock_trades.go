@@ -16,6 +16,19 @@ import (
 	"jupitor/internal/store"
 )
 
+// DailyRecord is the Parquet schema for per-symbol daily trade aggregates.
+// Combines index + ex-index stock trades into a single lightweight summary.
+type DailyRecord struct {
+	Symbol   string  `parquet:"symbol"`
+	Trades   int64   `parquet:"trades"`
+	Turnover float64 `parquet:"turnover"` // sum(price * size)
+	Vwap     float64 `parquet:"vwap"`     // turnover / volume
+	Open     float64 `parquet:"open"`     // first trade price
+	Close    float64 `parquet:"close"`    // last trade price
+	Low      float64 `parquet:"low"`
+	High     float64 `parquet:"high"`
+}
+
 // allowedConds defines the set of trade condition codes that pass the filter.
 var allowedConds = map[string]bool{" ": true, "@": true, "T": true, "F": true}
 
@@ -72,7 +85,7 @@ func GenerateStockTrades(ctx context.Context, dataDir string, maxDates int, log 
 // skipIdx/skipEx indicate which output files already exist and can be skipped.
 func processStockTradesForDate(dataDir string, prevDate, date string, skipIdx, skipEx bool, log *slog.Logger) error {
 	csvPath := filepath.Join(dataDir, "us", "trade-universe", date+".csv")
-	symbols, indexSyms, err := readStockSymbols(csvPath)
+	symbols, indexSyms, _, err := readStockSymbols(csvPath)
 	if err != nil {
 		return fmt.Errorf("reading stock symbols for %s: %w", date, err)
 	}
@@ -180,19 +193,166 @@ func processStockTradesForDate(dataDir string, prevDate, date string, skipIdx, s
 		)
 	}
 
+	// Write combined daily summary (index + ex-index).
+	dailyPath := filepath.Join(dataDir, "us", "stock-trades-daily", date+".parquet")
+	if !fileExists(dailyPath) {
+		allTrades := make([]store.TradeRecord, 0, len(indexTrades)+len(exIndexTrades))
+		allTrades = append(allTrades, indexTrades...)
+		allTrades = append(allTrades, exIndexTrades...)
+		daily := aggregateDailyRecords(allTrades)
+		if err := os.MkdirAll(filepath.Dir(dailyPath), 0o755); err != nil {
+			return fmt.Errorf("creating stock-trades-daily dir: %w", err)
+		}
+		if err := parquet.WriteFile(dailyPath, daily); err != nil {
+			return fmt.Errorf("writing daily summary for %s: %w", date, err)
+		}
+		log.Info("daily summary written", "date", date, "symbols", len(daily))
+	}
+
 	return nil
 }
 
-// readStockSymbols parses a trade-universe CSV and returns all STOCK symbols
-// plus a set of symbols that are in SPX or NDX on that date.
-func readStockSymbols(csvPath string) (symbols []string, indexSyms map[string]bool, err error) {
+// aggregateDailyRecords groups trades by symbol and computes per-symbol daily
+// aggregates. Output is sorted by symbol.
+func aggregateDailyRecords(trades []store.TradeRecord) []DailyRecord {
+	type accum struct {
+		trades   int64
+		turnover float64
+		volume   int64
+		open     float64
+		close    float64
+		low      float64
+		high     float64
+		firstTS  int64
+		lastTS   int64
+	}
+
+	bySymbol := make(map[string]*accum)
+	for i := range trades {
+		r := &trades[i]
+		a := bySymbol[r.Symbol]
+		if a == nil {
+			a = &accum{
+				low:     r.Price,
+				high:    r.Price,
+				open:    r.Price,
+				close:   r.Price,
+				firstTS: r.Timestamp,
+				lastTS:  r.Timestamp,
+			}
+			bySymbol[r.Symbol] = a
+		}
+		a.trades++
+		a.turnover += r.Price * float64(r.Size)
+		a.volume += r.Size
+		if r.Price < a.low {
+			a.low = r.Price
+		}
+		if r.Price > a.high {
+			a.high = r.Price
+		}
+		if r.Timestamp < a.firstTS {
+			a.firstTS = r.Timestamp
+			a.open = r.Price
+		}
+		if r.Timestamp > a.lastTS {
+			a.lastTS = r.Timestamp
+			a.close = r.Price
+		}
+	}
+
+	result := make([]DailyRecord, 0, len(bySymbol))
+	for sym, a := range bySymbol {
+		vwap := 0.0
+		if a.volume > 0 {
+			vwap = a.turnover / float64(a.volume)
+		}
+		result = append(result, DailyRecord{
+			Symbol:   sym,
+			Trades:   a.trades,
+			Turnover: a.turnover,
+			Vwap:     vwap,
+			Open:     a.open,
+			Close:    a.close,
+			Low:      a.low,
+			High:     a.high,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Symbol < result[j].Symbol
+	})
+	return result
+}
+
+// GenerateDailySummaries backfills daily summary parquets for dates that have
+// index + ex-index files but no daily summary yet. Returns the number written.
+func GenerateDailySummaries(ctx context.Context, dataDir string, maxDates int, log *slog.Logger) (int, error) {
+	exDir := filepath.Join(dataDir, "us", "stock-trades-ex-index")
+	dates, err := listExIndexDates(exDir)
+	if err != nil {
+		return 0, fmt.Errorf("listing ex-index dates: %w", err)
+	}
+
+	if maxDates > 0 && len(dates) > maxDates {
+		dates = dates[len(dates)-maxDates:]
+	}
+
+	dailyDir := filepath.Join(dataDir, "us", "stock-trades-daily")
+	wrote := 0
+	for _, date := range dates {
+		if ctx.Err() != nil {
+			return wrote, ctx.Err()
+		}
+
+		outPath := filepath.Join(dailyDir, date+".parquet")
+		if fileExists(outPath) {
+			continue
+		}
+
+		// Read both index and ex-index trades.
+		idxPath := filepath.Join(dataDir, "us", "stock-trades-index", date+".parquet")
+		exPath := filepath.Join(exDir, date+".parquet")
+
+		var allTrades []store.TradeRecord
+		if records, err := parquet.ReadFile[store.TradeRecord](idxPath); err == nil {
+			allTrades = append(allTrades, records...)
+		}
+		if records, err := parquet.ReadFile[store.TradeRecord](exPath); err == nil {
+			allTrades = append(allTrades, records...)
+		}
+
+		if len(allTrades) == 0 {
+			log.Warn("no trades for daily summary", "date", date)
+			continue
+		}
+
+		daily := aggregateDailyRecords(allTrades)
+		if err := os.MkdirAll(dailyDir, 0o755); err != nil {
+			return wrote, fmt.Errorf("creating stock-trades-daily dir: %w", err)
+		}
+		if err := parquet.WriteFile(outPath, daily); err != nil {
+			log.Error("writing daily summary", "date", date, "error", err)
+			continue
+		}
+		log.Info("daily summary backfilled", "date", date, "symbols", len(daily))
+		wrote++
+	}
+
+	return wrote, nil
+}
+
+// readStockSymbols parses a trade-universe CSV and returns all STOCK and OTHER
+// symbols (excludes ETFs), a set of symbols that are in SPX or NDX on that date,
+// and a map of symbol→tier for non-index stocks.
+func readStockSymbols(csvPath string) (symbols []string, indexSyms map[string]bool, tiers map[string]string, err error) {
 	f, err := os.Open(csvPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer f.Close()
 
 	indexSyms = make(map[string]bool)
+	tiers = make(map[string]string)
 	scanner := bufio.NewScanner(f)
 	first := true
 	for scanner.Scan() {
@@ -200,13 +360,13 @@ func readStockSymbols(csvPath string) (symbols []string, indexSyms map[string]bo
 			first = false
 			continue
 		}
-		// format: symbol,type,spx,ndx
+		// format: symbol,type,spx,ndx[,tier]
 		line := scanner.Text()
 		parts := strings.Split(line, ",")
 		if len(parts) < 4 {
 			continue
 		}
-		if parts[1] != "STOCK" {
+		if parts[1] == "ETF" {
 			continue
 		}
 		sym := parts[0]
@@ -214,8 +374,11 @@ func readStockSymbols(csvPath string) (symbols []string, indexSyms map[string]bo
 		if parts[2] == "true" || parts[3] == "true" {
 			indexSyms[sym] = true
 		}
+		if len(parts) >= 5 && parts[4] != "" {
+			tiers[sym] = parts[4]
+		}
 	}
-	return symbols, indexSyms, scanner.Err()
+	return symbols, indexSyms, tiers, scanner.Err()
 }
 
 // filterTradeRecord returns true if exchange != "D" and all conditions are allowed.
@@ -282,7 +445,8 @@ func listTradeUniverseDates(dir string) ([]string, error) {
 type RollingBarRecord struct {
 	Symbol        string  `parquet:"symbol"`
 	Timestamp     int64   `parquet:"timestamp,timestamp(millisecond)"`
-	Vwap          float64 `parquet:"vwap"`             // per-bin VWAP
+	Tier          string  `parquet:"tier"`              // ACTIVE, MODERATE, SPORADIC (empty for index)
+	Vwap          float64 `parquet:"vwap"`              // per-bin VWAP
 	Trades        int64   `parquet:"trades"`            // per-bin trade count
 	Turnover      float64 `parquet:"turnover"`          // per-bin turnover
 	GainPct5m     float64 `parquet:"gain_pct_5m"`       // backward 5m: (vwap - minVwap) / minVwap * 100
@@ -341,6 +505,14 @@ func GenerateRollingBars(ctx context.Context, dataDir string, maxDates int, log 
 //   - Backward 5m window: gain_pct_5m, trades_5m, turnover_5m over past 60 bins
 //   - Forward gain: gain_pct_future = (max future vwap - current vwap) / current vwap * 100
 func processRollingBarsForDate(dataDir, date string, log *slog.Logger) error {
+	// Read tiers from trade-universe CSV for this date.
+	csvPath := tradeUniversePath(dataDir, date)
+	_, _, tiers, tierErr := readStockSymbols(csvPath)
+	if tierErr != nil {
+		log.Warn("reading tiers for rolling bars", "date", date, "error", tierErr)
+		tiers = nil
+	}
+
 	inPath := filepath.Join(dataDir, "us", "stock-trades-ex-index", date+".parquet")
 	records, err := parquet.ReadFile[store.TradeRecord](inPath)
 	if err != nil {
@@ -468,9 +640,15 @@ func processRollingBarsForDate(dataDir, date string, log *slog.Logger) error {
 				}
 			}
 
+			tier := ""
+			if tiers != nil {
+				tier = tiers[sym]
+			}
+
 			result = append(result, RollingBarRecord{
 				Symbol:        sym,
 				Timestamp:     sbs[i].ts,
+				Tier:          tier,
 				Vwap:          curVwap,
 				Trades:        sbs[i].stats.trades,
 				Turnover:      sbs[i].stats.turnover,
