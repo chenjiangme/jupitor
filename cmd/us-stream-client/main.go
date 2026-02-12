@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"jupitor/internal/live"
 	"jupitor/internal/store"
@@ -40,7 +41,8 @@ func main() {
 	}
 	logger.Info("loaded tier map", "symbols", len(tierMap))
 
-	// Compute today's cutoff = 4PM ET as Unix ms.
+	// Compute today's cutoff = 4PM ET in ET-shifted millisecond frame
+	// (must match how the stream server stores timestamps via utcToETMilli).
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		logger.Error("loading timezone", "error", err)
@@ -48,7 +50,8 @@ func main() {
 	}
 	now := time.Now().In(loc)
 	close4pm := time.Date(now.Year(), now.Month(), now.Day(), 16, 0, 0, 0, loc)
-	todayCutoff := close4pm.UnixMilli()
+	_, offset := close4pm.Zone()
+	todayCutoff := close4pm.UnixMilli() + int64(offset)*1000
 
 	model := live.NewLiveModel(todayCutoff)
 	client := live.NewClient(addr, model, logger)
@@ -63,6 +66,27 @@ func main() {
 			cancel()
 		}
 	}()
+
+	// Enable raw mode for 'q' to quit (non-fatal if not a terminal).
+	restore, rawErr := enableRawMode()
+	if rawErr != nil {
+		logger.Warn("raw mode unavailable, q to quit disabled", "error", rawErr)
+	} else {
+		defer restore()
+		go func() {
+			buf := make([]byte, 1)
+			for {
+				n, err := os.Stdin.Read(buf)
+				if err != nil || n == 0 {
+					return
+				}
+				if buf[0] == 'q' || buf[0] == 'Q' {
+					cancel()
+					return
+				}
+			}
+		}()
+	}
 
 	// Wait briefly for initial data, then start refresh loop.
 	select {
@@ -101,12 +125,64 @@ type symbolStats struct {
 }
 
 func printDashboard(model *live.LiveModel, tierMap map[string]string, loc *time.Location) {
-	_, exIndex := model.TodaySnapshot()
+	_, todayExIdx := model.TodaySnapshot()
+	_, nextExIdx := model.NextSnapshot()
 	seen := model.SeenCount()
 
-	stats := aggregateTrades(exIndex)
+	now := time.Now().In(loc)
+	todayOpen930 := time.Date(now.Year(), now.Month(), now.Day(), 9, 30, 0, 0, loc).UnixMilli()
+	_, off := now.Zone()
+	todayOpen930ET := todayOpen930 + int64(off)*1000
+	// Next day's 9:30 AM — post-market trades are all pre-market for next day.
+	nextOpen930ET := todayOpen930ET + 24*60*60*1000
 
-	// Group by tier.
+	// Clear screen and print header.
+	fmt.Print("\033[H\033[2J")
+	fmt.Printf("Live Ex-Index Dashboard — %s    (seen: %s  today: %s  next: %s)\n",
+		now.Format("2006-01-02 15:04:05 MST"),
+		formatInt(seen), formatInt(len(todayExIdx)), formatInt(len(nextExIdx)))
+
+	// TODAY section.
+	printDay("TODAY", todayExIdx, tierMap, todayOpen930ET)
+
+	// NEXT DAY section.
+	if len(nextExIdx) > 0 {
+		printDay("NEXT DAY", nextExIdx, tierMap, nextOpen930ET)
+	}
+}
+
+func printDay(label string, trades []store.TradeRecord, tierMap map[string]string, open930ET int64) {
+	var preTrades, regTrades []store.TradeRecord
+	for i := range trades {
+		if trades[i].Timestamp < open930ET {
+			preTrades = append(preTrades, trades[i])
+		} else {
+			regTrades = append(regTrades, trades[i])
+		}
+	}
+
+	preStats := aggregateTrades(preTrades)
+	regStats := aggregateTrades(regTrades)
+
+	fmt.Printf("\n========== %s (pre: %s  reg: %s) ==========\n",
+		label, formatInt(len(preTrades)), formatInt(len(regTrades)))
+
+	for _, session := range []struct {
+		name  string
+		stats map[string]*symbolStats
+	}{
+		{"PRE-MARKET", preStats},
+		{"REGULAR", regStats},
+	} {
+		if len(session.stats) == 0 {
+			continue
+		}
+		fmt.Printf("\n--- %s ---\n", session.name)
+		printSession(session.stats, tierMap)
+	}
+}
+
+func printSession(stats map[string]*symbolStats, tierMap map[string]string) {
 	tiers := map[string][]*symbolStats{
 		"ACTIVE":   {},
 		"MODERATE": {},
@@ -123,25 +199,21 @@ func printDashboard(model *live.LiveModel, tierMap map[string]string, loc *time.
 		tierCounts[tier]++
 	}
 
-	// Sort each tier by trade count descending.
 	for _, ss := range tiers {
 		sort.Slice(ss, func(i, j int) bool {
 			return ss[i].Trades > ss[j].Trades
 		})
 	}
 
-	// Clear screen and print.
-	now := time.Now().In(loc)
-	fmt.Print("\033[H\033[2J")
-	fmt.Printf("Live Ex-Index Dashboard — %s    (seen: %s)\n\n",
-		now.Format("2006-01-02 15:04:05 MST"), formatInt(seen))
-
 	for _, tier := range []string{"ACTIVE", "MODERATE", "SPORADIC"} {
 		ss := tiers[tier]
+		if tierCounts[tier] == 0 {
+			continue
+		}
 		fmt.Printf("%s (top 10 by trades)%stotal: %s symbols\n",
 			tier, strings.Repeat(" ", 40-len(tier)-len("(top 10 by trades)")), formatInt(tierCounts[tier]))
-		fmt.Printf("  %-3s %-8s %8s %8s %8s %8s %8s %8s %12s %7s\n",
-			"#", "Symbol", "O", "H", "L", "C", "VWAP", "Trades", "Turnover", "Gain%")
+		fmt.Printf("  %-3s %-8s %8s %8s %8s %8s %8s %8s %12s %7s %7s\n",
+			"#", "Symbol", "O", "H", "L", "C", "VWAP", "Trades", "Turnover", "Gain%", "Loss%")
 
 		n := len(ss)
 		if n > 10 {
@@ -157,7 +229,11 @@ func printDashboard(model *live.LiveModel, tierMap map[string]string, loc *time.
 			if s.Open > 0 {
 				gain = fmt.Sprintf("%+.1f%%", (s.High-s.Open)/s.Open*100)
 			}
-			fmt.Printf("  %-3d %-8s %8s %8s %8s %8s %8s %8s %12s %7s\n",
+			loss := ""
+			if s.Low > 0 {
+				loss = fmt.Sprintf("-%.1f%%", (s.Open-s.Low)/s.Low*100)
+			}
+			fmt.Printf("  %-3d %-8s %8s %8s %8s %8s %8s %8s %12s %7s %7s\n",
 				i+1,
 				s.Symbol,
 				formatPrice(s.Open),
@@ -168,6 +244,7 @@ func printDashboard(model *live.LiveModel, tierMap map[string]string, loc *time.
 				formatInt(s.Trades),
 				formatTurnover(s.Turnover),
 				gain,
+				loss,
 			)
 		}
 		fmt.Println()
@@ -300,4 +377,27 @@ func formatPrice(p float64) string {
 		return "-"
 	}
 	return fmt.Sprintf("$%.2f", p)
+}
+
+// enableRawMode puts stdin into raw mode so single keypresses can be read.
+// Returns a restore function that must be called on exit.
+func enableRawMode() (restore func(), err error) {
+	fd := int(os.Stdin.Fd())
+	var orig syscall.Termios
+	if _, _, e := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd),
+		uintptr(syscall.TIOCGETA), uintptr(unsafe.Pointer(&orig)), 0, 0, 0); e != 0 {
+		return nil, fmt.Errorf("TIOCGETA: %w", e)
+	}
+	raw := orig
+	raw.Lflag &^= syscall.ICANON | syscall.ECHO
+	raw.Cc[syscall.VMIN] = 1
+	raw.Cc[syscall.VTIME] = 0
+	if _, _, e := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd),
+		uintptr(syscall.TIOCSETA), uintptr(unsafe.Pointer(&raw)), 0, 0, 0); e != 0 {
+		return nil, fmt.Errorf("TIOCSETA: %w", e)
+	}
+	return func() {
+		syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd),
+			uintptr(syscall.TIOCSETA), uintptr(unsafe.Pointer(&orig)), 0, 0, 0)
+	}, nil
 }

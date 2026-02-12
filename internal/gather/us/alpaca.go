@@ -897,8 +897,9 @@ func (g *StreamGatherer) Run(ctx context.Context) error {
 
 	g.log.Info("loaded symbols", "exIndexStocks", len(g.stockSyms))
 
-	// Compute todayCutoff = D 4PM ET as Unix ms.
-	todayCutoff, err := regularClose(g.today)
+	// Compute todayCutoff = D 4PM ET in the ET-shifted millisecond frame
+	// (must match utcToETMilli output so the model classifies correctly).
+	todayCutoff, err := g.etClose(g.today)
 	if err != nil {
 		return fmt.Errorf("computing today cutoff: %w", err)
 	}
@@ -1277,6 +1278,17 @@ func (g *StreamGatherer) findPrevTradingDay() (string, error) {
 	return "", fmt.Errorf("no previous trading day found before %s", g.today)
 }
 
+// etClose returns 4PM ET on the given date in the ET-shifted millisecond frame
+// (consistent with utcToETMilli). Use this for LiveModel cutoffs.
+func (g *StreamGatherer) etClose(dateStr string) (int64, error) {
+	t, err := time.ParseInLocation("2006-01-02", dateStr, g.loc)
+	if err != nil {
+		return 0, err
+	}
+	close4pm := time.Date(t.Year(), t.Month(), t.Day(), 16, 0, 0, 0, g.loc)
+	return g.utcToETMilli(close4pm.UTC()), nil
+}
+
 // utcToETMilli converts a UTC time.Time to ET Unix milliseconds.
 func (g *StreamGatherer) utcToETMilli(t time.Time) int64 {
 	et := t.In(g.loc)
@@ -1396,7 +1408,7 @@ func (g *StreamGatherer) runDaySwitch(ctx context.Context) {
 		}
 
 		// Compute new cutoff + prev close.
-		newCutoff, _ := regularClose(newDay)
+		newCutoff, _ := g.etClose(newDay)
 		prevCloseMS, _ := regularClose(oldToday)
 		newPrevCloseUTC := time.UnixMilli(prevCloseMS).UTC()
 
