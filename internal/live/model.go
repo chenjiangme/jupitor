@@ -3,6 +3,7 @@
 package live
 
 import (
+	"strconv"
 	"sync"
 
 	"jupitor/internal/store"
@@ -157,6 +158,33 @@ func (m *LiveModel) SeenCount() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.seen)
+}
+
+// SwitchDay advances the model to a new trading day. Old today is disposed,
+// next is promoted to today, and the seen map is rebuilt from surviving records.
+func (m *LiveModel) SwitchDay(newCutoff int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Dispose old today, promote next → today.
+	m.todayIndex = m.nextIndex
+	m.todayExIdx = m.nextExIdx
+	m.nextIndex = nil
+	m.nextExIdx = nil
+
+	// Update cutoff.
+	m.todayCutoff = newCutoff
+
+	// Rebuild seen from surviving records (frees old trade IDs from memory).
+	m.seen = make(map[tradeKey]bool, len(m.todayIndex)+len(m.todayExIdx))
+	for _, r := range m.todayIndex {
+		id, _ := strconv.ParseInt(r.ID, 10, 64)
+		m.seen[tradeKey{ID: id, Exchange: r.Exchange}] = true
+	}
+	for _, r := range m.todayExIdx {
+		id, _ := strconv.ParseInt(r.ID, 10, 64)
+		m.seen[tradeKey{ID: id, Exchange: r.Exchange}] = true
+	}
 }
 
 // Subscribe creates a new subscription channel for live trade events.

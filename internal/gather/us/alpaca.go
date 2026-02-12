@@ -838,9 +838,10 @@ type StreamGatherer struct {
 
 	stockSyms    map[string]bool // ex-index stock symbols (fast lookup)
 	loc          *time.Location
-	today        string    // "YYYY-MM-DD"
-	prevDate     string    // previous trading day
-	prevCloseUTC time.Time // prevDate 4PM ET in UTC
+	dateMu       sync.RWMutex // protects today, prevDate, prevCloseUTC
+	today        string       // "YYYY-MM-DD"
+	prevDate     string       // previous trading day
+	prevCloseUTC time.Time    // prevDate 4PM ET in UTC
 }
 
 // NewStreamGatherer creates a StreamGatherer that loads symbols from the
@@ -931,10 +932,9 @@ func (g *StreamGatherer) Run(ctx context.Context) error {
 	// Signal readiness — model is created and stream is connected.
 	close(g.ready)
 
-	// Start background backfill goroutine.
+	// Start background goroutines.
 	go g.runBackfill(ctx)
-
-	// Start periodic status logging.
+	go g.runDaySwitch(ctx)
 	go g.logStatus(ctx)
 
 	// Wait for context cancellation or stream termination.
@@ -1069,6 +1069,14 @@ func (g *StreamGatherer) runBackfill(ctx context.Context) {
 	})
 
 	for {
+		// Snapshot date fields for this scan.
+		g.dateMu.RLock()
+		today := g.today
+		prevCloseUTC := g.prevCloseUTC
+		g.dateMu.RUnlock()
+
+		cacheDir := filepath.Join(os.TempDir(), "us-stream", today, "backfill")
+
 		// Build shuffled symbol list for fair distribution.
 		symbols := make([]string, 0, len(g.stockSyms))
 		for sym := range g.stockSyms {
@@ -1086,7 +1094,8 @@ func (g *StreamGatherer) runBackfill(ctx context.Context) {
 
 		var (
 			wg        sync.WaitGroup
-			total     atomic.Int64
+			cached    atomic.Int64 // trades written to cache files
+			added     atomic.Int64 // trades new to in-memory model
 			completed atomic.Int64
 		)
 		scanStart := time.Now()
@@ -1099,14 +1108,16 @@ func (g *StreamGatherer) runBackfill(ctx context.Context) {
 					if ctx.Err() != nil {
 						return
 					}
-					n := g.backfillSymbol(ctx, client, sym)
-					total.Add(int64(n))
+					c, a := g.backfillSymbol(ctx, client, sym, cacheDir, prevCloseUTC)
+					cached.Add(int64(c))
+					added.Add(int64(a))
 					done := completed.Add(1)
 					if done%500 == 0 {
 						g.log.Info("backfill progress",
 							"done", done,
 							"total", len(symbols),
-							"newTrades", total.Load(),
+							"cached", cached.Load(),
+							"addedToModel", added.Load(),
 							"elapsed", time.Since(scanStart).Round(time.Second),
 						)
 					}
@@ -1117,7 +1128,8 @@ func (g *StreamGatherer) runBackfill(ctx context.Context) {
 
 		g.log.Info("backfill scan complete",
 			"symbols", len(symbols),
-			"newTrades", total.Load(),
+			"cached", cached.Load(),
+			"addedToModel", added.Load(),
 			"elapsed", time.Since(scanStart).Round(time.Second),
 		)
 
@@ -1134,18 +1146,19 @@ func (g *StreamGatherer) runBackfill(ctx context.Context) {
 }
 
 // backfillSymbol fetches trades for a single symbol, resuming from the latest
-// cached timestamp if a per-symbol cache file exists. Returns the number of
-// new trades added to the model.
-func (g *StreamGatherer) backfillSymbol(ctx context.Context, client *marketdata.Client, sym string) int {
+// cached timestamp if a per-symbol cache file exists. Returns (cached, added):
+// cached = trades written to cache file, added = trades new to the in-memory model.
+// cacheDir and prevCloseUTC are snapshot values from the caller (thread-safe).
+func (g *StreamGatherer) backfillSymbol(ctx context.Context, client *marketdata.Client, sym string, cacheDir string, prevCloseUTC time.Time) (int, int) {
 	if ctx.Err() != nil {
-		return 0
+		return 0, 0
 	}
 
-	cachePath := filepath.Join(g.cacheDir(), "backfill", sym+".parquet")
+	cachePath := filepath.Join(cacheDir, sym+".parquet")
 
 	// Read existing cache to determine start time.
 	var existing []store.TradeRecord
-	start := g.prevCloseUTC
+	start := prevCloseUTC
 
 	if records, err := parquet.ReadFile[store.TradeRecord](cachePath); err == nil && len(records) > 0 {
 		existing = records
@@ -1161,7 +1174,7 @@ func (g *StreamGatherer) backfillSymbol(ctx context.Context, client *marketdata.
 
 	end := time.Now().UTC()
 	if !start.Before(end) {
-		return 0
+		return 0, 0
 	}
 
 	trades, err := client.GetTrades(sym, marketdata.GetTradesRequest{
@@ -1171,7 +1184,7 @@ func (g *StreamGatherer) backfillSymbol(ctx context.Context, client *marketdata.
 	})
 	if err != nil {
 		g.log.Error("backfill fetch failed", "symbol", sym, "error", err)
-		return 0
+		return 0, 0
 	}
 
 	// Filter and convert.
@@ -1203,15 +1216,16 @@ func (g *StreamGatherer) backfillSymbol(ctx context.Context, client *marketdata.
 	}
 
 	if len(newRecords) == 0 {
-		return 0
+		return 0, 0
 	}
 
 	// Append to existing cache and write back.
 	all := append(existing, newRecords...)
 	g.writeSymbolCache(cachePath, all)
 
-	// Add only new records to model.
-	return g.model.AddBatch(newRecords, newIDs, false)
+	// Add only new records to model (stream may already have them).
+	added := g.model.AddBatch(newRecords, newIDs, false)
+	return len(newRecords), added
 }
 
 // writeSymbolCache writes trade records to a per-symbol cache parquet file.
@@ -1318,6 +1332,91 @@ func (g *StreamGatherer) loadBackfillCache() {
 			"files", len(matches),
 			"records", totalRecords,
 			"added", totalAdded,
+		)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Day switching: advances the model to a new trading day at 3:50 AM ET.
+// ---------------------------------------------------------------------------
+
+// isTradingDay checks whether the given date is a trading day using the
+// Alpaca Calendar API.
+func (g *StreamGatherer) isTradingDay(date string) (bool, error) {
+	client := alpacaapi.NewClient(alpacaapi.ClientOpts{
+		APIKey:    g.apiKey,
+		APISecret: g.apiSecret,
+		BaseURL:   g.baseURL,
+	})
+	d, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return false, err
+	}
+	cal, err := client.GetCalendar(alpacaapi.GetCalendarRequest{Start: d, End: d})
+	if err != nil {
+		return false, err
+	}
+	return len(cal) > 0 && cal[0].Date == date, nil
+}
+
+// runDaySwitch fires at 3:50 AM ET each day and, on trading days, promotes
+// the next-day bucket to today and resets backfill for the new window.
+func (g *StreamGatherer) runDaySwitch(ctx context.Context) {
+	for {
+		// Sleep until next 3:50 AM ET.
+		now := time.Now().In(g.loc)
+		next350 := time.Date(now.Year(), now.Month(), now.Day(), 3, 50, 0, 0, g.loc)
+		if !now.Before(next350) {
+			next350 = next350.AddDate(0, 0, 1)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Until(next350)):
+		}
+
+		newDay := time.Now().In(g.loc).Format("2006-01-02")
+
+		g.dateMu.RLock()
+		oldToday := g.today
+		g.dateMu.RUnlock()
+
+		if newDay == oldToday {
+			continue // shouldn't happen, but guard
+		}
+
+		isTrading, err := g.isTradingDay(newDay)
+		if err != nil {
+			g.log.Error("calendar check failed", "error", err)
+			continue
+		}
+		if !isTrading {
+			g.log.Info("day switch skipped (non-trading day)", "date", newDay)
+			continue
+		}
+
+		// Compute new cutoff + prev close.
+		newCutoff, _ := regularClose(newDay)
+		prevCloseMS, _ := regularClose(oldToday)
+		newPrevCloseUTC := time.UnixMilli(prevCloseMS).UTC()
+
+		// Switch model.
+		g.model.SwitchDay(newCutoff)
+
+		// Update gatherer date fields.
+		g.dateMu.Lock()
+		g.today = newDay
+		g.prevDate = oldToday
+		g.prevCloseUTC = newPrevCloseUTC
+		g.dateMu.Unlock()
+
+		// Clean old cache dir (best-effort).
+		oldCacheDir := filepath.Join(os.TempDir(), "us-stream", oldToday)
+		os.RemoveAll(oldCacheDir)
+
+		g.log.Info("day switch complete",
+			"newToday", newDay, "prevDate", oldToday,
+			"newCutoff", time.UnixMilli(newCutoff).In(g.loc).Format("2006-01-02 15:04"),
 		)
 	}
 }
