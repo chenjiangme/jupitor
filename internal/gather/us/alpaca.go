@@ -1396,18 +1396,16 @@ func (g *StreamGatherer) cacheDir() string {
 	return filepath.Join(os.TempDir(), "us-stream", g.today)
 }
 
-// loadBackfillCache scans per-symbol cache files from a previous run today
-// and populates the model's seen set so stream dedup works correctly.
+// loadBackfillCache loads cached trades for qualified symbols (stockSyms) from
+// a previous run today and populates the model's seen set for stream dedup.
 func (g *StreamGatherer) loadBackfillCache() {
 	dir := filepath.Join(g.cacheDir(), "backfill")
-	matches, err := filepath.Glob(filepath.Join(dir, "*.parquet"))
-	if err != nil || len(matches) == 0 {
-		return
-	}
 
 	totalRecords := 0
 	totalAdded := 0
-	for _, path := range matches {
+	totalFiles := 0
+	for sym := range g.stockSyms {
+		path := filepath.Join(dir, sym+".parquet")
 		records, err := parquet.ReadFile[store.TradeRecord](path)
 		if err != nil || len(records) == 0 {
 			continue
@@ -1422,11 +1420,12 @@ func (g *StreamGatherer) loadBackfillCache() {
 		added := g.model.AddBatch(records, ids, false)
 		totalRecords += len(records)
 		totalAdded += added
+		totalFiles++
 	}
 
 	if totalRecords > 0 {
 		g.log.Info("loaded backfill cache",
-			"files", len(matches),
+			"files", totalFiles,
 			"records", totalRecords,
 			"added", totalAdded,
 		)
