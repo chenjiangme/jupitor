@@ -9,6 +9,7 @@ import (
 	"time"
 
 	alpacaapi "github.com/alpacahq/alpaca-trade-api-go/v3/alpaca"
+	"github.com/alpacahq/alpaca-trade-api-go/v3/marketdata"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -33,6 +34,7 @@ var (
 	dayLabelStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("6"))
 	dimStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	priceStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
+	priceWlStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("208")) // orange OHLC for watchlist
 	tradeCountStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
 	turnoverStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
 	historyBarStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("3")) // black on yellow
@@ -76,6 +78,14 @@ type watchlistToggleMsg struct {
 	symbol string
 	added  bool
 	err    error
+}
+
+type newsLoadedMsg struct {
+	symbol   string
+	date     string
+	prevDate string // previous trading day (for caching)
+	news     []marketdata.News
+	err      error
 }
 
 type historyCacheEntry struct {
@@ -150,6 +160,15 @@ type model struct {
 	alpacaClient     *alpacaapi.Client // nil if no API keys
 	watchlistID      string
 	watchlistSymbols map[string]bool
+	watchlistOnly    bool // w key toggle: only show watchlist symbols
+
+	// News.
+	mdClient    *marketdata.Client
+	newsCache   map[string][]marketdata.News // key: "SYMBOL:YYYY-MM-DD"
+	newsSymbol  string                       // symbol of in-flight fetch
+	newsDate    string                       // date of in-flight fetch
+	newsLoading bool
+	prevTDCache map[string]string // date -> previous trading day (from Alpaca Calendar)
 
 	// History mode.
 	historyMode     bool
@@ -167,7 +186,7 @@ type model struct {
 	preloadRunning bool     // true while a preload cmd is in flight
 }
 
-func initialModel(lm *live.LiveModel, tierMap map[string]string, loc *time.Location, cancel context.CancelFunc, dataDir string, histDates []string, logger *slog.Logger, ac *alpacaapi.Client) model {
+func initialModel(lm *live.LiveModel, tierMap map[string]string, loc *time.Location, cancel context.CancelFunc, dataDir string, histDates []string, logger *slog.Logger, ac *alpacaapi.Client, mdc *marketdata.Client) model {
 	return model{
 		liveModel:        lm,
 		tierMap:          tierMap,
@@ -180,6 +199,9 @@ func initialModel(lm *live.LiveModel, tierMap map[string]string, loc *time.Locat
 		historyCache:     make(map[string]*historyCacheEntry),
 		alpacaClient:     ac,
 		watchlistSymbols: make(map[string]bool),
+		mdClient:         mdc,
+		newsCache:        make(map[string][]marketdata.News),
+		prevTDCache:      make(map[string]string),
 	}
 }
 
@@ -257,10 +279,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.watchlistSymbols[sym] = true
 				m.viewport.SetContent(m.renderContent())
-				return m, func() tea.Msg {
+				newsCmd := m.maybeLoadNews()
+				return m, tea.Batch(func() tea.Msg {
 					_, err := ac.AddSymbolToWatchlist(wlID, alpacaapi.AddSymbolToWatchlistRequest{Symbol: sym})
 					return watchlistToggleMsg{symbol: sym, added: true, err: err}
-				}
+				}, newsCmd)
 			}
 			return m, nil
 		case "up", "down":
@@ -293,7 +316,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selectedSymbol = entries[cur].symbol
 			m.viewport.SetContent(m.renderContent())
 			m.ensureVisible()
-			return m, nil
+			return m, m.maybeLoadNews()
 		case "left":
 			return m, m.navigateHistory(-1)
 		case "right":
@@ -307,7 +330,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.SetContent(m.renderContent())
 				m.viewport.GotoTop()
 			}
-			return m, nil
+			return m, m.maybeLoadNews()
+		case "w":
+			m.watchlistOnly = !m.watchlistOnly
+			// Validate selection: current symbol may be filtered out.
+			entries := m.flatSelections()
+			found := false
+			for _, e := range entries {
+				if e.day == m.selectedDay && e.symbol == m.selectedSymbol {
+					found = true
+					break
+				}
+			}
+			if !found {
+				if len(entries) > 0 {
+					m.selectedDay = entries[0].day
+					m.selectedSymbol = entries[0].symbol
+				} else {
+					m.selectedSymbol = ""
+				}
+			}
+			m.viewport.SetContent(m.renderContent())
+			return m, m.maybeLoadNews()
+		}
+
+	case tea.MouseMsg:
+		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+			// Header = line 0, viewport starts at line 1.
+			contentLine := msg.Y - 1 + m.viewport.YOffset
+			if day, sym := m.selectionAtLine(contentLine); sym != "" {
+				m.selectedDay = day
+				m.selectedSymbol = sym
+				m.viewport.SetContent(m.renderContent())
+				return m, m.maybeLoadNews()
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -362,7 +418,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoTop()
 		}
 		// Ensure 5-date buffer around current position.
-		return m, m.ensureBuffer(m.historyIdx)
+		return m, tea.Batch(m.ensureBuffer(m.historyIdx), m.maybeLoadNews())
 
 	case preloadedMsg:
 		m.preloadRunning = false
@@ -390,7 +446,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.SetContent(m.renderContent())
 			}
 		}
-		return m, nil
+		return m, m.maybeLoadNews()
 
 	case watchlistToggleMsg:
 		if msg.err != nil {
@@ -406,6 +462,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else {
 			m.logger.Info("watchlist toggled", "symbol", msg.symbol, "added", msg.added)
+		}
+		return m, nil
+
+	case newsLoadedMsg:
+		m.newsLoading = false
+		if msg.err != nil {
+			m.logger.Warn("loading news", "symbol", msg.symbol, "date", msg.date, "error", msg.err)
+		} else {
+			m.newsCache[msg.symbol+":"+msg.date] = msg.news
+			if msg.prevDate != "" {
+				m.prevTDCache[msg.date] = msg.prevDate
+			}
+			m.logger.Info("news loaded", "symbol", msg.symbol, "date", msg.date,
+				"prevDate", msg.prevDate, "articles", len(msg.news))
+		}
+		if m.ready {
+			m.viewport.SetContent(m.renderContent())
 		}
 		return m, nil
 
@@ -429,6 +502,9 @@ func (m *model) flatSelections() []selectableEntry {
 	addDay := func(d dashboard.DayData, dayIdx int) {
 		for _, tier := range d.Tiers {
 			for _, c := range tier.Symbols {
+				if m.watchlistOnly && !m.watchlistSymbols[c.Symbol] {
+					continue
+				}
 				entries = append(entries, selectableEntry{day: dayIdx, symbol: c.Symbol})
 			}
 		}
@@ -469,6 +545,83 @@ func (m *model) resetSelection() {
 	}
 }
 
+// viewedDate returns the date currently being viewed (history date or live trading date).
+func (m *model) viewedDate() string {
+	if m.historyMode && m.historyIdx >= 0 && m.historyIdx < len(m.historyDates) {
+		return m.historyDates[m.historyIdx]
+	}
+	return m.tradingDate
+}
+
+// maybeLoadNews returns a tea.Cmd to fetch news for the selected symbol if it's
+// not already cached and not already loading. The time range spans from the
+// previous trading day's market close (4PM ET) to the viewed date's post-market
+// end (8PM ET), capturing overnight and pre-market news.
+func (m *model) maybeLoadNews() tea.Cmd {
+	sym := m.selectedSymbol
+	if sym == "" || m.mdClient == nil {
+		return nil
+	}
+	date := m.viewedDate()
+	if date == "" {
+		return nil
+	}
+	cacheKey := sym + ":" + date
+	if _, ok := m.newsCache[cacheKey]; ok {
+		return nil
+	}
+	if m.newsLoading && m.newsSymbol == sym && m.newsDate == date {
+		return nil
+	}
+	m.newsLoading = true
+	m.newsSymbol = sym
+	m.newsDate = date
+	mdc := m.mdClient
+	ac := m.alpacaClient
+	loc := m.loc
+	cachedPrev := m.prevTDCache[date]
+	return func() tea.Msg {
+		prevDate := cachedPrev
+		if prevDate == "" && ac != nil {
+			// Look up previous trading day from Alpaca Calendar.
+			d, _ := time.ParseInLocation("2006-01-02", date, loc)
+			lookback := d.AddDate(0, 0, -10)
+			cal, err := ac.GetCalendar(alpacaapi.GetCalendarRequest{Start: lookback, End: d})
+			if err == nil && len(cal) >= 2 {
+				// Calendar includes the viewed date as last entry; previous is second to last.
+				for i := len(cal) - 1; i >= 0; i-- {
+					if cal[i].Date < date {
+						prevDate = cal[i].Date
+						break
+					}
+				}
+			}
+		}
+
+		// Time range: previous trading day 4PM ET → viewed date 8PM ET.
+		t, _ := time.ParseInLocation("2006-01-02", date, loc)
+		end := time.Date(t.Year(), t.Month(), t.Day(), 20, 0, 0, 0, loc)
+		var start time.Time
+		if prevDate != "" {
+			p, _ := time.ParseInLocation("2006-01-02", prevDate, loc)
+			start = time.Date(p.Year(), p.Month(), p.Day(), 16, 0, 0, 0, loc)
+		} else {
+			// Fallback: viewed date 00:00 ET.
+			start = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
+		}
+
+		news, err := mdc.GetNews(marketdata.GetNewsRequest{
+			Symbols:            []string{sym},
+			Start:              start,
+			End:                end,
+			TotalLimit:         10,
+			ExcludeContentless: true,
+			Sort:               marketdata.SortAsc,
+		})
+		return newsLoadedMsg{symbol: sym, date: date, prevDate: prevDate, news: news, err: err}
+	}
+}
+
 // selectedLine returns the 0-based line number of the selected symbol in rendered content.
 // Returns -1 if not found.
 func (m *model) selectedLine() int {
@@ -481,8 +634,24 @@ func (m *model) selectedLine() int {
 			return -1
 		}
 		for _, tier := range d.Tiers {
+			// Skip tier entirely if watchlistOnly and no visible symbols.
+			if m.watchlistOnly {
+				hasAny := false
+				for _, c := range tier.Symbols {
+					if m.watchlistSymbols[c.Symbol] {
+						hasAny = true
+						break
+					}
+				}
+				if !hasAny {
+					continue
+				}
+			}
 			line += 3 // blank + tier header + col header
 			for _, c := range tier.Symbols {
+				if m.watchlistOnly && !m.watchlistSymbols[c.Symbol] {
+					continue
+				}
 				if dayIdx == m.selectedDay && c.Symbol == m.selectedSymbol {
 					return line
 				}
@@ -509,6 +678,62 @@ func (m *model) selectedLine() int {
 		}
 	}
 	return -1
+}
+
+// selectionAtLine returns the (day, symbol) at the given 0-based content line,
+// or (-1, "") if the line is not a symbol row.
+func (m *model) selectionAtLine(target int) (int, string) {
+	line := 0
+	scanDay := func(d dashboard.DayData, dayIdx int) (int, string) {
+		line++ // day label
+		if len(d.Tiers) == 0 {
+			line++ // "(no matching symbols)"
+			return -1, ""
+		}
+		for _, tier := range d.Tiers {
+			if m.watchlistOnly {
+				hasAny := false
+				for _, c := range tier.Symbols {
+					if m.watchlistSymbols[c.Symbol] {
+						hasAny = true
+						break
+					}
+				}
+				if !hasAny {
+					continue
+				}
+			}
+			line += 3 // blank + tier header + col header
+			for _, c := range tier.Symbols {
+				if m.watchlistOnly && !m.watchlistSymbols[c.Symbol] {
+					continue
+				}
+				if line == target {
+					return dayIdx, c.Symbol
+				}
+				line++
+			}
+		}
+		return -1, ""
+	}
+
+	var primary, next dashboard.DayData
+	if m.historyMode {
+		primary, next = m.historyData, m.historyNextData
+	} else {
+		primary, next = m.todayData, m.nextData
+	}
+
+	if day, sym := scanDay(primary, 0); sym != "" {
+		return day, sym
+	}
+	if next.Label != "" {
+		line++ // blank line between days
+		if day, sym := scanDay(next, 1); sym != "" {
+			return day, sym
+		}
+	}
+	return -1, ""
 }
 
 // ensureVisible scrolls the viewport so the selected line is visible.
@@ -549,7 +774,7 @@ func (m *model) navigateHistory(delta int) tea.Cmd {
 			m.refreshLive()
 			m.viewport.SetContent(m.renderContent())
 			m.viewport.GotoTop()
-			return nil
+			return m.maybeLoadNews()
 		}
 		if newIdx < 0 {
 			return nil // at oldest date
@@ -577,7 +802,7 @@ func (m *model) navigateHistory(delta int) tea.Cmd {
 			m.viewport.GotoTop()
 		}
 		// Ensure 5-date buffer around current position.
-		return m.ensureBuffer(m.historyIdx)
+		return tea.Batch(m.ensureBuffer(m.historyIdx), m.maybeLoadNews())
 	}
 
 	// Not cached — load asynchronously.
@@ -854,15 +1079,20 @@ func (m model) View() string {
 	}
 
 	sortLabel := dashboard.SortModeLabel(m.sortMode)
+	wlTag := ""
+	if m.watchlistOnly {
+		wlTag = " [WL]"
+	}
 
 	var headerBar string
 	if m.historyMode {
 		pos := fmt.Sprintf("%d/%d", m.historyIdx+1, len(m.historyDates))
 		headerText := fmt.Sprintf(
-			" Ex-Index History  %s    trades: %s    sort: %s    [%s] ",
+			" Ex-Index History  %s    trades: %s    sort: %s%s    [%s] ",
 			m.tradingDate,
 			dashboard.FormatInt(m.historyTrades),
 			sortLabel,
+			wlTag,
 			pos,
 		)
 		if m.historyLoading {
@@ -875,13 +1105,14 @@ func (m model) View() string {
 			preloadInfo = fmt.Sprintf("    hist: %d/%d", len(m.historyCache), len(m.historyDates))
 		}
 		headerText := fmt.Sprintf(
-			" %s  %s ET    seen: %s  today: %s  next: %s    sort: %s%s ",
+			" %s  %s ET    seen: %s  today: %s  next: %s    sort: %s%s%s ",
 			m.tradingDate,
 			m.latestTS,
 			dashboard.FormatInt(m.seen),
 			dashboard.FormatInt(m.todayCount),
 			dashboard.FormatInt(m.nextCount),
 			sortLabel,
+			wlTag,
 			preloadInfo,
 		)
 		headerBar = lipgloss.NewStyle().
@@ -892,7 +1123,7 @@ func (m model) View() string {
 	}
 
 	pct := m.viewport.ScrollPercent() * 100
-	footerLeft := " q quit  s sort  left/right history  home live  up/dn select  space watch  pgup/dn scroll"
+	footerLeft := " q quit  s sort  w watchlist  left/right history  home live  up/dn select  space watch  pgup/dn scroll"
 	footerRight := fmt.Sprintf("%.0f%% ", pct)
 	gap := m.width - len(footerLeft) - len(footerRight)
 	if gap < 0 {
@@ -917,28 +1148,69 @@ func (m model) renderContent() string {
 		selDay1 = m.selectedSymbol
 	}
 	wl := m.watchlistSymbols
+	wlOnly := m.watchlistOnly
 	if m.historyMode {
 		if m.historyLoading {
 			b.WriteString(dimStyle.Render("  Loading..."))
 			b.WriteString("\n")
 		} else {
-			renderDay(&b, m.historyData, m.width, selDay0, wl)
+			renderDay(&b, m.historyData, m.width, selDay0, wl, wlOnly)
 			if m.historyNextData.Label != "" {
 				b.WriteString("\n")
-				renderDay(&b, m.historyNextData, m.width, selDay1, wl)
+				renderDay(&b, m.historyNextData, m.width, selDay1, wl, wlOnly)
 			}
 		}
 	} else {
-		renderDay(&b, m.todayData, m.width, selDay0, wl)
+		renderDay(&b, m.todayData, m.width, selDay0, wl, wlOnly)
 		if m.nextData.Label != "" {
 			b.WriteString("\n")
-			renderDay(&b, m.nextData, m.width, selDay1, wl)
+			renderDay(&b, m.nextData, m.width, selDay1, wl, wlOnly)
 		}
 	}
+
+	// News section for selected symbol.
+	if sym := m.selectedSymbol; sym != "" && m.mdClient != nil {
+		date := m.viewedDate()
+		b.WriteString("\n")
+		newsHeader := fmt.Sprintf("  NEWS: %s  %s", sym, date)
+		b.WriteString(symbolWlStyle.Render(newsHeader))
+		b.WriteString("\n")
+		cacheKey := sym + ":" + date
+		if articles, ok := m.newsCache[cacheKey]; ok {
+			if len(articles) == 0 {
+				b.WriteString(dimStyle.Render("  (no articles)"))
+				b.WriteString("\n")
+			}
+			for _, a := range articles {
+				ts := a.CreatedAt.In(m.loc).Format("01/02 15:04")
+				headline := a.Headline
+				maxHL := m.width - 16 // "  MM/DD HH:MM  " prefix
+				if maxHL > 0 && len(headline) > maxHL {
+					headline = headline[:maxHL-3] + "..."
+				}
+				b.WriteString(dimStyle.Render("  "+ts+"  ") + headline)
+				b.WriteString("\n")
+				if a.Summary != "" {
+					summary := a.Summary
+					indent := "                " // 16 chars to align with headline
+					maxSL := m.width - len(indent)
+					if maxSL > 0 && len(summary) > maxSL {
+						summary = summary[:maxSL-3] + "..."
+					}
+					b.WriteString(dimStyle.Render(indent + summary))
+					b.WriteString("\n")
+				}
+			}
+		} else if m.newsLoading && m.newsSymbol == sym && m.newsDate == date {
+			b.WriteString(dimStyle.Render("  Loading news..."))
+			b.WriteString("\n")
+		}
+	}
+
 	return b.String()
 }
 
-func renderDay(b *strings.Builder, d dashboard.DayData, width int, selectedSymbol string, watchlist map[string]bool) {
+func renderDay(b *strings.Builder, d dashboard.DayData, width int, selectedSymbol string, watchlist map[string]bool, watchlistOnly bool) {
 	hasPre := d.PreCount > 0
 	hasReg := d.RegCount > 0
 
@@ -961,6 +1233,20 @@ func renderDay(b *strings.Builder, d dashboard.DayData, width int, selectedSymbo
 	}
 
 	for _, tier := range d.Tiers {
+		// Skip tier entirely if watchlistOnly and no visible symbols.
+		if watchlistOnly {
+			hasAny := false
+			for _, c := range tier.Symbols {
+				if watchlist[c.Symbol] {
+					hasAny = true
+					break
+				}
+			}
+			if !hasAny {
+				continue
+			}
+		}
+
 		b.WriteString("\n")
 		style := tierStyle(tier.Name)
 		tierHeader := fmt.Sprintf(" %s  %s symbols ", tier.Name, dashboard.FormatInt(tier.Count))
@@ -992,13 +1278,18 @@ func renderDay(b *strings.Builder, d dashboard.DayData, width int, selectedSymbo
 		b.WriteString(colHeaderStyle.Render(colLine))
 		b.WriteString("\n")
 
-		for i, c := range tier.Symbols {
+		displayNum := 0
+		for _, c := range tier.Symbols {
+			if watchlistOnly && !watchlist[c.Symbol] {
+				continue
+			}
+			displayNum++
 			hl := c.Symbol == selectedSymbol
 			wlMark := " "
 			if watchlist[c.Symbol] {
 				wlMark = "*"
 			}
-			num := fmt.Sprintf(" %s%-3d", wlMark, i+1)
+			num := fmt.Sprintf(" %s%-3d", wlMark, displayNum)
 			sym := fmt.Sprintf(" %-8s", c.Symbol)
 			b.WriteString(hlStyle(dimStyle, hl).Render(num))
 			inWl := watchlist[c.Symbol]
@@ -1014,13 +1305,13 @@ func renderDay(b *strings.Builder, d dashboard.DayData, width int, selectedSymbo
 			b.WriteString(hlStyle(symStyle, hl).Render(sym))
 			b.WriteString(hlStyle(lipgloss.NewStyle(), hl).Render("  "))
 			if hasPre && hasReg {
-				writeSessionCols(b, c.Pre, hl)
+				writeSessionCols(b, c.Pre, hl, inWl)
 				b.WriteString(hlStyle(lipgloss.NewStyle(), hl).Render("  "))
-				writeSessionCols(b, c.Reg, hl)
+				writeSessionCols(b, c.Reg, hl, inWl)
 			} else if hasPre {
-				writeSessionCols(b, c.Pre, hl)
+				writeSessionCols(b, c.Pre, hl, inWl)
 			} else {
-				writeSessionCols(b, c.Reg, hl)
+				writeSessionCols(b, c.Reg, hl, inWl)
 			}
 			if hl {
 				// Pad remaining width with highlight background.
@@ -1031,7 +1322,7 @@ func renderDay(b *strings.Builder, d dashboard.DayData, width int, selectedSymbo
 	}
 }
 
-func writeSessionCols(b *strings.Builder, s *dashboard.SymbolStats, hl bool) {
+func writeSessionCols(b *strings.Builder, s *dashboard.SymbolStats, hl, inWl bool) {
 	sp := hlStyle(lipgloss.NewStyle(), hl).Render(" ")
 	if s == nil {
 		b.WriteString(hlStyle(dimStyle, hl).Render(fmt.Sprintf(
@@ -1049,13 +1340,17 @@ func writeSessionCols(b *strings.Builder, s *dashboard.SymbolStats, hl bool) {
 	gainPad := fmt.Sprintf("%7s", dashboard.FormatGain(s.MaxGain))
 	lossPad := fmt.Sprintf("%7s", dashboard.FormatLoss(s.MaxLoss))
 
-	b.WriteString(hlStyle(priceStyle, hl).Render(openPad))
+	ps := priceStyle
+	if inWl {
+		ps = priceWlStyle
+	}
+	b.WriteString(hlStyle(ps, hl).Render(openPad))
 	b.WriteString(sp)
-	b.WriteString(hlStyle(priceStyle, hl).Render(hiPad))
+	b.WriteString(hlStyle(ps, hl).Render(hiPad))
 	b.WriteString(sp)
-	b.WriteString(hlStyle(priceStyle, hl).Render(loPad))
+	b.WriteString(hlStyle(ps, hl).Render(loPad))
 	b.WriteString(sp)
-	b.WriteString(hlStyle(priceStyle, hl).Render(closePad))
+	b.WriteString(hlStyle(ps, hl).Render(closePad))
 	b.WriteString(sp)
 	if s.Trades < 1000 {
 		b.WriteString(hlStyle(dimStyle, hl).Render(trdPad))
@@ -1177,16 +1472,22 @@ func main() {
 
 	// Optional Alpaca trading client for watchlist support.
 	var alpacaClient *alpacaapi.Client
+	var mdClient *marketdata.Client
 	if apiKey := os.Getenv("APCA_API_KEY_ID"); apiKey != "" {
+		apiSecret := os.Getenv("APCA_API_SECRET_KEY")
 		alpacaClient = alpacaapi.NewClient(alpacaapi.ClientOpts{
 			APIKey:    apiKey,
-			APISecret: os.Getenv("APCA_API_SECRET_KEY"),
+			APISecret: apiSecret,
 		})
-		logger.Info("alpaca client initialized for watchlist")
+		mdClient = marketdata.NewClient(marketdata.ClientOpts{
+			APIKey:    apiKey,
+			APISecret: apiSecret,
+		})
+		logger.Info("alpaca client initialized for watchlist and news")
 	}
 
 	p := tea.NewProgram(
-		initialModel(lm, tierMap, loc, cancel, dataDir, histDates, logger, alpacaClient),
+		initialModel(lm, tierMap, loc, cancel, dataDir, histDates, logger, alpacaClient, mdClient),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
