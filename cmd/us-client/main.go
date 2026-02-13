@@ -413,10 +413,10 @@ func (m model) View() string {
 		if m.historyLoading {
 			headerText = fmt.Sprintf(" Ex-Index History  %s    loading... ", m.tradingDate)
 		}
-		headerBar = historyBarStyle.Width(m.width).Render(headerText)
+		headerBar = historyBarStyle.Render(padOrTrunc(headerText, m.width))
 	} else {
 		headerText := fmt.Sprintf(
-			" Live Ex-Index  %s  latest: %s ET    seen: %s  today: %s  next: %s    sort: %s ",
+			" %s  %s ET    seen: %s  today: %s  next: %s    sort: %s ",
 			m.tradingDate,
 			m.latestTS,
 			dashboard.FormatInt(m.seen),
@@ -428,8 +428,7 @@ func (m model) View() string {
 			Bold(true).
 			Foreground(lipgloss.Color("15")).
 			Background(lipgloss.Color("4")).
-			Width(m.width).
-			Render(headerText)
+			Render(padOrTrunc(headerText, m.width))
 	}
 
 	pct := m.viewport.ScrollPercent() * 100
@@ -443,8 +442,7 @@ func (m model) View() string {
 	footerBar := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("15")).
 		Background(lipgloss.Color("8")).
-		Width(m.width).
-		Render(footerText)
+		Render(padOrTrunc(footerText, m.width))
 
 	return headerBar + "\n" + m.viewport.View() + "\n" + footerBar
 }
@@ -593,6 +591,15 @@ func writeSessionCols(b *strings.Builder, s *dashboard.SymbolStats) {
 	}
 }
 
+// padOrTrunc pads s with spaces to width, or truncates if longer.
+func padOrTrunc(s string, width int) string {
+	n := len(s)
+	if n >= width {
+		return s[:width]
+	}
+	return s + strings.Repeat(" ", width-n)
+}
+
 func main() {
 	dataDir := os.Getenv("DATA_1")
 	if dataDir == "" {
@@ -649,17 +656,21 @@ func main() {
 		}
 	}()
 
-	// Wait for initial snapshot to complete. During market hours new trades
-	// arrive continuously, so we detect completion by a low rate of change
-	// (< 100 new trades per 100ms for 500ms) rather than exact count stability.
+	// Wait for initial snapshot to complete. First wait for the snapshot
+	// burst to start and flow (count growing rapidly), then detect completion
+	// when the rate drops (< 100 new trades per 100ms for 500ms).
 	fmt.Fprint(os.Stderr, "syncing snapshot...")
 	lastCount := 0
 	stableFor := 0
+	sawBurst := false
 	for stableFor < 5 {
 		time.Sleep(100 * time.Millisecond)
 		count := lm.SeenCount()
 		delta := count - lastCount
-		if count > 0 && delta < 100 {
+		if delta >= 100 {
+			sawBurst = true
+		}
+		if sawBurst && delta < 100 {
 			stableFor++
 		} else {
 			stableFor = 0
