@@ -30,13 +30,13 @@ func FormatInt(n int) string {
 func FormatTurnover(v float64) string {
 	switch {
 	case v >= 1e9:
-		return fmt.Sprintf("$%.1fB", v/1e9)
+		return fmt.Sprintf("%.1fB", v/1e9)
 	case v >= 1e6:
-		return fmt.Sprintf("$%.1fM", v/1e6)
+		return fmt.Sprintf("%.1fM", v/1e6)
 	case v >= 1e3:
-		return fmt.Sprintf("$%.1fK", v/1e3)
+		return fmt.Sprintf("%.1fK", v/1e3)
 	default:
-		return fmt.Sprintf("$%.0f", v)
+		return fmt.Sprintf("%.0f", v)
 	}
 }
 
@@ -45,21 +45,39 @@ func FormatPrice(p float64) string {
 	if p == math.MaxFloat64 || p == 0 {
 		return "-"
 	}
-	return fmt.Sprintf("$%.2f", p)
+	return fmt.Sprintf("%.2f", p)
 }
 
 // FormatGain formats a gain percentage as "+X.X%", or "" if zero.
+// Drops decimal for values >= 100% to keep width compact.
 func FormatGain(g float64) string {
-	if g > 0 {
-		return fmt.Sprintf("+%.1f%%", g*100)
+	if g <= 0 {
+		return ""
 	}
-	return ""
+	pct := g * 100
+	if pct >= 100 {
+		return fmt.Sprintf("+%.0f%%", pct)
+	}
+	return fmt.Sprintf("+%.1f%%", pct)
 }
 
 // FormatLoss formats a loss percentage as "-X.X%", or "" if zero.
+// Drops decimal for values >= 100% to keep width compact.
 func FormatLoss(l float64) string {
-	if l > 0 {
-		return fmt.Sprintf("-%.1f%%", l*100)
+	if l <= 0 {
+		return ""
 	}
-	return ""
+	pct := l * 100
+	if pct >= 100 {
+		return fmt.Sprintf("-%.0f%%", pct)
+	}
+	return fmt.Sprintf("-%.1f%%", pct)
+}
+
+// FormatCount formats a trade count, using K suffix for large values.
+func FormatCount(n int) string {
+	if n >= 100_000 {
+		return fmt.Sprintf("%.0fK", float64(n)/1e3)
+	}
+	return FormatInt(n)
 }

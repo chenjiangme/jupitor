@@ -107,6 +107,22 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 	return m
 }
 
+var zeroStats SymbolStats
+
+// sessionStats returns the relevant session stats for sorting.
+func sessionStats(c *CombinedStats, regular bool) *SymbolStats {
+	if regular {
+		if c.Reg != nil {
+			return c.Reg
+		}
+		return &zeroStats
+	}
+	if c.Pre != nil {
+		return c.Pre
+	}
+	return &zeroStats
+}
+
 // SplitBySession splits trades into pre-market and regular session based on
 // the 9:30 AM ET cutoff (expressed in ET-shifted milliseconds).
 func SplitBySession(trades []store.TradeRecord, open930ET int64) (pre, reg []store.TradeRecord) {
@@ -118,6 +134,22 @@ func SplitBySession(trades []store.TradeRecord, open930ET int64) (pre, reg []sto
 		}
 	}
 	return
+}
+
+// ResortDayData re-sorts the symbols within each tier group without
+// recomputing aggregation. Used when toggling sort between pre/regular.
+func ResortDayData(d *DayData, sortByRegular bool) {
+	for i := range d.Tiers {
+		ss := d.Tiers[i].Symbols
+		sort.Slice(ss, func(a, b int) bool {
+			sa, sb := sessionStats(ss[a], sortByRegular), sessionStats(ss[b], sortByRegular)
+			ta, tb := sa.Trades, sb.Trades
+			if ta != tb {
+				return ta > tb
+			}
+			return sa.Turnover > sb.Turnover
+		})
+	}
 }
 
 // ComputeDayData builds a complete DayData for a set of trades. It splits by
@@ -163,27 +195,15 @@ func ComputeDayData(label string, trades []store.TradeRecord, tierMap map[string
 		tierCounts[tier]++
 	}
 
-	// Sort within each tier.
+	// Sort within each tier by trades desc, then turnover desc.
 	for _, ss := range tiers {
 		sort.Slice(ss, func(i, j int) bool {
-			if sortByRegular {
-				ti, tj := 0, 0
-				if ss[i].Reg != nil {
-					ti = ss[i].Reg.Trades
-				}
-				if ss[j].Reg != nil {
-					tj = ss[j].Reg.Trades
-				}
+			si, sj := sessionStats(ss[i], sortByRegular), sessionStats(ss[j], sortByRegular)
+			ti, tj := si.Trades, sj.Trades
+			if ti != tj {
 				return ti > tj
 			}
-			ti, tj := 0, 0
-			if ss[i].Pre != nil {
-				ti = ss[i].Pre.Trades
-			}
-			if ss[j].Pre != nil {
-				tj = ss[j].Pre.Trades
-			}
-			return ti > tj
+			return si.Turnover > sj.Turnover
 		})
 	}
 

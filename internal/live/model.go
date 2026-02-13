@@ -19,6 +19,7 @@ type TradeEvent struct {
 // tradeKey uniquely identifies a trade by (ID, Exchange). The same numeric
 // trade ID can appear on different exchanges, so both fields are needed.
 type tradeKey struct {
+	Symbol   string
 	ID       int64
 	Exchange string
 }
@@ -52,7 +53,7 @@ func NewLiveModel(todayCutoff int64) *LiveModel {
 // Add inserts a single trade into the model. It deduplicates by trade ID,
 // classifies by timestamp, and notifies subscribers. Returns false if duplicate.
 func (m *LiveModel) Add(record store.TradeRecord, rawID int64, isIndex bool) bool {
-	key := tradeKey{ID: rawID, Exchange: record.Exchange}
+	key := tradeKey{Symbol: record.Symbol, ID: rawID, Exchange: record.Exchange}
 	m.mu.Lock()
 	if m.seen[key] {
 		m.mu.Unlock()
@@ -100,7 +101,7 @@ func (m *LiveModel) AddBatch(records []store.TradeRecord, rawIDs []int64, isInde
 
 	added := 0
 	for i := range records {
-		key := tradeKey{ID: rawIDs[i], Exchange: records[i].Exchange}
+		key := tradeKey{Symbol: records[i].Symbol, ID: rawIDs[i], Exchange: records[i].Exchange}
 		if m.seen[key] {
 			continue
 		}
@@ -179,11 +180,11 @@ func (m *LiveModel) SwitchDay(newCutoff int64) {
 	m.seen = make(map[tradeKey]bool, len(m.todayIndex)+len(m.todayExIdx))
 	for _, r := range m.todayIndex {
 		id, _ := strconv.ParseInt(r.ID, 10, 64)
-		m.seen[tradeKey{ID: id, Exchange: r.Exchange}] = true
+		m.seen[tradeKey{Symbol: r.Symbol, ID: id, Exchange: r.Exchange}] = true
 	}
 	for _, r := range m.todayExIdx {
 		id, _ := strconv.ParseInt(r.ID, 10, 64)
-		m.seen[tradeKey{ID: id, Exchange: r.Exchange}] = true
+		m.seen[tradeKey{Symbol: r.Symbol, ID: id, Exchange: r.Exchange}] = true
 	}
 }
 

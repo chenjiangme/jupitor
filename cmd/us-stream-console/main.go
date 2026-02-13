@@ -149,30 +149,42 @@ func printDashboard(model *live.LiveModel, tierMap map[string]string, loc *time.
 		dashboard.FormatInt(seen), dashboard.FormatInt(len(todayExIdx)), dashboard.FormatInt(len(nextExIdx)), sortLabel)
 
 	todayData := dashboard.ComputeDayData("TODAY", todayExIdx, tierMap, todayOpen930ET, byReg)
-	printDay(todayData)
+	printDay(todayData, false)
 
 	if len(nextExIdx) > 0 {
-		nextData := dashboard.ComputeDayData("NEXT DAY", nextExIdx, tierMap, nextOpen930ET, byReg)
-		printDay(nextData)
+		nextData := dashboard.ComputeDayData("NEXT DAY", nextExIdx, tierMap, nextOpen930ET, false)
+		printDay(nextData, true)
 	}
 }
 
-func printDay(d dashboard.DayData) {
+func printDay(d dashboard.DayData, preOnly bool) {
 	fmt.Printf("\n========== %s (pre: %s  reg: %s) ==========\n",
 		d.Label, dashboard.FormatInt(d.PreCount), dashboard.FormatInt(d.RegCount))
 
 	for _, tier := range d.Tiers {
 		fmt.Printf("\n%s    %s symbols\n", tier.Name, dashboard.FormatInt(tier.Count))
-		fmt.Printf("  %-3s %-8s | %7s %7s %6s %6s %6s %9s | %7s %7s %6s %6s %6s %9s\n",
-			"#", "Symbol",
-			"preO", "preC", "Gain%", "Loss%", "Trd", "TO",
-			"regO", "regC", "Gain%", "Loss%", "Trd", "TO")
+		if preOnly {
+			fmt.Printf("  %-3s %-8s | %7s %7s %7s %7s %6s %9s %7s %7s\n",
+				"#", "Symbol",
+				"Open", "High", "Low", "Close", "Trd", "TO", "Gain%", "Loss%")
+		} else {
+			fmt.Printf("  %-3s %-8s | %7s %7s %7s %7s %6s %9s %7s %7s | %7s %7s %7s %7s %6s %9s %7s %7s\n",
+				"#", "Symbol",
+				"Open", "High", "Low", "Close", "Trd", "TO", "Gain%", "Loss%",
+				"Open", "High", "Low", "Close", "Trd", "TO", "Gain%", "Loss%")
+		}
 
 		for i, c := range tier.Symbols {
-			fmt.Printf("  %-3d %-8s | %s | %s\n",
-				i+1, c.Symbol,
-				formatSessionCols(c.Pre),
-				formatSessionCols(c.Reg))
+			if preOnly {
+				fmt.Printf("  %-3d %-8s | %s\n",
+					i+1, c.Symbol,
+					formatSessionCols(c.Pre))
+			} else {
+				fmt.Printf("  %-3d %-8s | %s | %s\n",
+					i+1, c.Symbol,
+					formatSessionCols(c.Pre),
+					formatSessionCols(c.Reg))
+			}
 		}
 		fmt.Println()
 	}
@@ -180,15 +192,17 @@ func printDay(d dashboard.DayData) {
 
 func formatSessionCols(s *dashboard.SymbolStats) string {
 	if s == nil {
-		return fmt.Sprintf("%7s %7s %6s %6s %6s %9s", "-", "-", "-", "-", "-", "-")
+		return fmt.Sprintf("%7s %7s %7s %7s %6s %9s %7s %7s", "-", "-", "-", "-", "-", "-", "-", "-")
 	}
-	return fmt.Sprintf("%7s %7s %6s %6s %6s %9s",
+	return fmt.Sprintf("%7s %7s %7s %7s %6s %9s %7s %7s",
 		dashboard.FormatPrice(s.Open),
+		dashboard.FormatPrice(s.High),
+		dashboard.FormatPrice(s.Low),
 		dashboard.FormatPrice(s.Close),
+		dashboard.FormatCount(s.Trades),
+		dashboard.FormatTurnover(s.Turnover),
 		dashboard.FormatGain(s.MaxGain),
-		dashboard.FormatLoss(s.MaxLoss),
-		dashboard.FormatInt(s.Trades),
-		dashboard.FormatTurnover(s.Turnover))
+		dashboard.FormatLoss(s.MaxLoss))
 }
 
 // enableRawMode puts stdin into raw mode so single keypresses can be read.
