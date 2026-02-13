@@ -111,11 +111,14 @@ var zeroStats SymbolStats
 
 // SortMode defines the sort order for the dashboard.
 const (
-	SortPreTrades  = 0 // pre-market by trades (default)
-	SortPreGain    = 1 // pre-market by gain%
-	SortRegTrades  = 2 // regular by trades
-	SortRegGain    = 3 // regular by gain%
-	SortModeCount  = 4
+	SortPreTrades   = 0 // pre-market by trades (default)
+	SortPreGain     = 1 // pre-market by gain%
+	SortRegTrades   = 2 // regular by trades
+	SortRegGain     = 3 // regular by gain%
+	SortPreTurnover = 4 // pre-market by turnover
+	SortRegTurnover = 5 // regular by turnover
+	SortNews        = 6 // by news count (desc)
+	SortModeCount   = 7
 )
 
 // SortModeLabel returns a short label for the given sort mode.
@@ -129,6 +132,12 @@ func SortModeLabel(mode int) string {
 		return "REG:TRD"
 	case SortRegGain:
 		return "REG:GAIN"
+	case SortPreTurnover:
+		return "PRE:TO"
+	case SortRegTurnover:
+		return "REG:TO"
+	case SortNews:
+		return "NEWS"
 	default:
 		return "?"
 	}
@@ -163,20 +172,26 @@ func SplitBySession(trades []store.TradeRecord, open930ET int64) (pre, reg []sto
 
 // sortSymbols sorts a slice of CombinedStats by the given sort mode.
 func sortSymbols(ss []*CombinedStats, mode int) {
-	regular := mode == SortRegTrades || mode == SortRegGain
-	byGain := mode == SortPreGain || mode == SortRegGain
+	regular := mode == SortRegTrades || mode == SortRegGain || mode == SortRegTurnover
 	sort.Slice(ss, func(i, j int) bool {
 		si, sj := sessionStats(ss[i], regular), sessionStats(ss[j], regular)
-		if byGain {
+		switch mode {
+		case SortPreGain, SortRegGain:
 			if si.MaxGain != sj.MaxGain {
 				return si.MaxGain > sj.MaxGain
 			}
 			return si.Turnover > sj.Turnover
-		}
-		if si.Trades != sj.Trades {
+		case SortPreTurnover, SortRegTurnover:
+			if si.Turnover != sj.Turnover {
+				return si.Turnover > sj.Turnover
+			}
 			return si.Trades > sj.Trades
+		default: // SortPreTrades, SortRegTrades
+			if si.Trades != sj.Trades {
+				return si.Trades > sj.Trades
+			}
+			return si.Turnover > sj.Turnover
 		}
-		return si.Turnover > sj.Turnover
 	})
 }
 

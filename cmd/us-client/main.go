@@ -2,10 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
+	"html"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	alpacaapi "github.com/alpacahq/alpaca-trade-api-go/v3/alpaca"
@@ -80,13 +87,28 @@ type watchlistToggleMsg struct {
 	err    error
 }
 
+type newsArticle struct {
+	Time     time.Time
+	Source   string // e.g. "Alpaca", "Reuters", "CNBC"
+	Headline string
+	Content  string // plain text (already stripped)
+}
+
 type newsLoadedMsg struct {
 	symbol   string
 	date     string
 	prevDate string // previous trading day (for caching)
-	news     []marketdata.News
+	news     []newsArticle
 	err      error
 }
+
+type newsCountMsg struct {
+	date   string
+	counts map[string]int
+	err    error
+}
+
+type newsCountRefreshMsg struct{}
 
 type historyCacheEntry struct {
 	data     dashboard.DayData
@@ -122,9 +144,14 @@ type preloadedMsg struct {
 }
 
 func tickCmd() tea.Cmd {
-
 	return tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
+	})
+}
+
+func newsCountTickCmd() tea.Cmd {
+	return tea.Tick(5*time.Minute, func(t time.Time) tea.Msg {
+		return newsCountRefreshMsg{}
 	})
 }
 
@@ -164,11 +191,16 @@ type model struct {
 
 	// News.
 	mdClient    *marketdata.Client
-	newsCache   map[string][]marketdata.News // key: "SYMBOL:YYYY-MM-DD"
-	newsSymbol  string                       // symbol of in-flight fetch
-	newsDate    string                       // date of in-flight fetch
+	newsCache   map[string][]newsArticle // key: "SYMBOL:YYYY-MM-DD"
+	newsSymbol  string                   // symbol of in-flight fetch
+	newsDate    string                   // date of in-flight fetch
 	newsLoading bool
 	prevTDCache map[string]string // date -> previous trading day (from Alpaca Calendar)
+
+	// News counts (batch fetch for column display).
+	newsCountCache   map[string]map[string]int // date -> symbol -> count
+	newsCountLoading bool
+	newsCountDate    string // date of in-flight count fetch
 
 	// History mode.
 	historyMode     bool
@@ -200,8 +232,9 @@ func initialModel(lm *live.LiveModel, tierMap map[string]string, loc *time.Locat
 		alpacaClient:     ac,
 		watchlistSymbols: make(map[string]bool),
 		mdClient:         mdc,
-		newsCache:        make(map[string][]marketdata.News),
+		newsCache:        make(map[string][]newsArticle),
 		prevTDCache:      make(map[string]string),
+		newsCountCache:   make(map[string]map[string]int),
 	}
 }
 
@@ -330,7 +363,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.SetContent(m.renderContent())
 				m.viewport.GotoTop()
 			}
-			return m, m.maybeLoadNews()
+			return m, tea.Batch(m.maybeLoadNews(), m.loadNewsCounts())
 		case "w":
 			m.watchlistOnly = !m.watchlistOnly
 			// Validate selection: current symbol may be filtered out.
@@ -364,6 +397,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.SetContent(m.renderContent())
 				return m, m.maybeLoadNews()
 			}
+			// Check for column header click (sort by Trd/TO/Gain%).
+			if mode := m.sortModeAtX(msg.X); mode >= 0 && mode != m.sortMode {
+				m.sortMode = mode
+				if m.historyMode {
+					m.rebuildHistory()
+				} else {
+					m.refreshLive()
+				}
+				m.viewport.SetContent(m.renderContent())
+				return m, nil
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -381,10 +425,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ready = true
 			m.refreshLive()
 			m.viewport.SetContent(m.renderContent())
-		} else {
-			m.viewport.Width = m.width
-			m.viewport.Height = vpHeight
+			return m, m.loadNewsCounts()
 		}
+		m.viewport.Width = m.width
+		m.viewport.Height = vpHeight
 		return m, nil
 
 	case tickMsg:
@@ -418,7 +462,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoTop()
 		}
 		// Ensure 5-date buffer around current position.
-		return m, tea.Batch(m.ensureBuffer(m.historyIdx), m.maybeLoadNews())
+		return m, tea.Batch(m.ensureBuffer(m.historyIdx), m.maybeLoadNews(), m.loadNewsCounts())
 
 	case preloadedMsg:
 		m.preloadRunning = false
@@ -481,6 +525,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent(m.renderContent())
 		}
 		return m, nil
+
+	case newsCountMsg:
+		m.newsCountLoading = false
+		if msg.err != nil {
+			m.logger.Warn("loading news counts", "date", msg.date, "error", msg.err)
+		} else {
+			m.newsCountCache[msg.date] = msg.counts
+			m.logger.Info("news counts loaded", "date", msg.date, "symbols", len(msg.counts))
+			if m.ready {
+				m.viewport.SetContent(m.renderContent())
+			}
+		}
+		return m, newsCountTickCmd()
+
+	case newsCountRefreshMsg:
+		if !m.historyMode {
+			date := m.viewedDate()
+			delete(m.newsCountCache, date)
+			return m, m.loadNewsCounts()
+		}
+		return m, newsCountTickCmd()
 
 	case preloadStartMsg:
 		return m, m.preloadInitial()
@@ -554,12 +619,12 @@ func (m *model) viewedDate() string {
 }
 
 // maybeLoadNews returns a tea.Cmd to fetch news for the selected symbol if it's
-// not already cached and not already loading. The time range spans from the
-// previous trading day's market close (4PM ET) to the viewed date's post-market
-// end (8PM ET), capturing overnight and pre-market news.
+// not already cached and not already loading. Fetches from both Alpaca and Google
+// News RSS, merges results chronologically. The time range spans from the previous
+// trading day's market close (4PM ET) to the viewed date's post-market end (8PM ET).
 func (m *model) maybeLoadNews() tea.Cmd {
 	sym := m.selectedSymbol
-	if sym == "" || m.mdClient == nil {
+	if sym == "" {
 		return nil
 	}
 	date := m.viewedDate()
@@ -583,12 +648,10 @@ func (m *model) maybeLoadNews() tea.Cmd {
 	return func() tea.Msg {
 		prevDate := cachedPrev
 		if prevDate == "" && ac != nil {
-			// Look up previous trading day from Alpaca Calendar.
 			d, _ := time.ParseInLocation("2006-01-02", date, loc)
 			lookback := d.AddDate(0, 0, -10)
 			cal, err := ac.GetCalendar(alpacaapi.GetCalendarRequest{Start: lookback, End: d})
 			if err == nil && len(cal) >= 2 {
-				// Calendar includes the viewed date as last entry; previous is second to last.
 				for i := len(cal) - 1; i >= 0; i-- {
 					if cal[i].Date < date {
 						prevDate = cal[i].Date
@@ -606,20 +669,225 @@ func (m *model) maybeLoadNews() tea.Cmd {
 			p, _ := time.ParseInLocation("2006-01-02", prevDate, loc)
 			start = time.Date(p.Year(), p.Month(), p.Day(), 16, 0, 0, 0, loc)
 		} else {
-			// Fallback: viewed date 00:00 ET.
 			start = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
 		}
 
+		var all []newsArticle
+
+		// Fetch Alpaca news.
+		if mdc != nil {
+			alpacaNews, err := mdc.GetNews(marketdata.GetNewsRequest{
+				Symbols:            []string{sym},
+				Start:              start,
+				End:                end,
+				TotalLimit:         10,
+				IncludeContent:     true,
+				ExcludeContentless: true,
+				Sort:               marketdata.SortAsc,
+			})
+			if err == nil {
+				for _, a := range alpacaNews {
+					body := ""
+					if a.Content != "" {
+						body = extractSymbolContent(a.Content, sym)
+					} else if a.Summary != "" {
+						body = a.Summary
+					}
+					all = append(all, newsArticle{
+						Time:     a.CreatedAt,
+						Source:   "📊",
+						Headline: a.Headline,
+						Content:  body,
+					})
+				}
+			}
+		}
+
+		// Fetch Google News RSS.
+		if gn, err := fetchGoogleNews(sym, start, end); err == nil {
+			all = append(all, gn...)
+		}
+
+		// Sort merged results chronologically.
+		sort.Slice(all, func(i, j int) bool {
+			return all[i].Time.Before(all[j].Time)
+		})
+
+		return newsLoadedMsg{symbol: sym, date: date, prevDate: prevDate, news: all}
+	}
+}
+
+// loadNewsCounts fetches news article counts for all MODERATE+SPORADIC symbols
+// on the viewed date in a single Alpaca API call.
+func (m *model) loadNewsCounts() tea.Cmd {
+	date := m.viewedDate()
+	if date == "" || m.mdClient == nil {
+		return nil
+	}
+	if _, ok := m.newsCountCache[date]; ok {
+		return nil
+	}
+	if m.newsCountLoading && m.newsCountDate == date {
+		return nil
+	}
+
+	var primary dashboard.DayData
+	if m.historyMode {
+		primary = m.historyData
+	} else {
+		primary = m.todayData
+	}
+
+	var symbols []string
+	for _, tier := range primary.Tiers {
+		if tier.Name == "MODERATE" || tier.Name == "SPORADIC" {
+			for _, c := range tier.Symbols {
+				symbols = append(symbols, c.Symbol)
+			}
+		}
+	}
+	if len(symbols) == 0 {
+		return nil
+	}
+
+	m.newsCountLoading = true
+	m.newsCountDate = date
+	mdc := m.mdClient
+	ac := m.alpacaClient
+	loc := m.loc
+	cachedPrev := m.prevTDCache[date]
+
+	return func() tea.Msg {
+		prevDate := cachedPrev
+		if prevDate == "" && ac != nil {
+			d, _ := time.ParseInLocation("2006-01-02", date, loc)
+			lookback := d.AddDate(0, 0, -10)
+			cal, _ := ac.GetCalendar(alpacaapi.GetCalendarRequest{Start: lookback, End: d})
+			if len(cal) >= 2 {
+				for i := len(cal) - 1; i >= 0; i-- {
+					if cal[i].Date < date {
+						prevDate = cal[i].Date
+						break
+					}
+				}
+			}
+		}
+
+		t, _ := time.ParseInLocation("2006-01-02", date, loc)
+		end := time.Date(t.Year(), t.Month(), t.Day(), 20, 0, 0, 0, loc)
+		var start time.Time
+		if prevDate != "" {
+			p, _ := time.ParseInLocation("2006-01-02", prevDate, loc)
+			start = time.Date(p.Year(), p.Month(), p.Day(), 16, 0, 0, 0, loc)
+		} else {
+			start = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
+		}
+
+		counts := make(map[string]int)
+
+		// Alpaca news counts.
 		news, err := mdc.GetNews(marketdata.GetNewsRequest{
-			Symbols:            []string{sym},
+			Symbols:            symbols,
 			Start:              start,
 			End:                end,
-			TotalLimit:         10,
+			TotalLimit:         50,
 			ExcludeContentless: true,
-			Sort:               marketdata.SortAsc,
+			Sort:               marketdata.SortDesc,
 		})
-		return newsLoadedMsg{symbol: sym, date: date, prevDate: prevDate, news: news, err: err}
+		if err != nil {
+			return newsCountMsg{date: date, err: err}
+		}
+		for _, a := range news {
+			for _, s := range a.Symbols {
+				counts[s]++
+			}
+		}
+
+		// Google News RSS counts (per symbol, concurrent).
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		for _, sym := range symbols {
+			wg.Add(1)
+			go func(s string) {
+				defer wg.Done()
+				articles, err := fetchGoogleNews(s, start, end)
+				if err != nil {
+					return
+				}
+				mu.Lock()
+				counts[s] += len(articles)
+				mu.Unlock()
+			}(sym)
+		}
+		wg.Wait()
+
+		return newsCountMsg{date: date, counts: counts}
 	}
+}
+
+// RSS types for Google News.
+type rssResponse struct {
+	Channel struct {
+		Items []rssItem `xml:"item"`
+	} `xml:"channel"`
+}
+
+type rssItem struct {
+	Title   string `xml:"title"`
+	PubDate string `xml:"pubDate"`
+	Desc    string `xml:"description"`
+	Source  string `xml:"source"`
+}
+
+// fetchGoogleNews fetches news from Google News RSS for the given symbol,
+// filtered to the [start, end] time window.
+func fetchGoogleNews(symbol string, start, end time.Time) ([]newsArticle, error) {
+	q := url.QueryEscape(symbol + " stock")
+	u := "https://news.google.com/rss/search?q=" + q + "&hl=en-US&gl=US&ceid=US:en"
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var rss rssResponse
+	if err := xml.NewDecoder(resp.Body).Decode(&rss); err != nil {
+		return nil, err
+	}
+
+	var articles []newsArticle
+	for _, item := range rss.Channel.Items {
+		t, err := time.Parse(time.RFC1123Z, item.PubDate)
+		if err != nil {
+			t, err = time.Parse(time.RFC1123, item.PubDate)
+			if err != nil {
+				continue
+			}
+		}
+		if t.Before(start) || t.After(end) {
+			continue
+		}
+		headline := item.Title
+		// Google News appends " - Source Name" to titles; strip it.
+		if idx := strings.LastIndex(headline, " - "); idx > 0 {
+			headline = headline[:idx]
+		}
+		articles = append(articles, newsArticle{
+			Time:     t,
+			Source:   "📰",
+			Headline: headline,
+			Content:  stripHTML(item.Desc),
+		})
+	}
+	return articles, nil
 }
 
 // selectedLine returns the 0-based line number of the selected symbol in rendered content.
@@ -736,6 +1004,103 @@ func (m *model) selectionAtLine(target int) (int, string) {
 	return -1, ""
 }
 
+// sortModeAtX maps an X coordinate click to a sort mode based on the column
+// layout. Returns -1 if the click doesn't land on a sortable column (Trd/TO/Gain%).
+// Column layout: prefix(16) + session block(64) [+ gap(2) + session block(64)].
+// Within each session block: Open(7) sp High(7) sp Low(7) sp Close(7) sp Trd(6) sp TO(9) sp Gain%(7) sp Loss%(7).
+func (m *model) sortModeAtX(x int) int {
+	const prefix = 16    // "  #   Symbol    "
+	const sessionW = 64  // one session block width
+	const gap = 2        // "  " between sessions
+
+	// Determine session layout from current data.
+	var primary dashboard.DayData
+	if m.historyMode {
+		primary = m.historyData
+	} else {
+		primary = m.todayData
+	}
+	hasPre := primary.PreCount > 0
+	hasReg := primary.RegCount > 0
+
+	// hitColumn returns the column name for an x offset within a session block.
+	// Trd: 32..37, TO: 39..47, Gain%: 49..55
+	hitColumn := func(off int) string {
+		if off >= 32 && off <= 37 {
+			return "trd"
+		}
+		if off >= 39 && off <= 47 {
+			return "to"
+		}
+		if off >= 49 && off <= 55 {
+			return "gain"
+		}
+		return ""
+	}
+
+	if hasPre && hasReg {
+		// PRE session: prefix .. prefix+sessionW-1
+		if x >= prefix && x < prefix+sessionW {
+			switch hitColumn(x - prefix) {
+			case "trd":
+				return dashboard.SortPreTrades
+			case "to":
+				return dashboard.SortPreTurnover
+			case "gain":
+				return dashboard.SortPreGain
+			}
+		}
+		// REG session: prefix+sessionW+gap .. prefix+2*sessionW+gap-1
+		regOff := prefix + sessionW + gap
+		if x >= regOff && x < regOff+sessionW {
+			switch hitColumn(x - regOff) {
+			case "trd":
+				return dashboard.SortRegTrades
+			case "to":
+				return dashboard.SortRegTurnover
+			case "gain":
+				return dashboard.SortRegGain
+			}
+		}
+	} else if hasPre {
+		if x >= prefix && x < prefix+sessionW {
+			switch hitColumn(x - prefix) {
+			case "trd":
+				return dashboard.SortPreTrades
+			case "to":
+				return dashboard.SortPreTurnover
+			case "gain":
+				return dashboard.SortPreGain
+			}
+		}
+	} else if hasReg {
+		if x >= prefix && x < prefix+sessionW {
+			switch hitColumn(x - prefix) {
+			case "trd":
+				return dashboard.SortRegTrades
+			case "to":
+				return dashboard.SortRegTurnover
+			case "gain":
+				return dashboard.SortRegGain
+			}
+		}
+	}
+
+	// News column: only clickable if news counts are loaded.
+	if nc := m.newsCountCache[m.viewedDate()]; nc != nil {
+		var newsStart int
+		if hasPre && hasReg {
+			newsStart = prefix + 2*sessionW + gap
+		} else {
+			newsStart = prefix + sessionW
+		}
+		if x >= newsStart && x < newsStart+5 {
+			return dashboard.SortNews
+		}
+	}
+	return -1
+}
+
 // ensureVisible scrolls the viewport so the selected line is visible.
 func (m *model) ensureVisible() {
 	line := m.selectedLine()
@@ -774,7 +1139,7 @@ func (m *model) navigateHistory(delta int) tea.Cmd {
 			m.refreshLive()
 			m.viewport.SetContent(m.renderContent())
 			m.viewport.GotoTop()
-			return m.maybeLoadNews()
+			return tea.Batch(m.maybeLoadNews(), m.loadNewsCounts())
 		}
 		if newIdx < 0 {
 			return nil // at oldest date
@@ -802,7 +1167,7 @@ func (m *model) navigateHistory(delta int) tea.Cmd {
 			m.viewport.GotoTop()
 		}
 		// Ensure 5-date buffer around current position.
-		return tea.Batch(m.ensureBuffer(m.historyIdx), m.maybeLoadNews())
+		return tea.Batch(m.ensureBuffer(m.historyIdx), m.maybeLoadNews(), m.loadNewsCounts())
 	}
 
 	// Not cached — load asynchronously.
@@ -1149,27 +1514,28 @@ func (m model) renderContent() string {
 	}
 	wl := m.watchlistSymbols
 	wlOnly := m.watchlistOnly
+	nc := m.newsCountCache[m.viewedDate()] // may be nil
 	if m.historyMode {
 		if m.historyLoading {
 			b.WriteString(dimStyle.Render("  Loading..."))
 			b.WriteString("\n")
 		} else {
-			renderDay(&b, m.historyData, m.width, selDay0, wl, wlOnly)
+			renderDay(&b, m.historyData, m.width, selDay0, wl, wlOnly, nc, m.sortMode)
 			if m.historyNextData.Label != "" {
 				b.WriteString("\n")
-				renderDay(&b, m.historyNextData, m.width, selDay1, wl, wlOnly)
+				renderDay(&b, m.historyNextData, m.width, selDay1, wl, wlOnly, nil, m.sortMode)
 			}
 		}
 	} else {
-		renderDay(&b, m.todayData, m.width, selDay0, wl, wlOnly)
+		renderDay(&b, m.todayData, m.width, selDay0, wl, wlOnly, nc, m.sortMode)
 		if m.nextData.Label != "" {
 			b.WriteString("\n")
-			renderDay(&b, m.nextData, m.width, selDay1, wl, wlOnly)
+			renderDay(&b, m.nextData, m.width, selDay1, wl, wlOnly, nil, m.sortMode)
 		}
 	}
 
 	// News section for selected symbol.
-	if sym := m.selectedSymbol; sym != "" && m.mdClient != nil {
+	if sym := m.selectedSymbol; sym != "" {
 		date := m.viewedDate()
 		b.WriteString("\n")
 		newsHeader := fmt.Sprintf("  NEWS: %s  %s", sym, date)
@@ -1181,24 +1547,22 @@ func (m model) renderContent() string {
 				b.WriteString(dimStyle.Render("  (no articles)"))
 				b.WriteString("\n")
 			}
+			const newsIndent = "                  " // 18 chars: "  MM/DD HH:MM E  "
+			bodyWidth := m.width - len(newsIndent)
 			for _, a := range articles {
-				ts := a.CreatedAt.In(m.loc).Format("01/02 15:04")
+				ts := a.Time.In(m.loc).Format("01/02 15:04")
 				headline := a.Headline
-				maxHL := m.width - 16 // "  MM/DD HH:MM  " prefix
+				maxHL := m.width - 18 // prefix width
 				if maxHL > 0 && len(headline) > maxHL {
 					headline = headline[:maxHL-3] + "..."
 				}
-				b.WriteString(dimStyle.Render("  "+ts+"  ") + headline)
+				b.WriteString(dimStyle.Render("  "+ts+" ") + a.Source + dimStyle.Render(" ") + headline)
 				b.WriteString("\n")
-				if a.Summary != "" {
-					summary := a.Summary
-					indent := "                " // 16 chars to align with headline
-					maxSL := m.width - len(indent)
-					if maxSL > 0 && len(summary) > maxSL {
-						summary = summary[:maxSL-3] + "..."
+				if a.Content != "" && bodyWidth > 0 {
+					for _, line := range wrapLines(a.Content, bodyWidth, 3) {
+						b.WriteString(dimStyle.Render(newsIndent + line))
+						b.WriteString("\n")
 					}
-					b.WriteString(dimStyle.Render(indent + summary))
-					b.WriteString("\n")
 				}
 			}
 		} else if m.newsLoading && m.newsSymbol == sym && m.newsDate == date {
@@ -1210,7 +1574,7 @@ func (m model) renderContent() string {
 	return b.String()
 }
 
-func renderDay(b *strings.Builder, d dashboard.DayData, width int, selectedSymbol string, watchlist map[string]bool, watchlistOnly bool) {
+func renderDay(b *strings.Builder, d dashboard.DayData, width int, selectedSymbol string, watchlist map[string]bool, watchlistOnly bool, newsCounts map[string]int, sortMode int) {
 	hasPre := d.PreCount > 0
 	hasReg := d.RegCount > 0
 
@@ -1230,6 +1594,17 @@ func renderDay(b *strings.Builder, d dashboard.DayData, width int, selectedSymbo
 		b.WriteString(dimStyle.Render("  (no matching symbols)"))
 		b.WriteString("\n")
 		return
+	}
+
+	// Sort by news count when SortNews is active.
+	if sortMode == dashboard.SortNews && newsCounts != nil {
+		for i := range d.Tiers {
+			sort.SliceStable(d.Tiers[i].Symbols, func(a, b int) bool {
+				na := newsCounts[d.Tiers[i].Symbols[a].Symbol]
+				nb := newsCounts[d.Tiers[i].Symbols[b].Symbol]
+				return na > nb
+			})
+		}
 	}
 
 	for _, tier := range d.Tiers {
@@ -1259,6 +1634,10 @@ func renderDay(b *strings.Builder, d dashboard.DayData, width int, selectedSymbo
 
 		// Column headers: show PRE and/or REG based on data.
 		sessionHdr := "%7s %7s %7s %7s %6s %9s %7s %7s"
+		ncHdr := ""
+		if newsCounts != nil {
+			ncHdr = fmt.Sprintf(" %4s", "News")
+		}
 		var colLine string
 		switch {
 		case hasPre && hasReg:
@@ -1267,13 +1646,13 @@ func renderDay(b *strings.Builder, d dashboard.DayData, width int, selectedSymbo
 				"#", "Symbol",
 				"Open", "High", "Low", "Close", "Trd", "TO", "Gain%", "Loss%",
 				"Open", "High", "Low", "Close", "Trd", "TO", "Gain%", "Loss%",
-			)
+			) + ncHdr
 		default:
 			colLine = fmt.Sprintf(
 				"  %-3s %-8s  "+sessionHdr,
 				"#", "Symbol",
 				"Open", "High", "Low", "Close", "Trd", "TO", "Gain%", "Loss%",
-			)
+			) + ncHdr
 		}
 		b.WriteString(colHeaderStyle.Render(colLine))
 		b.WriteString("\n")
@@ -1312,6 +1691,13 @@ func renderDay(b *strings.Builder, d dashboard.DayData, width int, selectedSymbo
 				writeSessionCols(b, c.Pre, hl, inWl)
 			} else {
 				writeSessionCols(b, c.Reg, hl, inWl)
+			}
+			if newsCounts != nil {
+				ncStr := fmt.Sprintf(" %4s", "-")
+				if n, ok := newsCounts[c.Symbol]; ok && n > 0 {
+					ncStr = fmt.Sprintf(" %4d", n)
+				}
+				b.WriteString(hlStyle(dimStyle, hl).Render(ncStr))
 			}
 			if hl {
 				// Pad remaining width with highlight background.
@@ -1383,6 +1769,70 @@ func writeSessionCols(b *strings.Builder, s *dashboard.SymbolStats, hl, inWl boo
 }
 
 // padOrTrunc pads s with spaces to width, or truncates if longer.
+var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
+var htmlParaRe = regexp.MustCompile(`(?i)</?(p|br|div|li|h[1-6])\b[^>]*>`)
+
+// stripHTML removes HTML tags, decodes HTML entities, and collapses whitespace.
+func stripHTML(s string) string {
+	s = htmlTagRe.ReplaceAllString(s, " ")
+	s = html.UnescapeString(s) // &nbsp; &amp; &lt; &#8217; etc.
+	fields := strings.Fields(s)
+	return strings.Join(fields, " ")
+}
+
+// extractSymbolContent extracts paragraphs from HTML content that mention the
+// given stock symbol. Falls back to the full stripped content if no paragraph
+// matches. Multi-stock articles (Benzinga) typically have one <p> per stock.
+func extractSymbolContent(html, symbol string) string {
+	// Split on block-level tags into paragraph chunks.
+	chunks := htmlParaRe.Split(html, -1)
+	var matched []string
+	upper := strings.ToUpper(symbol)
+	for _, chunk := range chunks {
+		plain := stripHTML(chunk)
+		if plain == "" {
+			continue
+		}
+		if strings.Contains(strings.ToUpper(plain), upper) {
+			matched = append(matched, plain)
+		}
+	}
+	if len(matched) > 0 {
+		return strings.Join(matched, " ")
+	}
+	// No paragraph matched — return full content.
+	return stripHTML(html)
+}
+
+// wrapLines wraps text to the given width, returning at most maxLines lines.
+func wrapLines(text string, width, maxLines int) []string {
+	if width <= 0 || maxLines <= 0 {
+		return nil
+	}
+	var lines []string
+	for len(text) > 0 && len(lines) < maxLines {
+		if len(text) <= width {
+			lines = append(lines, text)
+			break
+		}
+		// Find last space within width.
+		cut := width
+		if i := strings.LastIndex(text[:width], " "); i > 0 {
+			cut = i
+		}
+		lines = append(lines, text[:cut])
+		text = strings.TrimLeft(text[cut:], " ")
+	}
+	// If there's remaining text after maxLines, add ellipsis to last line.
+	if len(text) > 0 && len(lines) == maxLines {
+		last := lines[len(lines)-1]
+		if len(last) > 3 {
+			lines[len(lines)-1] = last[:len(last)-3] + "..."
+		}
+	}
+	return lines
+}
+
 func padOrTrunc(s string, width int) string {
 	n := len(s)
 	if n >= width {
