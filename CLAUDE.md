@@ -143,13 +143,28 @@ The `cmd/us-client/` is a bubbletea TUI that connects to the us-stream gRPC serv
 - Per-tier top-N: ACTIVE keeps top 5, MODERATE/SPORADIC keep top 8 (by trades, turnover, or gain% in either session)
 - Dim styling: trades < 1K, turnover < $1M, gain < 10%, loss < 10%
 
+### Stock Selection
+
+- **Highlight bar**: Up/down arrows navigate a visible highlight bar across all stocks in both day sections
+- **Selection tracking**: By `(dayIndex, symbol)` pair — handles duplicates across TODAY/NEXT DAY
+- **Default**: First symbol in MODERATE tier of primary day; resets on history navigation
+- **Auto-scroll**: Viewport scrolls to keep the selected row visible
+- **Styles**: Dark grey background (`236`) preserving per-column colors; brighter blue (`75`) for symbol on highlight
+
+### Watchlist (Alpaca)
+
+- **Toggle**: Space key adds/removes selected symbol from the Alpaca "jupitor" watchlist
+- **Visual**: Watchlist symbols shown in orange (`208`/`214`), with `*` marker before row number
+- **Async**: Optimistic UI update with revert on API error; watchlist loaded at startup via `GetWatchlist(id)`
+- **Optional**: Requires `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` env vars; gracefully disabled if not set
+
 ### Sort Modes
 
 4-mode cycle via `s` key: PRE:TRD → PRE:GAIN → REG:TRD → REG:GAIN. Sort persists across history navigation.
 
 ### Next-Day in History
 
-For the latest history date, next-day data comes from the live model's `TodaySnapshot()` (filtered to pre-market only). For other dates, it reads the next date's ex-index file filtered to pre-market.
+For the latest history date, next-day data comes from the live model's `TodaySnapshot()` (filtered to post-market window). For other dates, it reads the next date's ex-index file filtered to post-market (4PM–8PM ET).
 
 ### Key Files
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	alpacaapi "github.com/alpacahq/alpaca-trade-api-go/v3/alpaca"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -23,6 +24,9 @@ var (
 	tierModerateStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
 	tierSporadicStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9"))
 	symbolStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	symbolHlStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))  // brighter blue for highlight
+	symbolWlStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("208")) // orange for watchlist
+	symbolWlHlStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")) // brighter orange for watchlist+highlight
 	gainStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	lossStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	colHeaderStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
@@ -31,8 +35,17 @@ var (
 	priceStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
 	tradeCountStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
 	turnoverStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
-	historyBarStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("3")) // black on yellow
+	historyBarStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("3")) // black on yellow
+	highlightBG     = lipgloss.Color("236")                                                                          // dark grey background
 )
+
+// hlStyle returns a copy of s with the highlight background applied when hl is true.
+func hlStyle(s lipgloss.Style, hl bool) lipgloss.Style {
+	if hl {
+		return s.Background(highlightBG)
+	}
+	return s
+}
 
 func tierStyle(name string) lipgloss.Style {
 	switch name {
@@ -47,9 +60,23 @@ func tierStyle(name string) lipgloss.Style {
 	}
 }
 
+const watchlistName = "jupitor"
+
 // Messages.
 type tickMsg time.Time
 type syncErrMsg struct{ err error }
+
+type watchlistLoadedMsg struct {
+	id      string
+	symbols map[string]bool
+	err     error
+}
+
+type watchlistToggleMsg struct {
+	symbol string
+	added  bool
+	err    error
+}
 
 type historyCacheEntry struct {
 	data     dashboard.DayData
@@ -57,6 +84,11 @@ type historyCacheEntry struct {
 	tierMap  map[string]string
 	trades   int
 	sortMode int
+}
+
+type selectableEntry struct {
+	day    int    // 0=primary, 1=next
+	symbol string
 }
 
 type historyLoadedMsg struct {
@@ -110,6 +142,15 @@ type model struct {
 	syncCancel    context.CancelFunc
 	logger        *slog.Logger
 
+	// Selection.
+	selectedDay    int    // 0=primary day, 1=next day
+	selectedSymbol string
+
+	// Watchlist.
+	alpacaClient     *alpacaapi.Client // nil if no API keys
+	watchlistID      string
+	watchlistSymbols map[string]bool
+
 	// History mode.
 	historyMode     bool
 	historyDates    []string // sorted available dates
@@ -121,29 +162,66 @@ type model struct {
 	historyLoading  bool
 	historyCache    map[string]*historyCacheEntry
 
-	// Background preload tracking.
-	preloadTotal int // total dates to preload
-	preloadDone  int // completed preloads
+	// Background preload queue (sequential, one at a time).
+	preloadQueue   []string // dates remaining to preload
+	preloadRunning bool     // true while a preload cmd is in flight
 }
 
-func initialModel(lm *live.LiveModel, tierMap map[string]string, loc *time.Location, cancel context.CancelFunc, dataDir string, histDates []string, logger *slog.Logger) model {
+func initialModel(lm *live.LiveModel, tierMap map[string]string, loc *time.Location, cancel context.CancelFunc, dataDir string, histDates []string, logger *slog.Logger, ac *alpacaapi.Client) model {
 	return model{
-		liveModel:    lm,
-		tierMap:      tierMap,
-		loc:          loc,
-		now:          time.Now().In(loc),
-		syncCancel:   cancel,
-		dataDir:      dataDir,
-		historyDates: histDates,
-		logger:       logger,
-		historyCache: make(map[string]*historyCacheEntry),
+		liveModel:        lm,
+		tierMap:          tierMap,
+		loc:              loc,
+		now:              time.Now().In(loc),
+		syncCancel:       cancel,
+		dataDir:          dataDir,
+		historyDates:     histDates,
+		logger:           logger,
+		historyCache:     make(map[string]*historyCacheEntry),
+		alpacaClient:     ac,
+		watchlistSymbols: make(map[string]bool),
 	}
 }
 
 type preloadStartMsg struct{}
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(tickCmd(), func() tea.Msg { return preloadStartMsg{} })
+	cmds := []tea.Cmd{tickCmd(), func() tea.Msg { return preloadStartMsg{} }}
+	if m.alpacaClient != nil {
+		ac := m.alpacaClient
+		cmds = append(cmds, func() tea.Msg {
+			return loadWatchlist(ac)
+		})
+	}
+	return tea.Batch(cmds...)
+}
+
+// loadWatchlist gets or creates the "jupitor" watchlist and returns its symbols.
+func loadWatchlist(ac *alpacaapi.Client) watchlistLoadedMsg {
+	lists, err := ac.GetWatchlists()
+	if err != nil {
+		return watchlistLoadedMsg{err: err}
+	}
+	for _, w := range lists {
+		if w.Name == watchlistName {
+			// GetWatchlists doesn't include assets; fetch the full watchlist.
+			full, err := ac.GetWatchlist(w.ID)
+			if err != nil {
+				return watchlistLoadedMsg{err: err}
+			}
+			syms := make(map[string]bool, len(full.Assets))
+			for _, a := range full.Assets {
+				syms[a.Symbol] = true
+			}
+			return watchlistLoadedMsg{id: w.ID, symbols: syms}
+		}
+	}
+	// Create it.
+	w, err := ac.CreateWatchlist(alpacaapi.CreateWatchlistRequest{Name: watchlistName})
+	if err != nil {
+		return watchlistLoadedMsg{err: err}
+	}
+	return watchlistLoadedMsg{id: w.ID, symbols: make(map[string]bool)}
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -164,10 +242,72 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.viewport.SetContent(m.renderContent())
 			return m, nil
+		case " ":
+			if m.selectedSymbol != "" && m.alpacaClient != nil && m.watchlistID != "" {
+				sym := m.selectedSymbol
+				ac := m.alpacaClient
+				wlID := m.watchlistID
+				if m.watchlistSymbols[sym] {
+					delete(m.watchlistSymbols, sym)
+					m.viewport.SetContent(m.renderContent())
+					return m, func() tea.Msg {
+						err := ac.RemoveSymbolFromWatchlist(wlID, alpacaapi.RemoveSymbolFromWatchlistRequest{Symbol: sym})
+						return watchlistToggleMsg{symbol: sym, added: false, err: err}
+					}
+				}
+				m.watchlistSymbols[sym] = true
+				m.viewport.SetContent(m.renderContent())
+				return m, func() tea.Msg {
+					_, err := ac.AddSymbolToWatchlist(wlID, alpacaapi.AddSymbolToWatchlistRequest{Symbol: sym})
+					return watchlistToggleMsg{symbol: sym, added: true, err: err}
+				}
+			}
+			return m, nil
+		case "up", "down":
+			entries := m.flatSelections()
+			if len(entries) == 0 {
+				return m, nil
+			}
+			cur := -1
+			for i, e := range entries {
+				if e.day == m.selectedDay && e.symbol == m.selectedSymbol {
+					cur = i
+					break
+				}
+			}
+			if msg.String() == "up" {
+				if cur > 0 {
+					cur--
+				} else {
+					cur = 0
+				}
+			} else {
+				if cur < len(entries)-1 {
+					cur++
+				}
+			}
+			if cur < 0 {
+				cur = 0
+			}
+			m.selectedDay = entries[cur].day
+			m.selectedSymbol = entries[cur].symbol
+			m.viewport.SetContent(m.renderContent())
+			m.ensureVisible()
+			return m, nil
 		case "left":
 			return m, m.navigateHistory(-1)
 		case "right":
 			return m, m.navigateHistory(1)
+		case "home":
+			if m.historyMode {
+				m.historyMode = false
+				m.historyLoading = false
+				m.selectedSymbol = "" // force reset in refreshLive
+				m.refreshLive()
+				m.viewport.SetContent(m.renderContent())
+				m.viewport.GotoTop()
+			}
+			return m, nil
 		}
 
 	case tea.WindowSizeMsg:
@@ -216,33 +356,61 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.historyTierMap = msg.tierMap
 		m.historyTrades = msg.trades
 		m.tradingDate = msg.date
+		m.resetSelection()
 		if m.ready {
 			m.viewport.SetContent(m.renderContent())
 			m.viewport.GotoTop()
 		}
-		// Preload adjacent dates.
-		return m, m.preloadAdjacent()
+		// Ensure 5-date buffer around current position.
+		return m, m.ensureBuffer(m.historyIdx)
 
 	case preloadedMsg:
+		m.preloadRunning = false
 		if msg.err != nil {
 			m.logger.Warn("preload failed", "date", msg.date, "error", msg.err)
-			m.preloadDone++
-			return m, nil
+		} else {
+			m.historyCache[msg.date] = &historyCacheEntry{
+				data: msg.data, nextData: msg.nextData, tierMap: msg.tierMap, trades: msg.trades,
+				sortMode: m.sortMode,
+			}
+			m.logger.Info("preload cached", "date", msg.date, "trades", msg.trades,
+				"cached", len(m.historyCache), "queued", len(m.preloadQueue))
 		}
-		m.historyCache[msg.date] = &historyCacheEntry{
-			data: msg.data, nextData: msg.nextData, tierMap: msg.tierMap, trades: msg.trades,
-			sortMode: m.sortMode,
+		// Chain next preload.
+		return m, m.preloadNext()
+
+	case watchlistLoadedMsg:
+		if msg.err != nil {
+			m.logger.Warn("loading watchlist", "error", msg.err)
+		} else {
+			m.watchlistID = msg.id
+			m.watchlistSymbols = msg.symbols
+			m.logger.Info("watchlist loaded", "id", msg.id, "symbols", len(msg.symbols))
+			if m.ready {
+				m.viewport.SetContent(m.renderContent())
+			}
 		}
-		m.preloadDone++
-		m.logger.Info("preload cached", "date", msg.date, "trades", msg.trades,
-			"progress", fmt.Sprintf("%d/%d", m.preloadDone, m.preloadTotal))
-		if !m.historyMode && m.ready {
-			m.viewport.SetContent(m.renderContent())
+		return m, nil
+
+	case watchlistToggleMsg:
+		if msg.err != nil {
+			m.logger.Warn("watchlist toggle failed", "symbol", msg.symbol, "error", msg.err)
+			// Revert optimistic update.
+			if msg.added {
+				delete(m.watchlistSymbols, msg.symbol)
+			} else {
+				m.watchlistSymbols[msg.symbol] = true
+			}
+			if m.ready {
+				m.viewport.SetContent(m.renderContent())
+			}
+		} else {
+			m.logger.Info("watchlist toggled", "symbol", msg.symbol, "added", msg.added)
 		}
 		return m, nil
 
 	case preloadStartMsg:
-		return m, m.preloadAllHistory()
+		return m, m.preloadInitial()
 
 	case syncErrMsg:
 		return m, tea.Quit
@@ -252,6 +420,110 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport, cmd = m.viewport.Update(msg)
 	}
 	return m, cmd
+}
+
+// flatSelections builds an ordered list of all selectable (day, symbol) entries
+// in render order: primary day tiers then next day tiers.
+func (m *model) flatSelections() []selectableEntry {
+	var entries []selectableEntry
+	addDay := func(d dashboard.DayData, dayIdx int) {
+		for _, tier := range d.Tiers {
+			for _, c := range tier.Symbols {
+				entries = append(entries, selectableEntry{day: dayIdx, symbol: c.Symbol})
+			}
+		}
+	}
+	if m.historyMode {
+		addDay(m.historyData, 0)
+		addDay(m.historyNextData, 1)
+	} else {
+		addDay(m.todayData, 0)
+		addDay(m.nextData, 1)
+	}
+	return entries
+}
+
+// defaultSelection returns the first symbol in the MODERATE tier (or first symbol in any tier).
+func defaultSelection(d dashboard.DayData) string {
+	for _, tier := range d.Tiers {
+		if tier.Name == "MODERATE" && len(tier.Symbols) > 0 {
+			return tier.Symbols[0].Symbol
+		}
+	}
+	// Fallback: first symbol in any tier.
+	for _, tier := range d.Tiers {
+		if len(tier.Symbols) > 0 {
+			return tier.Symbols[0].Symbol
+		}
+	}
+	return ""
+}
+
+// resetSelection sets the selection to the MODERATE default on the primary day.
+func (m *model) resetSelection() {
+	m.selectedDay = 0
+	if m.historyMode {
+		m.selectedSymbol = defaultSelection(m.historyData)
+	} else {
+		m.selectedSymbol = defaultSelection(m.todayData)
+	}
+}
+
+// selectedLine returns the 0-based line number of the selected symbol in rendered content.
+// Returns -1 if not found.
+func (m *model) selectedLine() int {
+	line := 0
+	foundIn := func(d dashboard.DayData, dayIdx int) int {
+		// Day label = 1 line.
+		line++
+		if len(d.Tiers) == 0 {
+			line++ // "(no matching symbols)"
+			return -1
+		}
+		for _, tier := range d.Tiers {
+			line += 3 // blank + tier header + col header
+			for _, c := range tier.Symbols {
+				if dayIdx == m.selectedDay && c.Symbol == m.selectedSymbol {
+					return line
+				}
+				line++
+			}
+		}
+		return -1
+	}
+
+	var primary, next dashboard.DayData
+	if m.historyMode {
+		primary, next = m.historyData, m.historyNextData
+	} else {
+		primary, next = m.todayData, m.nextData
+	}
+
+	if l := foundIn(primary, 0); l >= 0 {
+		return l
+	}
+	if next.Label != "" {
+		line++ // blank line between days
+		if l := foundIn(next, 1); l >= 0 {
+			return l
+		}
+	}
+	return -1
+}
+
+// ensureVisible scrolls the viewport so the selected line is visible.
+func (m *model) ensureVisible() {
+	line := m.selectedLine()
+	if line < 0 {
+		return
+	}
+	yOff := m.viewport.YOffset
+	vpH := m.viewport.Height
+	if line < yOff {
+		m.viewport.SetYOffset(line)
+	} else if line >= yOff+vpH {
+		m.viewport.SetYOffset(line - vpH + 1)
+	}
 }
 
 func (m *model) navigateHistory(delta int) tea.Cmd {
@@ -273,6 +545,7 @@ func (m *model) navigateHistory(delta int) tea.Cmd {
 		if newIdx >= len(m.historyDates) {
 			// Back to live mode.
 			m.historyMode = false
+			m.selectedSymbol = "" // force reset in refreshLive
 			m.refreshLive()
 			m.viewport.SetContent(m.renderContent())
 			m.viewport.GotoTop()
@@ -298,12 +571,13 @@ func (m *model) navigateHistory(delta int) tea.Cmd {
 		m.historyNextData = entry.nextData
 		m.historyTierMap = entry.tierMap
 		m.historyTrades = entry.trades
+		m.resetSelection()
 		if m.ready {
 			m.viewport.SetContent(m.renderContent())
 			m.viewport.GotoTop()
 		}
-		// Still preload adjacent.
-		return m.preloadAdjacent()
+		// Ensure 5-date buffer around current position.
+		return m.ensureBuffer(m.historyIdx)
 	}
 
 	// Not cached — load asynchronously.
@@ -381,116 +655,112 @@ func loadDateData(dataDir, date, nextDate string, loc *time.Location, sortMode i
 	}
 
 	if len(nextRecs) > 0 {
-		// Only include pre-market trades (before 9:30 AM) to simulate
-		// the live "next day" view (post-market + overnight + pre-market).
-		nextOpen930 := open930ETForDate(nextDateLabel, loc)
-		var preOnly []store.TradeRecord
+		// History view: only show post-market of current date (4PM–8PM ET).
+		// At that point in time, the next day's pre-market hasn't happened.
+		postEnd := postMarketEndET(date)
+		var filtered []store.TradeRecord
 		for i := range nextRecs {
-			if nextRecs[i].Timestamp < nextOpen930 {
-				preOnly = append(preOnly, nextRecs[i])
+			if nextRecs[i].Timestamp <= postEnd {
+				filtered = append(filtered, nextRecs[i])
 			}
 		}
-		if len(preOnly) > 0 {
-			nextData = dashboard.ComputeDayData("NEXT: "+nextDateLabel, preOnly, tierMap, nextOpen930, sortMode)
+		if len(filtered) > 0 {
+			nextOpen930 := open930ETForDate(nextDateLabel, loc)
+			nextData = dashboard.ComputeDayData("NEXT: "+nextDateLabel, filtered, tierMap, nextOpen930, sortMode)
 		}
 	}
 	return
 }
 
-func (m *model) preloadAdjacent() tea.Cmd {
-	var cmds []tea.Cmd
-	latestDate := ""
-	if len(m.historyDates) > 0 {
-		latestDate = m.historyDates[len(m.historyDates)-1]
+// ensureBuffer ensures 5 dates are queued for preloading around the
+// given index (5 back + 1 forward). Deduplicates against cache and
+// existing queue. Starts the preload chain if not already running.
+func (m *model) ensureBuffer(idx int) tea.Cmd {
+	// Collect desired dates: 5 back + 1 forward from idx.
+	queued := make(map[string]bool)
+	for _, d := range m.preloadQueue {
+		queued[d] = true
 	}
 
-	// Preload 5 dates back (older) and 1 forward (newer) from current position.
-	var indices []int
-	for i := m.historyIdx - 5; i <= m.historyIdx+1; i++ {
-		if i != m.historyIdx && i >= 0 && i < len(m.historyDates) {
-			indices = append(indices, i)
+	var toAdd []string
+	for i := idx + 1; i >= idx-5; i-- {
+		if i < 0 || i >= len(m.historyDates) {
+			continue
 		}
-	}
-
-	var preloadDates []string
-	for _, idx := range indices {
-		date := m.historyDates[idx]
-		if _, ok := m.historyCache[date]; ok {
-			continue // already cached
-		}
-		preloadDates = append(preloadDates, date)
-		dataDir := m.dataDir
-		loc := m.loc
-		sortMode := m.sortMode
-		nextDate := m.nextDateFor(date)
-
-		var liveTrades []store.TradeRecord
-		if nextDate == "" && date == latestDate {
-			_, liveTrades = m.liveModel.TodaySnapshot()
-		}
-
-		cmds = append(cmds, func() tea.Msg {
-			m.logger.Info("preload started", "date", date)
-			data, nextData, tierMap, trades, err := loadDateData(dataDir, date, nextDate, loc, sortMode, liveTrades)
-			if err != nil {
-				return preloadedMsg{date: date, err: err}
-			}
-			m.logger.Info("preload done", "date", date, "trades", trades)
-			return preloadedMsg{date: date, data: data, nextData: nextData, tierMap: tierMap, trades: trades}
-		})
-	}
-
-	m.logger.Info("preloadAdjacent", "idx", m.historyIdx, "date", m.historyDates[m.historyIdx],
-		"toPreload", preloadDates, "cached", len(m.historyCache))
-
-	if len(cmds) == 0 {
-		return nil
-	}
-	return tea.Batch(cmds...)
-}
-
-// preloadAllHistory preloads all history dates in the background.
-// Called at startup so history navigation is instant.
-func (m *model) preloadAllHistory() tea.Cmd {
-	if len(m.historyDates) == 0 {
-		return nil
-	}
-
-	latestDate := m.historyDates[len(m.historyDates)-1]
-
-	var cmds []tea.Cmd
-	for i := len(m.historyDates) - 1; i >= 0; i-- {
 		date := m.historyDates[i]
 		if _, ok := m.historyCache[date]; ok {
 			continue
 		}
-		dataDir := m.dataDir
-		loc := m.loc
-		sortMode := m.sortMode
-		nextDate := m.nextDateFor(date)
-
-		var liveTrades []store.TradeRecord
-		if nextDate == "" && date == latestDate {
-			_, liveTrades = m.liveModel.TodaySnapshot()
+		if queued[date] {
+			continue
 		}
-
-		cmds = append(cmds, func() tea.Msg {
-			data, nextData, tierMap, trades, err := loadDateData(dataDir, date, nextDate, loc, sortMode, liveTrades)
-			if err != nil {
-				return preloadedMsg{date: date, err: err}
-			}
-			return preloadedMsg{date: date, data: data, nextData: nextData, tierMap: tierMap, trades: trades}
-		})
+		toAdd = append(toAdd, date)
 	}
 
-	m.preloadTotal = len(cmds)
-	m.preloadDone = 0
-	m.logger.Info("preloadAllHistory started", "dates", len(cmds))
+	if len(toAdd) > 0 {
+		// Prepend to front of queue (highest priority).
+		m.preloadQueue = append(toAdd, m.preloadQueue...)
+	}
 
-	if len(cmds) == 0 {
+	// Start chain if not already running.
+	if !m.preloadRunning {
+		return m.preloadNext()
+	}
+	return nil
+}
+
+// preloadInitial queues the latest 5 history dates for preloading.
+func (m *model) preloadInitial() tea.Cmd {
+	if len(m.historyDates) == 0 {
 		return nil
 	}
-	return tea.Batch(cmds...)
+	// Use ensureBuffer around the last index (as if viewing latest date).
+	return m.ensureBuffer(len(m.historyDates) - 1)
+}
+
+// preloadNext pops the next date from the preload queue and starts loading it.
+func (m *model) preloadNext() tea.Cmd {
+	// Skip already-cached dates.
+	for len(m.preloadQueue) > 0 {
+		if _, ok := m.historyCache[m.preloadQueue[0]]; ok {
+			m.preloadQueue = m.preloadQueue[1:]
+			continue
+		}
+		break
+	}
+
+	if len(m.preloadQueue) == 0 {
+		m.preloadRunning = false
+		return nil
+	}
+
+	date := m.preloadQueue[0]
+	m.preloadQueue = m.preloadQueue[1:]
+	m.preloadRunning = true
+
+	dataDir := m.dataDir
+	loc := m.loc
+	sortMode := m.sortMode
+	nextDate := m.nextDateFor(date)
+
+	var liveTrades []store.TradeRecord
+	latestDate := ""
+	if len(m.historyDates) > 0 {
+		latestDate = m.historyDates[len(m.historyDates)-1]
+	}
+	if nextDate == "" && date == latestDate {
+		_, liveTrades = m.liveModel.TodaySnapshot()
+	}
+
+	m.logger.Info("preload start", "date", date, "queued", len(m.preloadQueue), "cached", len(m.historyCache))
+
+	return func() tea.Msg {
+		data, nextData, tierMap, trades, err := loadDateData(dataDir, date, nextDate, loc, sortMode, liveTrades)
+		if err != nil {
+			return preloadedMsg{date: date, err: err}
+		}
+		return preloadedMsg{date: date, data: data, nextData: nextData, tierMap: tierMap, trades: trades}
+	}
 }
 
 func (m *model) rebuildHistory() {
@@ -514,6 +784,12 @@ func open930ETForDate(date string, loc *time.Location) int64 {
 	open930 := time.Date(t.Year(), t.Month(), t.Day(), 9, 30, 0, 0, loc)
 	_, off := open930.Zone()
 	return open930.UnixMilli() + int64(off)*1000
+}
+
+// postMarketEndET returns 8PM ET on the given date as ET-shifted milliseconds.
+func postMarketEndET(date string) int64 {
+	t, _ := time.Parse("2006-01-02", date)
+	return time.Date(t.Year(), t.Month(), t.Day(), 20, 0, 0, 0, time.UTC).UnixMilli()
 }
 
 func (m *model) refreshLive() {
@@ -553,6 +829,23 @@ func (m *model) refreshLive() {
 	} else {
 		m.nextData = dashboard.DayData{}
 	}
+
+	// Validate selection: reset if empty or no longer present.
+	if m.selectedSymbol == "" {
+		m.resetSelection()
+	} else {
+		entries := m.flatSelections()
+		found := false
+		for _, e := range entries {
+			if e.day == m.selectedDay && e.symbol == m.selectedSymbol {
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.resetSelection()
+		}
+	}
 }
 
 func (m model) View() string {
@@ -578,8 +871,8 @@ func (m model) View() string {
 		headerBar = historyBarStyle.Render(padOrTrunc(headerText, m.width))
 	} else {
 		preloadInfo := ""
-		if m.preloadTotal > 0 && m.preloadDone < m.preloadTotal {
-			preloadInfo = fmt.Sprintf("    hist: %d/%d", m.preloadDone, m.preloadTotal)
+		if m.preloadRunning || len(m.preloadQueue) > 0 {
+			preloadInfo = fmt.Sprintf("    hist: %d/%d", len(m.historyCache), len(m.historyDates))
 		}
 		headerText := fmt.Sprintf(
 			" %s  %s ET    seen: %s  today: %s  next: %s    sort: %s%s ",
@@ -599,7 +892,7 @@ func (m model) View() string {
 	}
 
 	pct := m.viewport.ScrollPercent() * 100
-	footerLeft := " q quit  s sort  left/right history  up/down scroll"
+	footerLeft := " q quit  s sort  left/right history  home live  up/dn select  space watch  pgup/dn scroll"
 	footerRight := fmt.Sprintf("%.0f%% ", pct)
 	gap := m.width - len(footerLeft) - len(footerRight)
 	if gap < 0 {
@@ -616,28 +909,36 @@ func (m model) View() string {
 
 func (m model) renderContent() string {
 	var b strings.Builder
+	selDay0 := ""
+	selDay1 := ""
+	if m.selectedDay == 0 {
+		selDay0 = m.selectedSymbol
+	} else {
+		selDay1 = m.selectedSymbol
+	}
+	wl := m.watchlistSymbols
 	if m.historyMode {
 		if m.historyLoading {
 			b.WriteString(dimStyle.Render("  Loading..."))
 			b.WriteString("\n")
 		} else {
-			renderDay(&b, m.historyData, m.width)
+			renderDay(&b, m.historyData, m.width, selDay0, wl)
 			if m.historyNextData.Label != "" {
 				b.WriteString("\n")
-				renderDay(&b, m.historyNextData, m.width)
+				renderDay(&b, m.historyNextData, m.width, selDay1, wl)
 			}
 		}
 	} else {
-		renderDay(&b, m.todayData, m.width)
+		renderDay(&b, m.todayData, m.width, selDay0, wl)
 		if m.nextData.Label != "" {
 			b.WriteString("\n")
-			renderDay(&b, m.nextData, m.width)
+			renderDay(&b, m.nextData, m.width, selDay1, wl)
 		}
 	}
 	return b.String()
 }
 
-func renderDay(b *strings.Builder, d dashboard.DayData, width int) {
+func renderDay(b *strings.Builder, d dashboard.DayData, width int, selectedSymbol string, watchlist map[string]bool) {
 	hasPre := d.PreCount > 0
 	hasReg := d.RegCount > 0
 
@@ -692,28 +993,48 @@ func renderDay(b *strings.Builder, d dashboard.DayData, width int) {
 		b.WriteString("\n")
 
 		for i, c := range tier.Symbols {
-			num := fmt.Sprintf("  %-3d", i+1)
+			hl := c.Symbol == selectedSymbol
+			wlMark := " "
+			if watchlist[c.Symbol] {
+				wlMark = "*"
+			}
+			num := fmt.Sprintf(" %s%-3d", wlMark, i+1)
 			sym := fmt.Sprintf(" %-8s", c.Symbol)
-			b.WriteString(dimStyle.Render(num))
-			b.WriteString(symbolStyle.Render(sym))
-			b.WriteString("  ")
+			b.WriteString(hlStyle(dimStyle, hl).Render(num))
+			inWl := watchlist[c.Symbol]
+			symStyle := symbolStyle
+			switch {
+			case inWl && hl:
+				symStyle = symbolWlHlStyle
+			case inWl:
+				symStyle = symbolWlStyle
+			case hl:
+				symStyle = symbolHlStyle
+			}
+			b.WriteString(hlStyle(symStyle, hl).Render(sym))
+			b.WriteString(hlStyle(lipgloss.NewStyle(), hl).Render("  "))
 			if hasPre && hasReg {
-				writeSessionCols(b, c.Pre)
-				b.WriteString("  ")
-				writeSessionCols(b, c.Reg)
+				writeSessionCols(b, c.Pre, hl)
+				b.WriteString(hlStyle(lipgloss.NewStyle(), hl).Render("  "))
+				writeSessionCols(b, c.Reg, hl)
 			} else if hasPre {
-				writeSessionCols(b, c.Pre)
+				writeSessionCols(b, c.Pre, hl)
 			} else {
-				writeSessionCols(b, c.Reg)
+				writeSessionCols(b, c.Reg, hl)
+			}
+			if hl {
+				// Pad remaining width with highlight background.
+				b.WriteString(lipgloss.NewStyle().Background(highlightBG).Render(" "))
 			}
 			b.WriteString("\n")
 		}
 	}
 }
 
-func writeSessionCols(b *strings.Builder, s *dashboard.SymbolStats) {
+func writeSessionCols(b *strings.Builder, s *dashboard.SymbolStats, hl bool) {
+	sp := hlStyle(lipgloss.NewStyle(), hl).Render(" ")
 	if s == nil {
-		b.WriteString(dimStyle.Render(fmt.Sprintf(
+		b.WriteString(hlStyle(dimStyle, hl).Render(fmt.Sprintf(
 			"%7s %7s %7s %7s %6s %9s %7s %7s",
 			"—", "—", "—", "—", "—", "—", "—", "—")))
 		return
@@ -728,41 +1049,41 @@ func writeSessionCols(b *strings.Builder, s *dashboard.SymbolStats) {
 	gainPad := fmt.Sprintf("%7s", dashboard.FormatGain(s.MaxGain))
 	lossPad := fmt.Sprintf("%7s", dashboard.FormatLoss(s.MaxLoss))
 
-	b.WriteString(priceStyle.Render(openPad))
-	b.WriteString(" ")
-	b.WriteString(priceStyle.Render(hiPad))
-	b.WriteString(" ")
-	b.WriteString(priceStyle.Render(loPad))
-	b.WriteString(" ")
-	b.WriteString(priceStyle.Render(closePad))
-	b.WriteString(" ")
+	b.WriteString(hlStyle(priceStyle, hl).Render(openPad))
+	b.WriteString(sp)
+	b.WriteString(hlStyle(priceStyle, hl).Render(hiPad))
+	b.WriteString(sp)
+	b.WriteString(hlStyle(priceStyle, hl).Render(loPad))
+	b.WriteString(sp)
+	b.WriteString(hlStyle(priceStyle, hl).Render(closePad))
+	b.WriteString(sp)
 	if s.Trades < 1000 {
-		b.WriteString(dimStyle.Render(trdPad))
+		b.WriteString(hlStyle(dimStyle, hl).Render(trdPad))
 	} else {
-		b.WriteString(tradeCountStyle.Render(trdPad))
+		b.WriteString(hlStyle(tradeCountStyle, hl).Render(trdPad))
 	}
-	b.WriteString(" ")
+	b.WriteString(sp)
 	if s.Turnover < 1e6 {
-		b.WriteString(dimStyle.Render(toPad))
+		b.WriteString(hlStyle(dimStyle, hl).Render(toPad))
 	} else {
-		b.WriteString(turnoverStyle.Render(toPad))
+		b.WriteString(hlStyle(turnoverStyle, hl).Render(toPad))
 	}
-	b.WriteString(" ")
+	b.WriteString(sp)
 	gainWins := s.MaxGain >= s.MaxLoss
 	if s.MaxGain < 0.10 {
-		b.WriteString(dimStyle.Render(gainPad))
+		b.WriteString(hlStyle(dimStyle, hl).Render(gainPad))
 	} else if gainWins {
-		b.WriteString(gainStyle.Render(gainPad))
+		b.WriteString(hlStyle(gainStyle, hl).Render(gainPad))
 	} else {
-		b.WriteString(dimStyle.Render(gainPad))
+		b.WriteString(hlStyle(dimStyle, hl).Render(gainPad))
 	}
-	b.WriteString(" ")
+	b.WriteString(sp)
 	if s.MaxLoss < 0.10 {
-		b.WriteString(dimStyle.Render(lossPad))
+		b.WriteString(hlStyle(dimStyle, hl).Render(lossPad))
 	} else if !gainWins {
-		b.WriteString(lossStyle.Render(lossPad))
+		b.WriteString(hlStyle(lossStyle, hl).Render(lossPad))
 	} else {
-		b.WriteString(dimStyle.Render(lossPad))
+		b.WriteString(hlStyle(dimStyle, hl).Render(lossPad))
 	}
 }
 
@@ -854,8 +1175,18 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, " %s trades\n", dashboard.FormatInt(lastCount))
 
+	// Optional Alpaca trading client for watchlist support.
+	var alpacaClient *alpacaapi.Client
+	if apiKey := os.Getenv("APCA_API_KEY_ID"); apiKey != "" {
+		alpacaClient = alpacaapi.NewClient(alpacaapi.ClientOpts{
+			APIKey:    apiKey,
+			APISecret: os.Getenv("APCA_API_SECRET_KEY"),
+		})
+		logger.Info("alpaca client initialized for watchlist")
+	}
+
 	p := tea.NewProgram(
-		initialModel(lm, tierMap, loc, cancel, dataDir, histDates, logger),
+		initialModel(lm, tierMap, loc, cancel, dataDir, histDates, logger, alpacaClient),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
