@@ -56,6 +56,7 @@ type historyCacheEntry struct {
 	nextData dashboard.DayData
 	tierMap  map[string]string
 	trades   int
+	sortMode int
 }
 
 type historyLoadedMsg struct {
@@ -79,6 +80,7 @@ type preloadedMsg struct {
 }
 
 func tickCmd() tea.Cmd {
+
 	return tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
@@ -118,6 +120,10 @@ type model struct {
 	historyTrades   int
 	historyLoading  bool
 	historyCache    map[string]*historyCacheEntry
+
+	// Background preload tracking.
+	preloadTotal int // total dates to preload
+	preloadDone  int // completed preloads
 }
 
 func initialModel(lm *live.LiveModel, tierMap map[string]string, loc *time.Location, cancel context.CancelFunc, dataDir string, histDates []string, logger *slog.Logger) model {
@@ -134,7 +140,6 @@ func initialModel(lm *live.LiveModel, tierMap map[string]string, loc *time.Locat
 	}
 }
 
-// preloadHistoryMsg signals that a background history preload completed.
 type preloadStartMsg struct{}
 
 func (m model) Init() tea.Cmd {
@@ -204,6 +209,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Cache the result.
 		m.historyCache[msg.date] = &historyCacheEntry{
 			data: msg.data, nextData: msg.nextData, tierMap: msg.tierMap, trades: msg.trades,
+			sortMode: m.sortMode,
 		}
 		m.historyData = msg.data
 		m.historyNextData = msg.nextData
@@ -220,17 +226,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case preloadedMsg:
 		if msg.err != nil {
 			m.logger.Warn("preload failed", "date", msg.date, "error", msg.err)
+			m.preloadDone++
 			return m, nil
 		}
 		m.historyCache[msg.date] = &historyCacheEntry{
 			data: msg.data, nextData: msg.nextData, tierMap: msg.tierMap, trades: msg.trades,
+			sortMode: m.sortMode,
+		}
+		m.preloadDone++
+		m.logger.Info("preload cached", "date", msg.date, "trades", msg.trades,
+			"progress", fmt.Sprintf("%d/%d", m.preloadDone, m.preloadTotal))
+		if !m.historyMode && m.ready {
+			m.viewport.SetContent(m.renderContent())
 		}
 		return m, nil
 
 	case preloadStartMsg:
-		// Preload the latest history dates in the background so first
-		// left-arrow navigation is instant.
-		return m, m.preloadLatestHistory()
+		return m, m.preloadAllHistory()
 
 	case syncErrMsg:
 		return m, tea.Quit
@@ -277,8 +289,11 @@ func (m *model) navigateHistory(delta int) tea.Cmd {
 
 	// Check cache first.
 	if entry, ok := m.historyCache[date]; ok {
-		dashboard.ResortDayData(&entry.data, m.sortMode)
-		dashboard.ResortDayData(&entry.nextData, m.sortMode)
+		if entry.sortMode != m.sortMode {
+			dashboard.ResortDayData(&entry.data, m.sortMode)
+			dashboard.ResortDayData(&entry.nextData, m.sortMode)
+			entry.sortMode = m.sortMode
+		}
 		m.historyData = entry.data
 		m.historyNextData = entry.nextData
 		m.historyTierMap = entry.tierMap
@@ -311,8 +326,22 @@ func (m *model) loadHistoryCmd(date string) tea.Cmd {
 	loc := m.loc
 	sortMode := m.sortMode
 	nextDate := m.nextDateFor(date)
+
+	// For the latest history date, provide live trades as next-day source.
+	var liveTrades []store.TradeRecord
+	if nextDate == "" && len(m.historyDates) > 0 && date == m.historyDates[len(m.historyDates)-1] {
+		_, liveTrades = m.liveModel.TodaySnapshot()
+		m.logger.Info("loadHistoryCmd: using live trades for next-day",
+			"date", date, "nextDate", nextDate, "liveTrades", len(liveTrades),
+			"lastHistDate", m.historyDates[len(m.historyDates)-1])
+	} else {
+		m.logger.Info("loadHistoryCmd: no live trades",
+			"date", date, "nextDate", nextDate,
+			"histLen", len(m.historyDates))
+	}
+
 	return func() tea.Msg {
-		data, nextData, tierMap, trades, err := loadDateData(dataDir, date, nextDate, loc, sortMode)
+		data, nextData, tierMap, trades, err := loadDateData(dataDir, date, nextDate, loc, sortMode, liveTrades)
 		if err != nil {
 			return historyLoadedMsg{date: date, err: err}
 		}
@@ -321,7 +350,9 @@ func (m *model) loadHistoryCmd(date string) tea.Cmd {
 }
 
 // loadDateData loads history data for a date including the next day's trades.
-func loadDateData(dataDir, date, nextDate string, loc *time.Location, sortMode int) (data, nextData dashboard.DayData, tierMap map[string]string, trades int, err error) {
+// liveTrades, if non-nil, provides today's live trades to use as next-day data
+// when the date is the latest history date (no next-date file on disk).
+func loadDateData(dataDir, date, nextDate string, loc *time.Location, sortMode int, liveTrades []store.TradeRecord) (data, nextData dashboard.DayData, tierMap map[string]string, trades int, err error) {
 	tierMap, err = dashboard.LoadTierMapForDate(dataDir, date)
 	if err != nil {
 		return
@@ -335,20 +366,32 @@ func loadDateData(dataDir, date, nextDate string, loc *time.Location, sortMode i
 	open930 := open930ETForDate(date, loc)
 	data = dashboard.ComputeDayData(date, recs, tierMap, open930, sortMode)
 
+	// Try loading next-day from history file, or fall back to live trades.
+	var nextRecs []store.TradeRecord
+	var nextDateLabel string
 	if nextDate != "" {
-		if nextRecs, e := dashboard.LoadHistoryTrades(dataDir, nextDate); e == nil && len(nextRecs) > 0 {
-			// Only include pre-market trades (before 9:30 AM) to simulate
-			// the live "next day" view (post-market + overnight + pre-market).
-			nextOpen930 := open930ETForDate(nextDate, loc)
-			var preOnly []store.TradeRecord
-			for i := range nextRecs {
-				if nextRecs[i].Timestamp < nextOpen930 {
-					preOnly = append(preOnly, nextRecs[i])
-				}
+		if loaded, e := dashboard.LoadHistoryTrades(dataDir, nextDate); e == nil && len(loaded) > 0 {
+			nextRecs = loaded
+			nextDateLabel = nextDate
+		}
+	} else if len(liveTrades) > 0 {
+		nextRecs = liveTrades
+		now := time.Now().In(loc)
+		nextDateLabel = now.Format("2006-01-02")
+	}
+
+	if len(nextRecs) > 0 {
+		// Only include pre-market trades (before 9:30 AM) to simulate
+		// the live "next day" view (post-market + overnight + pre-market).
+		nextOpen930 := open930ETForDate(nextDateLabel, loc)
+		var preOnly []store.TradeRecord
+		for i := range nextRecs {
+			if nextRecs[i].Timestamp < nextOpen930 {
+				preOnly = append(preOnly, nextRecs[i])
 			}
-			if len(preOnly) > 0 {
-				nextData = dashboard.ComputeDayData("NEXT: "+nextDate, preOnly, tierMap, nextOpen930, sortMode)
-			}
+		}
+		if len(preOnly) > 0 {
+			nextData = dashboard.ComputeDayData("NEXT: "+nextDateLabel, preOnly, tierMap, nextOpen930, sortMode)
 		}
 	}
 	return
@@ -356,47 +399,67 @@ func loadDateData(dataDir, date, nextDate string, loc *time.Location, sortMode i
 
 func (m *model) preloadAdjacent() tea.Cmd {
 	var cmds []tea.Cmd
-	for _, idx := range []int{m.historyIdx - 1, m.historyIdx + 1} {
-		if idx < 0 || idx >= len(m.historyDates) {
-			continue
+	latestDate := ""
+	if len(m.historyDates) > 0 {
+		latestDate = m.historyDates[len(m.historyDates)-1]
+	}
+
+	// Preload 5 dates back (older) and 1 forward (newer) from current position.
+	var indices []int
+	for i := m.historyIdx - 5; i <= m.historyIdx+1; i++ {
+		if i != m.historyIdx && i >= 0 && i < len(m.historyDates) {
+			indices = append(indices, i)
 		}
+	}
+
+	var preloadDates []string
+	for _, idx := range indices {
 		date := m.historyDates[idx]
 		if _, ok := m.historyCache[date]; ok {
 			continue // already cached
 		}
+		preloadDates = append(preloadDates, date)
 		dataDir := m.dataDir
 		loc := m.loc
 		sortMode := m.sortMode
 		nextDate := m.nextDateFor(date)
+
+		var liveTrades []store.TradeRecord
+		if nextDate == "" && date == latestDate {
+			_, liveTrades = m.liveModel.TodaySnapshot()
+		}
+
 		cmds = append(cmds, func() tea.Msg {
-			data, nextData, tierMap, trades, err := loadDateData(dataDir, date, nextDate, loc, sortMode)
+			m.logger.Info("preload started", "date", date)
+			data, nextData, tierMap, trades, err := loadDateData(dataDir, date, nextDate, loc, sortMode, liveTrades)
 			if err != nil {
 				return preloadedMsg{date: date, err: err}
 			}
+			m.logger.Info("preload done", "date", date, "trades", trades)
 			return preloadedMsg{date: date, data: data, nextData: nextData, tierMap: tierMap, trades: trades}
 		})
 	}
+
+	m.logger.Info("preloadAdjacent", "idx", m.historyIdx, "date", m.historyDates[m.historyIdx],
+		"toPreload", preloadDates, "cached", len(m.historyCache))
+
 	if len(cmds) == 0 {
 		return nil
 	}
 	return tea.Batch(cmds...)
 }
 
-// preloadLatestHistory preloads the most recent 5 history dates in the
-// background so that the first navigation into history mode is instant.
-func (m *model) preloadLatestHistory() tea.Cmd {
+// preloadAllHistory preloads all history dates in the background.
+// Called at startup so history navigation is instant.
+func (m *model) preloadAllHistory() tea.Cmd {
 	if len(m.historyDates) == 0 {
 		return nil
 	}
 
-	const preloadCount = 5
-	start := len(m.historyDates) - preloadCount
-	if start < 0 {
-		start = 0
-	}
+	latestDate := m.historyDates[len(m.historyDates)-1]
 
 	var cmds []tea.Cmd
-	for i := len(m.historyDates) - 1; i >= start; i-- {
+	for i := len(m.historyDates) - 1; i >= 0; i-- {
 		date := m.historyDates[i]
 		if _, ok := m.historyCache[date]; ok {
 			continue
@@ -405,14 +468,25 @@ func (m *model) preloadLatestHistory() tea.Cmd {
 		loc := m.loc
 		sortMode := m.sortMode
 		nextDate := m.nextDateFor(date)
+
+		var liveTrades []store.TradeRecord
+		if nextDate == "" && date == latestDate {
+			_, liveTrades = m.liveModel.TodaySnapshot()
+		}
+
 		cmds = append(cmds, func() tea.Msg {
-			data, nextData, tierMap, trades, err := loadDateData(dataDir, date, nextDate, loc, sortMode)
+			data, nextData, tierMap, trades, err := loadDateData(dataDir, date, nextDate, loc, sortMode, liveTrades)
 			if err != nil {
 				return preloadedMsg{date: date, err: err}
 			}
 			return preloadedMsg{date: date, data: data, nextData: nextData, tierMap: tierMap, trades: trades}
 		})
 	}
+
+	m.preloadTotal = len(cmds)
+	m.preloadDone = 0
+	m.logger.Info("preloadAllHistory started", "dates", len(cmds))
+
 	if len(cmds) == 0 {
 		return nil
 	}
@@ -430,6 +504,7 @@ func (m *model) rebuildHistory() {
 	}
 	dashboard.ResortDayData(&entry.data, m.sortMode)
 	dashboard.ResortDayData(&entry.nextData, m.sortMode)
+	entry.sortMode = m.sortMode
 	m.historyData = entry.data
 	m.historyNextData = entry.nextData
 }
@@ -502,14 +577,19 @@ func (m model) View() string {
 		}
 		headerBar = historyBarStyle.Render(padOrTrunc(headerText, m.width))
 	} else {
+		preloadInfo := ""
+		if m.preloadTotal > 0 && m.preloadDone < m.preloadTotal {
+			preloadInfo = fmt.Sprintf("    hist: %d/%d", m.preloadDone, m.preloadTotal)
+		}
 		headerText := fmt.Sprintf(
-			" %s  %s ET    seen: %s  today: %s  next: %s    sort: %s ",
+			" %s  %s ET    seen: %s  today: %s  next: %s    sort: %s%s ",
 			m.tradingDate,
 			m.latestTS,
 			dashboard.FormatInt(m.seen),
 			dashboard.FormatInt(m.todayCount),
 			dashboard.FormatInt(m.nextCount),
 			sortLabel,
+			preloadInfo,
 		)
 		headerBar = lipgloss.NewStyle().
 			Bold(true).
@@ -656,29 +736,33 @@ func writeSessionCols(b *strings.Builder, s *dashboard.SymbolStats) {
 	b.WriteString(" ")
 	b.WriteString(priceStyle.Render(closePad))
 	b.WriteString(" ")
-	b.WriteString(tradeCountStyle.Render(trdPad))
-	b.WriteString(" ")
-	b.WriteString(turnoverStyle.Render(toPad))
-	b.WriteString(" ")
-	gainWins := s.MaxGain >= s.MaxLoss
-	if s.MaxGain > 0 {
-		if gainWins {
-			b.WriteString(gainStyle.Render(gainPad))
-		} else {
-			b.WriteString(dimStyle.Render(gainPad))
-		}
+	if s.Trades < 1000 {
+		b.WriteString(dimStyle.Render(trdPad))
 	} else {
-		b.WriteString(gainPad)
+		b.WriteString(tradeCountStyle.Render(trdPad))
 	}
 	b.WriteString(" ")
-	if s.MaxLoss > 0 {
-		if !gainWins {
-			b.WriteString(lossStyle.Render(lossPad))
-		} else {
-			b.WriteString(dimStyle.Render(lossPad))
-		}
+	if s.Turnover < 1e6 {
+		b.WriteString(dimStyle.Render(toPad))
 	} else {
-		b.WriteString(lossPad)
+		b.WriteString(turnoverStyle.Render(toPad))
+	}
+	b.WriteString(" ")
+	gainWins := s.MaxGain >= s.MaxLoss
+	if s.MaxGain < 0.10 {
+		b.WriteString(dimStyle.Render(gainPad))
+	} else if gainWins {
+		b.WriteString(gainStyle.Render(gainPad))
+	} else {
+		b.WriteString(dimStyle.Render(gainPad))
+	}
+	b.WriteString(" ")
+	if s.MaxLoss < 0.10 {
+		b.WriteString(dimStyle.Render(lossPad))
+	} else if !gainWins {
+		b.WriteString(lossStyle.Render(lossPad))
+	} else {
+		b.WriteString(dimStyle.Render(lossPad))
 	}
 }
 

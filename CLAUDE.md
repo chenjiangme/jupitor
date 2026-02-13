@@ -126,6 +126,48 @@ Run(ctx):
 - `isTradingDay()` — Alpaca Calendar API check
 - `runDaySwitch()` — 3:50 AM ET day-switch goroutine
 
+## us-client TUI Dashboard
+
+The `cmd/us-client/` is a bubbletea TUI that connects to the us-stream gRPC server and shows a live ex-index trade dashboard.
+
+### Architecture
+
+- **Live mode**: Subscribes to gRPC stream, refreshes every 5s. Shows TODAY and NEXT DAY sections.
+- **History mode**: Reads consolidated `stock-trades-ex-index` parquet files. Left/right arrows navigate dates.
+- **Preloading**: All history dates preloaded in background on startup. Progress shown in header bar (`hist: N/M`).
+- **Caching**: `historyCacheEntry` stores computed `DayData` + sort mode. Navigation between cached dates skips recomputation.
+
+### Display Filtering
+
+- Per-symbol: `gain >= 10% AND trades >= 500` in either pre-market or regular session
+- Per-tier top-N: ACTIVE keeps top 5, MODERATE/SPORADIC keep top 8 (by trades, turnover, or gain% in either session)
+- Dim styling: trades < 1K, turnover < $1M, gain < 10%, loss < 10%
+
+### Sort Modes
+
+4-mode cycle via `s` key: PRE:TRD → PRE:GAIN → REG:TRD → REG:GAIN. Sort persists across history navigation.
+
+### Next-Day in History
+
+For the latest history date, next-day data comes from the live model's `TodaySnapshot()` (filtered to pre-market only). For other dates, it reads the next date's ex-index file filtered to pre-market.
+
+### Key Files
+
+- `cmd/us-client/main.go` — TUI client
+- `internal/dashboard/stats.go` — Aggregation, sorting, filtering, session splitting
+- `internal/dashboard/format.go` — Price/count/turnover/gain/loss formatting
+- `internal/dashboard/history.go` — History file loading, tier map loading
+- `internal/dashboard/tiermap.go` — Tier map from trade-universe CSV
+
+## Consolidated Trade Files
+
+`cmd/us-stock-trades/main.go` generates per-date consolidated parquet files from per-symbol trade files.
+
+- **stock-trades-ex-index**: `$DATA_1/us/stock-trades-ex-index/<YYYY-MM-DD>.parquet` — all ex-index stock trades for (P 4PM, D 4PM] window
+- **stock-trades-index**: `$DATA_1/us/stock-trades-index/<YYYY-MM-DD>.parquet` — same for index stocks
+- **Filter**: exchange != "D", conditions in {" ", "@", "T", "F"}
+- **Requires**: consecutive trade-universe CSV pairs (P, D) + per-symbol trade files
+
 ## Dependencies
 
 Go: alpaca-trade-api-go, parquet-go, grpc, protobuf, yaml.v3, modernc.org/sqlite

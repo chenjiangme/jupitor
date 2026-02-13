@@ -96,8 +96,8 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 			if r.Price > maxPrice {
 				maxPrice = r.Price
 			}
-			if maxPrice > 0 {
-				if l := (maxPrice - r.Price) / maxPrice; l > s.MaxLoss {
+			if r.Price > 0 {
+				if l := (maxPrice - r.Price) / r.Price; l > s.MaxLoss {
 					s.MaxLoss = l
 				}
 			}
@@ -188,16 +188,16 @@ func ResortDayData(d *DayData, sortMode int) {
 	}
 }
 
-// filterTop10 keeps only stocks that are in the top 10 of any metric
+// filterTopN keeps only stocks that are in the top N of any metric
 // (trades, turnover, gain%) in either pre or regular session.
-func filterTop10(ss []*CombinedStats) []*CombinedStats {
-	if len(ss) <= 10 {
+func filterTopN(ss []*CombinedStats, n int) []*CombinedStats {
+	if len(ss) <= n {
 		return ss
 	}
 
 	keep := make(map[string]bool)
 
-	// For each session × metric, sort a copy and mark the top 10.
+	// For each session × metric, sort a copy and mark the top N.
 	type extractor func(*CombinedStats) float64
 	metrics := []extractor{
 		func(c *CombinedStats) float64 {
@@ -244,7 +244,7 @@ func filterTop10(ss []*CombinedStats) []*CombinedStats {
 		sort.Slice(tmp, func(i, j int) bool {
 			return fn(tmp[i]) > fn(tmp[j])
 		})
-		for i := 0; i < 10 && i < len(tmp); i++ {
+		for i := 0; i < n && i < len(tmp); i++ {
 			keep[tmp[i].Symbol] = true
 		}
 	}
@@ -301,10 +301,11 @@ func ComputeDayData(label string, trades []store.TradeRecord, tierMap map[string
 		tierCounts[tier]++
 	}
 
-	// Within each tier, keep only stocks in the top 10 of any metric
+	// Within each tier, keep only stocks in the top N of any metric
 	// (trades, turnover, or gain%) in either session.
+	tierTopN := map[string]int{"ACTIVE": 5, "MODERATE": 8, "SPORADIC": 8}
 	for tier, ss := range tiers {
-		tiers[tier] = filterTop10(ss)
+		tiers[tier] = filterTopN(ss, tierTopN[tier])
 	}
 
 	// Sort within each tier.
@@ -314,10 +315,10 @@ func ComputeDayData(label string, trades []store.TradeRecord, tierMap map[string
 
 	var groups []TierGroup
 	for _, name := range []string{"ACTIVE", "MODERATE", "SPORADIC"} {
-		if tierCounts[name] > 0 {
+		if len(tiers[name]) > 0 {
 			groups = append(groups, TierGroup{
 				Name:    name,
-				Count:   tierCounts[name],
+				Count:   len(tiers[name]),
 				Symbols: tiers[name],
 			})
 		}
