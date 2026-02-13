@@ -337,6 +337,17 @@ func percentileSorted(sorted []float64, p float64) float64 {
 	return sorted[lower] + frac*(sorted[lower+1]-sorted[lower])
 }
 
+// latestDateFile returns the path to the latest date-stamped .txt file in dir
+// (e.g. "2026-02-12.txt"). Returns "" if none found.
+func latestDateFile(dir string) string {
+	matches, _ := filepath.Glob(filepath.Join(dir, "*.txt"))
+	if len(matches) == 0 {
+		return ""
+	}
+	sort.Strings(matches)
+	return matches[len(matches)-1]
+}
+
 // readIndexSet reads an index constituent file and returns a set of symbols.
 // Returns an empty map if the file doesn't exist.
 func readIndexSet(path string) map[string]bool {

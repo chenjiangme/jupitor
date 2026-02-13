@@ -1086,9 +1086,9 @@ func (g *StreamGatherer) loadSymbolsFromAPI() (map[string]bool, error) {
 	// Load ETF reference data.
 	refData := LoadReferenceData(g.refDir)
 
-	// Load SPX/NDX index sets for today.
-	spxPath := filepath.Join(g.dataDir, "us", "index", "spx", g.today+".txt")
-	ndxPath := filepath.Join(g.dataDir, "us", "index", "ndx", g.today+".txt")
+	// Load SPX/NDX index sets (latest available file, since today's may not exist yet).
+	spxPath := latestDateFile(filepath.Join(g.dataDir, "us", "index", "spx"))
+	ndxPath := latestDateFile(filepath.Join(g.dataDir, "us", "index", "ndx"))
 	spxSet := readIndexSet(spxPath)
 	ndxSet := readIndexSet(ndxPath)
 
