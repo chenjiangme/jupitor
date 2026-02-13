@@ -33,6 +33,16 @@ import (
 var _ gather.Gatherer = (*DailyBarGatherer)(nil)
 var _ gather.Gatherer = (*StreamGatherer)(nil)
 
+// utcToETTime converts a UTC time to an ET-as-UTC time.Time. The returned
+// time has ET clock values (hour, minute, second) but is tagged as UTC,
+// making .UnixMilli() return ET-shifted milliseconds and .Format("2006-01-02")
+// return the ET-calendar date.
+func utcToETTime(t time.Time, loc *time.Location) time.Time {
+	et := t.In(loc)
+	_, offset := et.Zone()
+	return time.UnixMilli(t.UnixMilli() + int64(offset)*1000).UTC()
+}
+
 // ---------------------------------------------------------------------------
 // DailyBarGatherer — long-running daemon for daily bars + trade backfill.
 // ---------------------------------------------------------------------------
@@ -49,13 +59,15 @@ type DailyBarGatherer struct {
 
 	tradeWorkers int // concurrent goroutines for trade fetch (16)
 
-	startDate string
-	csvPath   string
-	apiKey    string
-	apiSecret string
-	baseURL   string // live trading API for calendar
-	refData   *ReferenceData
-	log       *slog.Logger
+	startDate    string
+	csvPath      string
+	apiKey       string
+	apiSecret    string
+	baseURL      string // live trading API for calendar
+	refData      *ReferenceData
+	exIndexOnly  bool // when true, trade backfill skips ETFs and index (SPX/NDX) stocks
+	loc          *time.Location
+	log          *slog.Logger
 }
 
 // NewDailyBarGatherer creates a DailyBarGatherer configured with the given
@@ -76,6 +88,8 @@ func NewDailyBarGatherer(
 		opts.BaseURL = dataURL
 	}
 
+	loc, _ := time.LoadLocation("America/New_York")
+
 	return &DailyBarGatherer{
 		client:       marketdata.NewClient(opts),
 		barStore:     barStore,
@@ -89,6 +103,7 @@ func NewDailyBarGatherer(
 		apiSecret:    apiSecret,
 		baseURL:      baseURL,
 		refData:      LoadReferenceData(refDir),
+		loc:          loc,
 		log:          slog.Default().With("daemon", "us-alpaca-data"),
 	}
 }
@@ -110,6 +125,17 @@ func (g *DailyBarGatherer) Run(ctx context.Context) error {
 			if err := g.runDailyUpdate(ctx); err != nil {
 				g.log.Error("daily update failed", "error", err)
 			}
+		}
+
+		if ctx.Err() != nil {
+			return nil
+		}
+
+		// Generate missing trade-universe CSVs.
+		if n, err := g.tradeUniverseStep(ctx); err != nil {
+			g.log.Error("trade universe step error", "error", err)
+		} else if n > 0 {
+			g.log.Info("trade universe CSVs generated", "count", n)
 		}
 
 		if ctx.Err() != nil {
@@ -499,6 +525,57 @@ func (g *DailyBarGatherer) fetchMultiBars(ctx context.Context, symbols []string,
 // Trade backfill
 // ---------------------------------------------------------------------------
 
+// SetExIndexOnly configures the gatherer to only backfill ex-index stocks
+// (no ETFs, no SPX/NDX constituents) when true.
+func (g *DailyBarGatherer) SetExIndexOnly(v bool) {
+	g.exIndexOnly = v
+}
+
+// tradeUniverseStep generates trade-universe CSVs for universe dates that have
+// index files but no existing CSV. Returns the number of CSVs written.
+func (g *DailyBarGatherer) tradeUniverseStep(ctx context.Context) (int, error) {
+	universeDir := filepath.Join(g.dataDir(), "us", "universe")
+	dates, err := ListUniverseDates(universeDir)
+	if err != nil {
+		return 0, fmt.Errorf("listing universe dates: %w", err)
+	}
+
+	wrote := 0
+	for _, date := range dates {
+		if ctx.Err() != nil {
+			return wrote, ctx.Err()
+		}
+
+		csvPath := tradeUniversePath(g.dataDir(), date)
+		if _, err := os.Stat(csvPath); err == nil {
+			continue
+		}
+
+		// Require both SPX and NDX index files for the date.
+		spxPath := filepath.Join(g.dataDir(), "us", "index", "spx", date+".txt")
+		ndxPath := filepath.Join(g.dataDir(), "us", "index", "ndx", date+".txt")
+		if _, err := os.Stat(spxPath); os.IsNotExist(err) {
+			continue
+		}
+		if _, err := os.Stat(ndxPath); os.IsNotExist(err) {
+			continue
+		}
+
+		symbols, err := ReadUniverseFile(filepath.Join(universeDir, date+".txt"))
+		if err != nil {
+			g.log.Error("reading universe file", "date", date, "error", err)
+			continue
+		}
+
+		if err := generateTradeUniverseForDate(g.dataDir(), date, symbols, g.refData, g.log); err != nil {
+			continue
+		}
+		wrote++
+	}
+
+	return wrote, nil
+}
+
 // tradeBackfillStep finds the latest universe date with missing trade files
 // and processes it. Returns (true, nil) if work was done, (false, nil) if
 // all dates are complete. Only symbols without existing trade files are
@@ -508,6 +585,16 @@ func (g *DailyBarGatherer) tradeBackfillStep(ctx context.Context) (bool, error) 
 	dates, err := ListUniverseDates(universeDir)
 	if err != nil {
 		return false, fmt.Errorf("listing universe dates: %w", err)
+	}
+
+	// Load index sets for ex-index filtering.
+	var spxSet, ndxSet map[string]bool
+	if g.exIndexOnly {
+		latestDate := dates[len(dates)-1]
+		spxPath := filepath.Join(g.dataDir(), "us", "index", "spx", latestDate+".txt")
+		ndxPath := filepath.Join(g.dataDir(), "us", "index", "ndx", latestDate+".txt")
+		spxSet = readIndexSet(spxPath)
+		ndxSet = readIndexSet(ndxPath)
 	}
 
 	for _, date := range dates {
@@ -529,6 +616,9 @@ func (g *DailyBarGatherer) tradeBackfillStep(ctx context.Context) (bool, error) 
 		// Find symbols missing trade files for this date.
 		var missing []string
 		for _, sym := range symbols {
+			if g.exIndexOnly && (g.refData.ETFs[sym] || spxSet[sym] || ndxSet[sym]) {
+				continue
+			}
 			tradePath := g.tradePath(sym, dayTime)
 			if _, err := os.Stat(tradePath); os.IsNotExist(err) {
 				missing = append(missing, sym)
@@ -536,11 +626,6 @@ func (g *DailyBarGatherer) tradeBackfillStep(ctx context.Context) (bool, error) 
 		}
 
 		if len(missing) == 0 {
-			// All trades present — generate trade-universe CSV if missing.
-			csvPath := tradeUniversePath(g.dataDir(), date)
-			if _, err := os.Stat(csvPath); os.IsNotExist(err) {
-				_ = generateTradeUniverseForDate(g.dataDir(), date, symbols, g.refData, g.log)
-			}
 			continue
 		}
 
@@ -548,6 +633,7 @@ func (g *DailyBarGatherer) tradeBackfillStep(ctx context.Context) (bool, error) 
 			"date", date,
 			"missing", len(missing),
 			"total", len(symbols),
+			"exIndexOnly", g.exIndexOnly,
 		)
 
 		count, err := g.ProcessTradeDay(ctx, dayTime, missing)
@@ -560,12 +646,6 @@ func (g *DailyBarGatherer) tradeBackfillStep(ctx context.Context) (bool, error) 
 			"symbols", len(missing),
 			"trades", count,
 		)
-
-		// Generate trade-universe CSV now that this date is complete.
-		csvPath := tradeUniversePath(g.dataDir(), date)
-		if _, err := os.Stat(csvPath); os.IsNotExist(err) {
-			_ = generateTradeUniverseForDate(g.dataDir(), date, symbols, g.refData, g.log)
-		}
 
 		return true, nil
 	}
@@ -624,9 +704,9 @@ func buildTradeBatches(symbols []string, counts map[string]int64) [][]string {
 	return batches
 }
 
-// ProcessTradeDay fetches trades for a single date using a worker pool.
-// Symbols are sorted by trade_count descending and grouped into batches
-// targeting ~100K trades each. Returns the total number of trades written.
+// ProcessTradeDay fetches trades for a single date using batched multi-symbol
+// API calls. Symbols are grouped into ~500K-trade batches based on bar
+// trade_count. Returns the total number of trades written.
 func (g *DailyBarGatherer) ProcessTradeDay(ctx context.Context, day time.Time, symbols []string) (int, error) {
 	// Read trade counts and sort symbols by trade_count descending.
 	counts := g.symbolTradeCounts(ctx, symbols, day)
@@ -681,7 +761,7 @@ func (g *DailyBarGatherer) ProcessTradeDay(ctx context.Context, day time.Time, s
 					if fetchErr == nil {
 						break
 					}
-					g.log.Warn("trade fetch failed, retrying",
+					g.log.Warn("trade fetch retry",
 						"date", day.Format("2006-01-02"),
 						"batch", fmt.Sprintf("%d/%d", batchIdx+1, totalBatches),
 						"symbols", len(batch),
@@ -764,19 +844,22 @@ func (g *DailyBarGatherer) writeEmptyTradeFile(symbol string, day time.Time) {
 	_ = parquet.WriteFile(path, []store.TradeRecord{})
 }
 
-// fetchMultiTrades fetches trades for multiple symbols for a single day.
-// Only trades with size > 100 AND price * size >= 100 are returned.
+// fetchMultiTrades fetches trades for multiple symbols in a single API call
+// for one trading day (4AM–8PM ET). Timestamps are stored as ET-shifted
+// milliseconds. Only trades with size > 100 AND price * size >= 100 are returned.
 func (g *DailyBarGatherer) fetchMultiTrades(ctx context.Context, symbols []string, day time.Time) ([]domain.Trade, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 
-	nextDay := day.AddDate(0, 0, 1)
+	// Query window: 4AM–8PM ET on this trading day.
+	startET := time.Date(day.Year(), day.Month(), day.Day(), 4, 0, 0, 0, g.loc)
+	endET := time.Date(day.Year(), day.Month(), day.Day(), 20, 0, 0, 0, g.loc)
 
 	multiTrades, err := g.client.GetMultiTrades(symbols, marketdata.GetTradesRequest{
-		Start: day,
-		End:   nextDay,
-		Feed:  "sip",
+		Start: startET,
+		End:   endET,
+		Feed:  marketdata.SIP,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("GetMultiTrades: %w", err)
@@ -790,7 +873,7 @@ func (g *DailyBarGatherer) fetchMultiTrades(ctx context.Context, symbols []strin
 			if size > 100 && amount >= 100 {
 				trades = append(trades, domain.Trade{
 					Symbol:     strings.ToUpper(symbol),
-					Timestamp:  t.Timestamp,
+					Timestamp:  utcToETTime(t.Timestamp, g.loc),
 					Price:      t.Price,
 					Size:       size,
 					Exchange:   t.Exchange,
@@ -877,9 +960,16 @@ func (g *StreamGatherer) Run(ctx context.Context) error {
 		return fmt.Errorf("loading timezone: %w", err)
 	}
 
-	// Determine today's date (ET) and the previous trading day.
+	// Determine today's trading day. Before 3:50 AM ET the current trading
+	// session still belongs to the previous calendar date (day switch hasn't
+	// fired yet), so use yesterday's date.
 	now := time.Now().In(g.loc)
-	g.today = now.Format("2006-01-02")
+	cutoff350 := time.Date(now.Year(), now.Month(), now.Day(), 3, 50, 0, 0, g.loc)
+	if now.Before(cutoff350) {
+		g.today = now.AddDate(0, 0, -1).Format("2006-01-02")
+	} else {
+		g.today = now.Format("2006-01-02")
+	}
 
 	g.prevDate, err = g.findPrevTradingDay()
 	if err != nil {
@@ -904,11 +994,11 @@ func (g *StreamGatherer) Run(ctx context.Context) error {
 		return fmt.Errorf("computing today cutoff: %w", err)
 	}
 
-	prevCloseMS, err := regularClose(g.prevDate)
+	prevDateT, err := time.ParseInLocation("2006-01-02", g.prevDate, g.loc)
 	if err != nil {
-		return fmt.Errorf("computing prev close: %w", err)
+		return fmt.Errorf("parsing prev date: %w", err)
 	}
-	g.prevCloseUTC = time.UnixMilli(prevCloseMS).UTC()
+	g.prevCloseUTC = time.Date(prevDateT.Year(), prevDateT.Month(), prevDateT.Day(), 16, 0, 0, 0, g.loc)
 
 	g.model = live.NewLiveModel(todayCutoff)
 
@@ -1278,15 +1368,10 @@ func (g *StreamGatherer) findPrevTradingDay() (string, error) {
 	return "", fmt.Errorf("no previous trading day found before %s", g.today)
 }
 
-// etClose returns 4PM ET on the given date in the ET-shifted millisecond frame
+// etClose returns 4PM ET on the given date as ET-shifted milliseconds
 // (consistent with utcToETMilli). Use this for LiveModel cutoffs.
 func (g *StreamGatherer) etClose(dateStr string) (int64, error) {
-	t, err := time.ParseInLocation("2006-01-02", dateStr, g.loc)
-	if err != nil {
-		return 0, err
-	}
-	close4pm := time.Date(t.Year(), t.Month(), t.Day(), 16, 0, 0, 0, g.loc)
-	return g.utcToETMilli(close4pm.UTC()), nil
+	return regularClose(dateStr)
 }
 
 // utcToETMilli converts a UTC time.Time to ET Unix milliseconds.
@@ -1409,8 +1494,8 @@ func (g *StreamGatherer) runDaySwitch(ctx context.Context) {
 
 		// Compute new cutoff + prev close.
 		newCutoff, _ := g.etClose(newDay)
-		prevCloseMS, _ := regularClose(oldToday)
-		newPrevCloseUTC := time.UnixMilli(prevCloseMS).UTC()
+		oldTodayT, _ := time.ParseInLocation("2006-01-02", oldToday, g.loc)
+		newPrevCloseUTC := time.Date(oldTodayT.Year(), oldTodayT.Month(), oldTodayT.Day(), 16, 0, 0, 0, g.loc)
 
 		// Switch model.
 		g.model.SwitchDay(newCutoff)

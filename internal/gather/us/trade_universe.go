@@ -8,13 +8,16 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/parquet-go/parquet-go"
 )
 
 // GenerateTradeUniverse scans all universe dates and writes trade-universe CSVs
-// for dates where all symbols have trade files. Used by the standalone command.
+// for dates that have both universe and index files. Used by the standalone command.
 // Returns (true, nil) if any CSVs were written.
 func GenerateTradeUniverse(ctx context.Context, dataDir string, ref *ReferenceData, log *slog.Logger) (bool, error) {
 	universeDir := filepath.Join(dataDir, "us", "universe")
@@ -22,8 +25,6 @@ func GenerateTradeUniverse(ctx context.Context, dataDir string, ref *ReferenceDa
 	if err != nil {
 		return false, fmt.Errorf("listing universe dates: %w", err)
 	}
-
-	tradesDir := filepath.Join(dataDir, "us", "trades")
 
 	wrote := 0
 	for _, date := range dates {
@@ -36,22 +37,19 @@ func GenerateTradeUniverse(ctx context.Context, dataDir string, ref *ReferenceDa
 			continue
 		}
 
-		symbols, err := ReadUniverseFile(filepath.Join(universeDir, date+".txt"))
-		if err != nil {
-			log.Error("reading universe file", "date", date, "error", err)
+		// Require both SPX and NDX index files for the date.
+		spxPath := filepath.Join(dataDir, "us", "index", "spx", date+".txt")
+		ndxPath := filepath.Join(dataDir, "us", "index", "ndx", date+".txt")
+		if _, err := os.Stat(spxPath); os.IsNotExist(err) {
+			continue
+		}
+		if _, err := os.Stat(ndxPath); os.IsNotExist(err) {
 			continue
 		}
 
-		allComplete := true
-		for _, sym := range symbols {
-			tradePath := filepath.Join(tradesDir, strings.ToUpper(sym), date+".parquet")
-			if _, err := os.Stat(tradePath); os.IsNotExist(err) {
-				allComplete = false
-				break
-			}
-		}
-
-		if !allComplete {
+		symbols, err := ReadUniverseFile(filepath.Join(universeDir, date+".txt"))
+		if err != nil {
+			log.Error("reading universe file", "date", date, "error", err)
 			continue
 		}
 
@@ -148,17 +146,25 @@ func writeTradeUniverseCSV(path string, symbols []string, ref *ReferenceData, sp
 	return nil
 }
 
+// barTurnoverRecord is a minimal parquet schema for reading bar files when
+// computing turnover (VWAP × Volume). Only the fields needed are declared.
+type barTurnoverRecord struct {
+	Timestamp int64   `parquet:"timestamp,timestamp(millisecond)"`
+	Volume    int64   `parquet:"volume"`
+	VWAP      float64 `parquet:"vwap"`
+}
+
 // computeTiers computes activity tiers for non-index stocks based on trailing
-// daily summary data. Returns a map of symbol→tier (ACTIVE/MODERATE/SPORADIC).
-// Returns nil if no trailing data is available.
+// daily bar data (turnover = VWAP × Volume). Returns a map of symbol→tier
+// (ACTIVE/MODERATE/SPORADIC). Returns nil if no trailing data is available.
 func computeTiers(dataDir, date string, log *slog.Logger) (map[string]string, error) {
-	dailyDir := filepath.Join(dataDir, "us", "stock-trades-daily")
-	allDates, err := listDailyDates(dailyDir)
+	universeDir := filepath.Join(dataDir, "us", "universe")
+	allDates, err := ListUniverseDates(universeDir)
 	if err != nil {
 		return nil, err
 	}
 
-	// Filter to dates strictly before the target date, take last N.
+	// ListUniverseDates returns descending order. Take up to 60 dates before target.
 	var trailing []string
 	for _, d := range allDates {
 		if d < date {
@@ -167,11 +173,21 @@ func computeTiers(dataDir, date string, log *slog.Logger) (map[string]string, er
 	}
 	const maxTrailing = 60
 	if len(trailing) > maxTrailing {
-		trailing = trailing[len(trailing)-maxTrailing:]
+		trailing = trailing[:maxTrailing]
 	}
 	if len(trailing) == 0 {
 		return nil, nil
 	}
+
+	// Build trailing date index (date string → position in trailing array).
+	trailingIdx := make(map[string]int, len(trailing))
+	for i, d := range trailing {
+		trailingIdx[d] = i
+	}
+
+	// Determine year range for bar file reads.
+	latestYear, _ := strconv.Atoi(trailing[0][:4])
+	earliestYear, _ := strconv.Atoi(trailing[len(trailing)-1][:4])
 
 	// Load SPX/NDX index sets for the target date to exclude index members.
 	spxDir := filepath.Join(dataDir, "us", "index", "spx")
@@ -179,44 +195,85 @@ func computeTiers(dataDir, date string, log *slog.Logger) (map[string]string, er
 	spxMembers := readIndexSet(filepath.Join(spxDir, date+".txt"))
 	ndxMembers := readIndexSet(filepath.Join(ndxDir, date+".txt"))
 
-	// Per-symbol per-date turnover from daily summaries.
-	symbolTurnover := make(map[string]map[int]float64)
+	// Read target date's universe to get the symbol list.
+	symbols, err := ReadUniverseFile(filepath.Join(universeDir, date+".txt"))
+	if err != nil {
+		return nil, fmt.Errorf("reading universe for %s: %w", date, err)
+	}
 
-	for idx, d := range trailing {
-		path := filepath.Join(dailyDir, d+".parquet")
-		records, err := parquet.ReadFile[DailyRecord](path)
-		if err != nil {
-			log.Warn("reading daily summary for tier computation", "date", d, "error", err)
-			continue
-		}
-		for i := range records {
-			r := &records[i]
-			// Skip index members.
-			if spxMembers[r.Symbol] || ndxMembers[r.Symbol] {
-				continue
-			}
-			m := symbolTurnover[r.Symbol]
-			if m == nil {
-				m = make(map[int]float64)
-				symbolTurnover[r.Symbol] = m
-			}
-			m[idx] += r.Turnover
+	// Filter to non-index symbols.
+	var exIndexSymbols []string
+	for _, sym := range symbols {
+		if !spxMembers[sym] && !ndxMembers[sym] {
+			exIndexSymbols = append(exIndexSymbols, sym)
 		}
 	}
 
+	if len(exIndexSymbols) == 0 {
+		return nil, nil
+	}
+
+	// Read bar data for each symbol in parallel using 16 workers.
+	dailyDir := filepath.Join(dataDir, "us", "daily")
 	nDates := len(trailing)
 
-	// For each symbol, compute median daily turnover (0 for missing dates).
+	type symbolResult struct {
+		symbol   string
+		turnover map[int]float64
+	}
+
+	symCh := make(chan string, len(exIndexSymbols))
+	for _, sym := range exIndexSymbols {
+		symCh <- sym
+	}
+	close(symCh)
+
+	resultCh := make(chan symbolResult, len(exIndexSymbols))
+
+	var wg sync.WaitGroup
+	workers := min(16, len(exIndexSymbols))
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for sym := range symCh {
+				turnover := make(map[int]float64)
+				for year := earliestYear; year <= latestYear; year++ {
+					path := filepath.Join(dailyDir, sym, fmt.Sprintf("%d.parquet", year))
+					records, err := parquet.ReadFile[barTurnoverRecord](path)
+					if err != nil {
+						continue
+					}
+					for _, r := range records {
+						dateStr := time.UnixMilli(r.Timestamp).UTC().Format("2006-01-02")
+						if idx, ok := trailingIdx[dateStr]; ok {
+							turnover[idx] += r.VWAP * float64(r.Volume)
+						}
+					}
+				}
+				if len(turnover) > 0 {
+					resultCh <- symbolResult{symbol: sym, turnover: turnover}
+				}
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	// Collect results and compute medians.
 	var allMedians []float64
-	medians := make(map[string]float64, len(symbolTurnover))
-	for sym, dayMap := range symbolTurnover {
+	medians := make(map[string]float64)
+	for res := range resultCh {
 		vals := make([]float64, nDates)
-		for idx, t := range dayMap {
+		for idx, t := range res.turnover {
 			vals[idx] = t
 		}
 		sort.Float64s(vals)
 		med := medianSorted(vals)
-		medians[sym] = med
+		medians[res.symbol] = med
 		allMedians = append(allMedians, med)
 	}
 
@@ -247,26 +304,6 @@ func computeTiers(dataDir, date string, log *slog.Logger) (map[string]string, er
 		"p75", fmt.Sprintf("%.0f", p75),
 	)
 	return tiers, nil
-}
-
-// listDailyDates returns all dates that have daily summary parquet files,
-// sorted in ascending order (earliest first).
-func listDailyDates(dir string) ([]string, error) {
-	matches, err := filepath.Glob(filepath.Join(dir, "*.parquet"))
-	if err != nil {
-		return nil, fmt.Errorf("globbing daily summary files: %w", err)
-	}
-
-	var dates []string
-	for _, m := range matches {
-		base := filepath.Base(m)
-		date := strings.TrimSuffix(base, ".parquet")
-		if len(date) == 10 && date[4] == '-' && date[7] == '-' {
-			dates = append(dates, date)
-		}
-	}
-	sort.Strings(dates)
-	return dates, nil
 }
 
 // medianSorted returns the median of an already-sorted slice.
