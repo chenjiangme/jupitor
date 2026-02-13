@@ -118,10 +118,10 @@ type symbolStats struct {
 	Low       float64
 	Open      float64 // first trade price (by timestamp)
 	Close     float64 // last trade price (by timestamp)
-	OpenTS    int64   // timestamp of first trade
-	CloseTS   int64   // timestamp of last trade
 	TotalSize int64
 	Turnover  float64 // sum(price * size)
+	MaxGain   float64 // max possible gain over all (buy, sell) pairs where sell is after buy
+	MaxLoss   float64 // max possible loss over all (buy, sell) pairs where sell is after buy
 }
 
 func printDashboard(model *live.LiveModel, tierMap map[string]string, loc *time.Location) {
@@ -226,12 +226,12 @@ func printSession(stats map[string]*symbolStats, tierMap map[string]string) {
 				vwap = s.Turnover / float64(s.TotalSize)
 			}
 			gain := ""
-			if s.Open > 0 {
-				gain = fmt.Sprintf("%+.1f%%", (s.High-s.Open)/s.Open*100)
+			if s.MaxGain > 0 {
+				gain = fmt.Sprintf("+%.1f%%", s.MaxGain*100)
 			}
 			loss := ""
-			if s.Low > 0 {
-				loss = fmt.Sprintf("-%.1f%%", (s.Open-s.Low)/s.Low*100)
+			if s.MaxLoss > 0 {
+				loss = fmt.Sprintf("-%.1f%%", s.MaxLoss*100)
 			}
 			fmt.Printf("  %-3d %-8s %8s %8s %8s %8s %8s %8s %12s %7s %7s\n",
 				i+1,
@@ -252,38 +252,63 @@ func printSession(stats map[string]*symbolStats, tierMap map[string]string) {
 }
 
 func aggregateTrades(records []store.TradeRecord) map[string]*symbolStats {
-	m := make(map[string]*symbolStats)
+	// Group record indices by symbol.
+	groups := make(map[string][]int)
 	for i := range records {
-		r := &records[i]
-		s, ok := m[r.Symbol]
-		if !ok {
-			s = &symbolStats{
-				Symbol:  r.Symbol,
-				Low:     math.MaxFloat64,
-				Open:    r.Price,
-				OpenTS:  r.Timestamp,
-				Close:   r.Price,
-				CloseTS: r.Timestamp,
+		sym := records[i].Symbol
+		groups[sym] = append(groups[sym], i)
+	}
+
+	m := make(map[string]*symbolStats, len(groups))
+	for sym, indices := range groups {
+		// Sort by timestamp so we can compute temporal max gain/loss.
+		sort.Slice(indices, func(a, b int) bool {
+			return records[indices[a]].Timestamp < records[indices[b]].Timestamp
+		})
+
+		s := &symbolStats{
+			Symbol: sym,
+			Low:    math.MaxFloat64,
+		}
+		minPrice := math.MaxFloat64
+		maxPrice := 0.0
+
+		for j, idx := range indices {
+			r := &records[idx]
+			s.Trades++
+			s.Turnover += r.Price * float64(r.Size)
+			s.TotalSize += r.Size
+			if r.Price > s.High {
+				s.High = r.Price
 			}
-			m[r.Symbol] = s
-		}
-		s.Trades++
-		s.Turnover += r.Price * float64(r.Size)
-		s.TotalSize += r.Size
-		if r.Price > s.High {
-			s.High = r.Price
-		}
-		if r.Price < s.Low {
-			s.Low = r.Price
-		}
-		if r.Timestamp < s.OpenTS {
-			s.OpenTS = r.Timestamp
-			s.Open = r.Price
-		}
-		if r.Timestamp >= s.CloseTS {
-			s.CloseTS = r.Timestamp
+			if r.Price < s.Low {
+				s.Low = r.Price
+			}
+			if j == 0 {
+				s.Open = r.Price
+			}
 			s.Close = r.Price
+
+			// Max gain: buy at lowest seen so far, sell now.
+			if r.Price < minPrice {
+				minPrice = r.Price
+			}
+			if minPrice > 0 {
+				if g := (r.Price - minPrice) / minPrice; g > s.MaxGain {
+					s.MaxGain = g
+				}
+			}
+			// Max loss: buy at highest seen so far, sell now.
+			if r.Price > maxPrice {
+				maxPrice = r.Price
+			}
+			if maxPrice > 0 {
+				if l := (maxPrice - r.Price) / maxPrice; l > s.MaxLoss {
+					s.MaxLoss = l
+				}
+			}
 		}
+		m[sym] = s
 	}
 	return m
 }
