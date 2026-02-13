@@ -649,14 +649,17 @@ func main() {
 		}
 	}()
 
-	// Wait for initial snapshot to complete (count stabilizes for 500ms).
+	// Wait for initial snapshot to complete. During market hours new trades
+	// arrive continuously, so we detect completion by a low rate of change
+	// (< 100 new trades per 100ms for 500ms) rather than exact count stability.
 	fmt.Fprint(os.Stderr, "syncing snapshot...")
 	lastCount := 0
 	stableFor := 0
 	for stableFor < 5 {
 		time.Sleep(100 * time.Millisecond)
 		count := lm.SeenCount()
-		if count > 0 && count == lastCount {
+		delta := count - lastCount
+		if count > 0 && delta < 100 {
 			stableFor++
 		} else {
 			stableFor = 0
