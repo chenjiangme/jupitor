@@ -36,7 +36,7 @@ var allowedConds = map[string]bool{" ": true, "@": true, "T": true, "F": true}
 // and builds filtered stock-trades parquet files. Skips if output exists.
 // When maxDates > 0, only the latest maxDates pairs are considered.
 // Returns the number of files written.
-func GenerateStockTrades(ctx context.Context, dataDir string, maxDates int, log *slog.Logger) (int, error) {
+func GenerateStockTrades(ctx context.Context, dataDir string, maxDates int, skipIndex bool, log *slog.Logger) (int, error) {
 	tuDir := filepath.Join(dataDir, "us", "trade-universe")
 	dates, err := listTradeUniverseDates(tuDir)
 	if err != nil {
@@ -63,7 +63,7 @@ func GenerateStockTrades(ctx context.Context, dataDir string, maxDates int, log 
 
 		idxPath := filepath.Join(dataDir, "us", "stock-trades-index", date+".parquet")
 		exPath := filepath.Join(dataDir, "us", "stock-trades-ex-index", date+".parquet")
-		idxExists := fileExists(idxPath)
+		idxExists := skipIndex || fileExists(idxPath)
 		exExists := fileExists(exPath)
 		if idxExists && exExists {
 			continue
@@ -99,15 +99,9 @@ func processStockTradesForDate(dataDir string, prevDate, date string, skipIdx, s
 		return fmt.Errorf("computing D close for %s: %w", date, err)
 	}
 
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		return fmt.Errorf("loading timezone: %w", err)
-	}
-
 	tradesDir := filepath.Join(dataDir, "us", "trades")
 	var indexTrades []store.TradeRecord
 	var exIndexTrades []store.TradeRecord
-	totalRead := 0
 
 	for _, sym := range symbols {
 		symDir := filepath.Join(tradesDir, strings.ToUpper(sym))
@@ -119,7 +113,6 @@ func processStockTradesForDate(dataDir string, prevDate, date string, skipIdx, s
 		pPath := filepath.Join(symDir, prevDate+".parquet")
 		if records, err := parquet.ReadFile[store.TradeRecord](pPath); err == nil {
 			for _, r := range records {
-				totalRead++
 				if r.Timestamp > prevClose && filterTradeRecord(r) {
 					symTrades = append(symTrades, r)
 				}
@@ -130,7 +123,6 @@ func processStockTradesForDate(dataDir string, prevDate, date string, skipIdx, s
 		dPath := filepath.Join(symDir, date+".parquet")
 		if records, err := parquet.ReadFile[store.TradeRecord](dPath); err == nil {
 			for _, r := range records {
-				totalRead++
 				if r.Timestamp <= dateClose && filterTradeRecord(r) {
 					symTrades = append(symTrades, r)
 				}
@@ -144,14 +136,6 @@ func processStockTradesForDate(dataDir string, prevDate, date string, skipIdx, s
 		}
 	}
 
-	// Convert timestamps from UTC to ET.
-	convertToET := func(trades []store.TradeRecord) {
-		for i := range trades {
-			t := time.UnixMilli(trades[i].Timestamp).In(loc)
-			_, offset := t.Zone()
-			trades[i].Timestamp += int64(offset) * 1000
-		}
-	}
 	sortByTS := func(trades []store.TradeRecord) {
 		sort.Slice(trades, func(i, j int) bool {
 			return trades[i].Timestamp < trades[j].Timestamp
@@ -159,7 +143,6 @@ func processStockTradesForDate(dataDir string, prevDate, date string, skipIdx, s
 	}
 
 	if !skipIdx {
-		convertToET(indexTrades)
 		sortByTS(indexTrades)
 		idxPath := filepath.Join(dataDir, "us", "stock-trades-index", date+".parquet")
 		if err := os.MkdirAll(filepath.Dir(idxPath), 0o755); err != nil {
@@ -171,13 +154,11 @@ func processStockTradesForDate(dataDir string, prevDate, date string, skipIdx, s
 		log.Info("stock trades index written",
 			"date", date,
 			"stocks", len(indexSyms),
-			"read", totalRead,
 			"filtered", len(indexTrades),
 		)
 	}
 
 	if !skipEx {
-		convertToET(exIndexTrades)
 		sortByTS(exIndexTrades)
 		exPath := filepath.Join(dataDir, "us", "stock-trades-ex-index", date+".parquet")
 		if err := os.MkdirAll(filepath.Dir(exPath), 0o755); err != nil {
@@ -191,22 +172,6 @@ func processStockTradesForDate(dataDir string, prevDate, date string, skipIdx, s
 			"stocks", len(symbols)-len(indexSyms),
 			"filtered", len(exIndexTrades),
 		)
-	}
-
-	// Write combined daily summary (index + ex-index).
-	dailyPath := filepath.Join(dataDir, "us", "stock-trades-daily", date+".parquet")
-	if !fileExists(dailyPath) {
-		allTrades := make([]store.TradeRecord, 0, len(indexTrades)+len(exIndexTrades))
-		allTrades = append(allTrades, indexTrades...)
-		allTrades = append(allTrades, exIndexTrades...)
-		daily := aggregateDailyRecords(allTrades)
-		if err := os.MkdirAll(filepath.Dir(dailyPath), 0o755); err != nil {
-			return fmt.Errorf("creating stock-trades-daily dir: %w", err)
-		}
-		if err := parquet.WriteFile(dailyPath, daily); err != nil {
-			return fmt.Errorf("writing daily summary for %s: %w", date, err)
-		}
-		log.Info("daily summary written", "date", date, "symbols", len(daily))
 	}
 
 	return nil
@@ -397,17 +362,14 @@ func filterTradeRecord(r store.TradeRecord) bool {
 	return true
 }
 
-// regularClose returns 4:00 PM ET on the given date as Unix milliseconds.
+// regularClose returns 4:00 PM ET on the given date as ET-shifted milliseconds
+// (the ET clock reading encoded as-if-UTC).
 func regularClose(dateStr string) (int64, error) {
-	loc, err := time.LoadLocation("America/New_York")
+	t, err := time.Parse("2006-01-02", dateStr)
 	if err != nil {
 		return 0, err
 	}
-	t, err := time.ParseInLocation("2006-01-02", dateStr, loc)
-	if err != nil {
-		return 0, err
-	}
-	close4pm := time.Date(t.Year(), t.Month(), t.Day(), 16, 0, 0, 0, loc)
+	close4pm := time.Date(t.Year(), t.Month(), t.Day(), 16, 0, 0, 0, time.UTC)
 	return close4pm.UnixMilli(), nil
 }
 

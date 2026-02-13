@@ -15,8 +15,8 @@ import (
 	"jupitor/internal/live"
 )
 
-// sortByRegular: 0 = sort by pre-market trades, 1 = sort by regular trades.
-var sortByRegular atomic.Int32
+// sortMode cycles: 0=PRE:TRD, 1=PRE:GAIN, 2=REG:TRD, 3=REG:GAIN.
+var sortMode atomic.Int32
 
 func main() {
 	dataDir := os.Getenv("DATA_1")
@@ -87,11 +87,7 @@ func main() {
 					cancel()
 					return
 				case 's', 'S':
-					if sortByRegular.Load() == 0 {
-						sortByRegular.Store(1)
-					} else {
-						sortByRegular.Store(0)
-					}
+					sortMode.Store((sortMode.Load() + 1) % int32(dashboard.SortModeCount))
 					select {
 					case refreshCh <- struct{}{}:
 					default:
@@ -136,11 +132,8 @@ func printDashboard(model *live.LiveModel, tierMap map[string]string, loc *time.
 	todayOpen930ET := todayOpen930 + int64(off)*1000
 	nextOpen930ET := todayOpen930ET + 24*60*60*1000
 
-	byReg := sortByRegular.Load() != 0
-	sortLabel := "PRE"
-	if byReg {
-		sortLabel = "REG"
-	}
+	sm := int(sortMode.Load())
+	sortLabel := dashboard.SortModeLabel(sm)
 
 	// Clear screen and print header.
 	fmt.Print("\033[H\033[2J")
@@ -148,11 +141,11 @@ func printDashboard(model *live.LiveModel, tierMap map[string]string, loc *time.
 		now.Format("2006-01-02 15:04:05 MST"),
 		dashboard.FormatInt(seen), dashboard.FormatInt(len(todayExIdx)), dashboard.FormatInt(len(nextExIdx)), sortLabel)
 
-	todayData := dashboard.ComputeDayData("TODAY", todayExIdx, tierMap, todayOpen930ET, byReg)
+	todayData := dashboard.ComputeDayData("TODAY", todayExIdx, tierMap, todayOpen930ET, sm)
 	printDay(todayData)
 
 	if len(nextExIdx) > 0 {
-		nextData := dashboard.ComputeDayData("NEXT DAY", nextExIdx, tierMap, nextOpen930ET, false)
+		nextData := dashboard.ComputeDayData("NEXT DAY", nextExIdx, tierMap, nextOpen930ET, sm)
 		printDay(nextData)
 	}
 }

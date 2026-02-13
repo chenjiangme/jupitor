@@ -5,6 +5,7 @@ Unified financial platform for US equities and China A-shares. Go handles all co
 ## Project Structure
 
 - `cmd/` — Go binaries (each runs as a separate process)
+- `bin/` — Compiled Go binaries (all `go build` output goes here, e.g. `go build -o bin/us-stream ./cmd/us-stream/`)
 - `internal/` — Private Go packages (domain, config, store, gather, engine, strategy, api, broker, util)
 - `pkg/jupitor/` — Public Go client SDK
 - `proto/` — Protobuf definitions

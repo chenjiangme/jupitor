@@ -14,6 +14,7 @@ import (
 
 	"jupitor/internal/dashboard"
 	"jupitor/internal/live"
+	"jupitor/internal/store"
 )
 
 // Styles.
@@ -51,15 +52,17 @@ type tickMsg time.Time
 type syncErrMsg struct{ err error }
 
 type historyCacheEntry struct {
-	data    dashboard.DayData
-	tierMap map[string]string
-	trades  int
+	data     dashboard.DayData
+	nextData dashboard.DayData
+	tierMap  map[string]string
+	trades   int
 }
 
 type historyLoadedMsg struct {
-	date    string
-	data    dashboard.DayData
-	tierMap map[string]string
+	date     string
+	data     dashboard.DayData
+	nextData dashboard.DayData
+	tierMap  map[string]string
 	trades  int
 	err     error
 }
@@ -67,11 +70,12 @@ type historyLoadedMsg struct {
 // preloadedMsg is like historyLoadedMsg but for background preloading.
 // It only populates the cache; it doesn't update the view.
 type preloadedMsg struct {
-	date    string
-	data    dashboard.DayData
-	tierMap map[string]string
-	trades  int
-	err     error
+	date     string
+	data     dashboard.DayData
+	nextData dashboard.DayData
+	tierMap  map[string]string
+	trades   int
+	err      error
 }
 
 func tickCmd() tea.Cmd {
@@ -97,7 +101,7 @@ type model struct {
 	dataDir       string
 	tradingDate   string
 	latestTS      string
-	sortByRegular bool
+	sortMode int
 	viewport      viewport.Model
 	ready         bool
 	width, height int
@@ -105,14 +109,15 @@ type model struct {
 	logger        *slog.Logger
 
 	// History mode.
-	historyMode    bool
-	historyDates   []string // sorted available dates
-	historyIdx     int      // index into historyDates
-	historyData    dashboard.DayData
-	historyTierMap map[string]string
-	historyTrades  int
-	historyLoading bool
-	historyCache   map[string]*historyCacheEntry
+	historyMode     bool
+	historyDates    []string // sorted available dates
+	historyIdx      int      // index into historyDates
+	historyData     dashboard.DayData
+	historyNextData dashboard.DayData
+	historyTierMap  map[string]string
+	historyTrades   int
+	historyLoading  bool
+	historyCache    map[string]*historyCacheEntry
 }
 
 func initialModel(lm *live.LiveModel, tierMap map[string]string, loc *time.Location, cancel context.CancelFunc, dataDir string, histDates []string, logger *slog.Logger) model {
@@ -129,8 +134,11 @@ func initialModel(lm *live.LiveModel, tierMap map[string]string, loc *time.Locat
 	}
 }
 
+// preloadHistoryMsg signals that a background history preload completed.
+type preloadStartMsg struct{}
+
 func (m model) Init() tea.Cmd {
-	return tickCmd()
+	return tea.Batch(tickCmd(), func() tea.Msg { return preloadStartMsg{} })
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -143,7 +151,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncCancel()
 			return m, tea.Quit
 		case "s":
-			m.sortByRegular = !m.sortByRegular
+			m.sortMode = (m.sortMode + 1) % dashboard.SortModeCount
 			if m.historyMode {
 				m.rebuildHistory()
 			} else {
@@ -195,9 +203,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Cache the result.
 		m.historyCache[msg.date] = &historyCacheEntry{
-			data: msg.data, tierMap: msg.tierMap, trades: msg.trades,
+			data: msg.data, nextData: msg.nextData, tierMap: msg.tierMap, trades: msg.trades,
 		}
 		m.historyData = msg.data
+		m.historyNextData = msg.nextData
 		m.historyTierMap = msg.tierMap
 		m.historyTrades = msg.trades
 		m.tradingDate = msg.date
@@ -214,9 +223,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.historyCache[msg.date] = &historyCacheEntry{
-			data: msg.data, tierMap: msg.tierMap, trades: msg.trades,
+			data: msg.data, nextData: msg.nextData, tierMap: msg.tierMap, trades: msg.trades,
 		}
 		return m, nil
+
+	case preloadStartMsg:
+		// Preload the latest history dates in the background so first
+		// left-arrow navigation is instant.
+		return m, m.preloadLatestHistory()
 
 	case syncErrMsg:
 		return m, tea.Quit
@@ -263,7 +277,10 @@ func (m *model) navigateHistory(delta int) tea.Cmd {
 
 	// Check cache first.
 	if entry, ok := m.historyCache[date]; ok {
+		dashboard.ResortDayData(&entry.data, m.sortMode)
+		dashboard.ResortDayData(&entry.nextData, m.sortMode)
 		m.historyData = entry.data
+		m.historyNextData = entry.nextData
 		m.historyTierMap = entry.tierMap
 		m.historyTrades = entry.trades
 		if m.ready {
@@ -279,23 +296,62 @@ func (m *model) navigateHistory(delta int) tea.Cmd {
 	return m.loadHistoryCmd(date)
 }
 
+// nextDateFor returns the next history date after the given date, or "".
+func (m *model) nextDateFor(date string) string {
+	for i, d := range m.historyDates {
+		if d == date && i+1 < len(m.historyDates) {
+			return m.historyDates[i+1]
+		}
+	}
+	return ""
+}
+
 func (m *model) loadHistoryCmd(date string) tea.Cmd {
 	dataDir := m.dataDir
 	loc := m.loc
-	sortByReg := m.sortByRegular
+	sortMode := m.sortMode
+	nextDate := m.nextDateFor(date)
 	return func() tea.Msg {
-		tierMap, err := dashboard.LoadTierMapForDate(dataDir, date)
+		data, nextData, tierMap, trades, err := loadDateData(dataDir, date, nextDate, loc, sortMode)
 		if err != nil {
 			return historyLoadedMsg{date: date, err: err}
 		}
-		trades, err := dashboard.LoadHistoryTrades(dataDir, date)
-		if err != nil {
-			return historyLoadedMsg{date: date, err: err}
-		}
-		open930 := open930ETForDate(date, loc)
-		data := dashboard.ComputeDayData(date, trades, tierMap, open930, sortByReg)
-		return historyLoadedMsg{date: date, data: data, tierMap: tierMap, trades: len(trades)}
+		return historyLoadedMsg{date: date, data: data, nextData: nextData, tierMap: tierMap, trades: trades}
 	}
+}
+
+// loadDateData loads history data for a date including the next day's trades.
+func loadDateData(dataDir, date, nextDate string, loc *time.Location, sortMode int) (data, nextData dashboard.DayData, tierMap map[string]string, trades int, err error) {
+	tierMap, err = dashboard.LoadTierMapForDate(dataDir, date)
+	if err != nil {
+		return
+	}
+	var recs []store.TradeRecord
+	recs, err = dashboard.LoadHistoryTrades(dataDir, date)
+	if err != nil {
+		return
+	}
+	trades = len(recs)
+	open930 := open930ETForDate(date, loc)
+	data = dashboard.ComputeDayData(date, recs, tierMap, open930, sortMode)
+
+	if nextDate != "" {
+		if nextRecs, e := dashboard.LoadHistoryTrades(dataDir, nextDate); e == nil && len(nextRecs) > 0 {
+			// Only include pre-market trades (before 9:30 AM) to simulate
+			// the live "next day" view (post-market + overnight + pre-market).
+			nextOpen930 := open930ETForDate(nextDate, loc)
+			var preOnly []store.TradeRecord
+			for i := range nextRecs {
+				if nextRecs[i].Timestamp < nextOpen930 {
+					preOnly = append(preOnly, nextRecs[i])
+				}
+			}
+			if len(preOnly) > 0 {
+				nextData = dashboard.ComputeDayData("NEXT: "+nextDate, preOnly, tierMap, nextOpen930, sortMode)
+			}
+		}
+	}
+	return
 }
 
 func (m *model) preloadAdjacent() tea.Cmd {
@@ -310,19 +366,51 @@ func (m *model) preloadAdjacent() tea.Cmd {
 		}
 		dataDir := m.dataDir
 		loc := m.loc
-		sortByReg := m.sortByRegular
+		sortMode := m.sortMode
+		nextDate := m.nextDateFor(date)
 		cmds = append(cmds, func() tea.Msg {
-			tierMap, err := dashboard.LoadTierMapForDate(dataDir, date)
+			data, nextData, tierMap, trades, err := loadDateData(dataDir, date, nextDate, loc, sortMode)
 			if err != nil {
 				return preloadedMsg{date: date, err: err}
 			}
-			trades, err := dashboard.LoadHistoryTrades(dataDir, date)
+			return preloadedMsg{date: date, data: data, nextData: nextData, tierMap: tierMap, trades: trades}
+		})
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
+}
+
+// preloadLatestHistory preloads the most recent 5 history dates in the
+// background so that the first navigation into history mode is instant.
+func (m *model) preloadLatestHistory() tea.Cmd {
+	if len(m.historyDates) == 0 {
+		return nil
+	}
+
+	const preloadCount = 5
+	start := len(m.historyDates) - preloadCount
+	if start < 0 {
+		start = 0
+	}
+
+	var cmds []tea.Cmd
+	for i := len(m.historyDates) - 1; i >= start; i-- {
+		date := m.historyDates[i]
+		if _, ok := m.historyCache[date]; ok {
+			continue
+		}
+		dataDir := m.dataDir
+		loc := m.loc
+		sortMode := m.sortMode
+		nextDate := m.nextDateFor(date)
+		cmds = append(cmds, func() tea.Msg {
+			data, nextData, tierMap, trades, err := loadDateData(dataDir, date, nextDate, loc, sortMode)
 			if err != nil {
 				return preloadedMsg{date: date, err: err}
 			}
-			open930 := open930ETForDate(date, loc)
-			data := dashboard.ComputeDayData(date, trades, tierMap, open930, sortByReg)
-			return preloadedMsg{date: date, data: data, tierMap: tierMap, trades: len(trades)}
+			return preloadedMsg{date: date, data: data, nextData: nextData, tierMap: tierMap, trades: trades}
 		})
 	}
 	if len(cmds) == 0 {
@@ -340,8 +428,10 @@ func (m *model) rebuildHistory() {
 	if !ok {
 		return
 	}
-	dashboard.ResortDayData(&entry.data, m.sortByRegular)
+	dashboard.ResortDayData(&entry.data, m.sortMode)
+	dashboard.ResortDayData(&entry.nextData, m.sortMode)
 	m.historyData = entry.data
+	m.historyNextData = entry.nextData
 }
 
 func open930ETForDate(date string, loc *time.Location) int64 {
@@ -382,9 +472,9 @@ func (m *model) refreshLive() {
 	todayOpen930ET := todayOpen930 + int64(off)*1000
 	nextOpen930ET := todayOpen930ET + 24*60*60*1000
 
-	m.todayData = dashboard.ComputeDayData("TODAY", todayExIdx, m.tierMap, todayOpen930ET, m.sortByRegular)
+	m.todayData = dashboard.ComputeDayData("TODAY", todayExIdx, m.tierMap, todayOpen930ET, m.sortMode)
 	if len(nextExIdx) > 0 {
-		m.nextData = dashboard.ComputeDayData("NEXT DAY", nextExIdx, m.tierMap, nextOpen930ET, false)
+		m.nextData = dashboard.ComputeDayData("NEXT DAY", nextExIdx, m.tierMap, nextOpen930ET, m.sortMode)
 	} else {
 		m.nextData = dashboard.DayData{}
 	}
@@ -395,10 +485,7 @@ func (m model) View() string {
 		return "Loading..."
 	}
 
-	sortLabel := "PRE"
-	if m.sortByRegular {
-		sortLabel = "REG"
-	}
+	sortLabel := dashboard.SortModeLabel(m.sortMode)
 
 	var headerBar string
 	if m.historyMode {
@@ -455,6 +542,10 @@ func (m model) renderContent() string {
 			b.WriteString("\n")
 		} else {
 			renderDay(&b, m.historyData, m.width)
+			if m.historyNextData.Label != "" {
+				b.WriteString("\n")
+				renderDay(&b, m.historyNextData, m.width)
+			}
 		}
 	} else {
 		renderDay(&b, m.todayData, m.width)

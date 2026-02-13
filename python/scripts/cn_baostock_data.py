@@ -761,6 +761,7 @@ class CNBaoStockDaemon:
 
         log.info("bar backfill: %d symbols to process with %d workers", len(work), NUM_WORKERS)
 
+        total_bars = 0
         with multiprocessing.Pool(NUM_WORKERS, initializer=_worker_init) as pool:
             done = 0
             for result in pool.imap_unordered(_task_fetch_bars, work, chunksize=1):
@@ -769,12 +770,13 @@ class CNBaoStockDaemon:
                     break
                 done += 1
                 sym, count = result
+                total_bars += count
                 if count > 0:
                     log.info("backfill %s: %d bars (%d/%d)", sym, count, done, len(work))
                 if done % 50 == 0 and count == 0:
                     log.info("bar backfill progress: %d/%d symbols done", done, len(work))
 
-        return True
+        return total_bars > 0
 
     # -------------------------------------------------------------------
     # Phase 3: 30-minute bar backfill (4 workers)
@@ -809,6 +811,7 @@ class CNBaoStockDaemon:
 
         log.info("30min backfill: %d symbols to process with %d workers", len(work), NUM_WORKERS)
 
+        total_bars = 0
         with multiprocessing.Pool(NUM_WORKERS, initializer=_worker_init) as pool:
             done = 0
             for result in pool.imap_unordered(_task_fetch_30min, work, chunksize=1):
@@ -817,16 +820,31 @@ class CNBaoStockDaemon:
                     break
                 done += 1
                 sym, count = result
+                total_bars += count
                 if count > 0:
                     log.info("30min %s: %d bars (%d/%d)", sym, count, done, len(work))
                 if done % 50 == 0 and count == 0:
                     log.info("30min backfill progress: %d/%d symbols done", done, len(work))
 
-        return True
+        return total_bars > 0
 
     # -------------------------------------------------------------------
     # Phase 4: Fundamentals backfill (4 workers)
     # -------------------------------------------------------------------
+
+    def _fundamentals_tried_empty_path(self) -> Path:
+        return self.fund_dir / ".tried-empty"
+
+    def _load_fundamentals_tried_empty(self) -> set[str]:
+        p = self._fundamentals_tried_empty_path()
+        if not p.exists():
+            return set()
+        return set(line.strip() for line in p.read_text().splitlines() if line.strip())
+
+    def _save_fundamentals_tried_empty(self, symbols: set[str]):
+        p = self._fundamentals_tried_empty_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("\n".join(sorted(symbols)) + "\n")
 
     def _fundamentals_backfill(self) -> bool:
         """Backfill quarterly fundamentals for all symbols, using 4 workers.
@@ -836,6 +854,8 @@ class CNBaoStockDaemon:
         all_symbols = _all_index_symbols(self.data_dir)
         if not all_symbols:
             return False
+
+        tried_empty = self._load_fundamentals_tried_empty()
 
         # Check if any symbol has missing quarters
         work = []
@@ -848,6 +868,8 @@ class CNBaoStockDaemon:
                 target_quarters.append((year, q))
 
         for symbol in all_symbols:
+            if symbol in tried_empty:
+                continue
             needs_work = False
             for ftype, _ in FUNDAMENTAL_TYPES:
                 path = self.fund_dir / ftype / f"{symbol}.parquet"
@@ -861,8 +883,10 @@ class CNBaoStockDaemon:
         if not work:
             return False
 
-        log.info("fundamentals backfill: %d symbols to process with %d workers", len(work), NUM_WORKERS)
+        log.info("fundamentals backfill: %d symbols to process (%d tried-empty skipped)",
+                 len(work), len(tried_empty))
 
+        total_rows = 0
         with multiprocessing.Pool(NUM_WORKERS, initializer=_worker_init) as pool:
             done = 0
             for result in pool.imap_unordered(_task_fetch_fundamentals, work, chunksize=1):
@@ -871,15 +895,20 @@ class CNBaoStockDaemon:
                     break
                 done += 1
                 sym, rows, errors = result
+                total_rows += rows
                 if rows > 0:
                     log.info("fundamentals %s: %d rows (%d/%d)", sym, rows, done, len(work))
-                elif done % 100 == 0:
-                    log.info("fundamentals progress: %d/%d symbols done", done, len(work))
+                else:
+                    # No data at all — mark as tried-empty
+                    tried_empty.add(sym)
+                    if done % 100 == 0:
+                        log.info("fundamentals progress: %d/%d symbols done", done, len(work))
                 if errors:
                     for e in errors[:2]:
                         log.warning("fundamentals %s: %s", sym, e)
 
-        return True
+        self._save_fundamentals_tried_empty(tried_empty)
+        return total_rows > 0
 
     # -------------------------------------------------------------------
     # Phase 5: Daily update

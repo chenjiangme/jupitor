@@ -109,6 +109,31 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 
 var zeroStats SymbolStats
 
+// SortMode defines the sort order for the dashboard.
+const (
+	SortPreTrades  = 0 // pre-market by trades (default)
+	SortPreGain    = 1 // pre-market by gain%
+	SortRegTrades  = 2 // regular by trades
+	SortRegGain    = 3 // regular by gain%
+	SortModeCount  = 4
+)
+
+// SortModeLabel returns a short label for the given sort mode.
+func SortModeLabel(mode int) string {
+	switch mode {
+	case SortPreTrades:
+		return "PRE:TRD"
+	case SortPreGain:
+		return "PRE:GAIN"
+	case SortRegTrades:
+		return "REG:TRD"
+	case SortRegGain:
+		return "REG:GAIN"
+	default:
+		return "?"
+	}
+}
+
 // sessionStats returns the relevant session stats for sorting.
 func sessionStats(c *CombinedStats, regular bool) *SymbolStats {
 	if regular {
@@ -136,26 +161,107 @@ func SplitBySession(trades []store.TradeRecord, open930ET int64) (pre, reg []sto
 	return
 }
 
-// ResortDayData re-sorts the symbols within each tier group without
-// recomputing aggregation. Used when toggling sort between pre/regular.
-func ResortDayData(d *DayData, sortByRegular bool) {
-	for i := range d.Tiers {
-		ss := d.Tiers[i].Symbols
-		sort.Slice(ss, func(a, b int) bool {
-			sa, sb := sessionStats(ss[a], sortByRegular), sessionStats(ss[b], sortByRegular)
-			ta, tb := sa.Trades, sb.Trades
-			if ta != tb {
-				return ta > tb
+// sortSymbols sorts a slice of CombinedStats by the given sort mode.
+func sortSymbols(ss []*CombinedStats, mode int) {
+	regular := mode == SortRegTrades || mode == SortRegGain
+	byGain := mode == SortPreGain || mode == SortRegGain
+	sort.Slice(ss, func(i, j int) bool {
+		si, sj := sessionStats(ss[i], regular), sessionStats(ss[j], regular)
+		if byGain {
+			if si.MaxGain != sj.MaxGain {
+				return si.MaxGain > sj.MaxGain
 			}
-			return sa.Turnover > sb.Turnover
-		})
+			return si.Turnover > sj.Turnover
+		}
+		if si.Trades != sj.Trades {
+			return si.Trades > sj.Trades
+		}
+		return si.Turnover > sj.Turnover
+	})
+}
+
+// ResortDayData re-sorts the symbols within each tier group without
+// recomputing aggregation. Used when toggling sort mode.
+func ResortDayData(d *DayData, sortMode int) {
+	for i := range d.Tiers {
+		sortSymbols(d.Tiers[i].Symbols, sortMode)
 	}
+}
+
+// filterTop10 keeps only stocks that are in the top 10 of any metric
+// (trades, turnover, gain%) in either pre or regular session.
+func filterTop10(ss []*CombinedStats) []*CombinedStats {
+	if len(ss) <= 10 {
+		return ss
+	}
+
+	keep := make(map[string]bool)
+
+	// For each session × metric, sort a copy and mark the top 10.
+	type extractor func(*CombinedStats) float64
+	metrics := []extractor{
+		func(c *CombinedStats) float64 {
+			if c.Pre != nil {
+				return float64(c.Pre.Trades)
+			}
+			return 0
+		},
+		func(c *CombinedStats) float64 {
+			if c.Pre != nil {
+				return c.Pre.Turnover
+			}
+			return 0
+		},
+		func(c *CombinedStats) float64 {
+			if c.Pre != nil {
+				return c.Pre.MaxGain
+			}
+			return 0
+		},
+		func(c *CombinedStats) float64 {
+			if c.Reg != nil {
+				return float64(c.Reg.Trades)
+			}
+			return 0
+		},
+		func(c *CombinedStats) float64 {
+			if c.Reg != nil {
+				return c.Reg.Turnover
+			}
+			return 0
+		},
+		func(c *CombinedStats) float64 {
+			if c.Reg != nil {
+				return c.Reg.MaxGain
+			}
+			return 0
+		},
+	}
+
+	tmp := make([]*CombinedStats, len(ss))
+	for _, fn := range metrics {
+		copy(tmp, ss)
+		sort.Slice(tmp, func(i, j int) bool {
+			return fn(tmp[i]) > fn(tmp[j])
+		})
+		for i := 0; i < 10 && i < len(tmp); i++ {
+			keep[tmp[i].Symbol] = true
+		}
+	}
+
+	result := make([]*CombinedStats, 0, len(keep))
+	for _, c := range ss {
+		if keep[c.Symbol] {
+			result = append(result, c)
+		}
+	}
+	return result
 }
 
 // ComputeDayData builds a complete DayData for a set of trades. It splits by
 // session, aggregates, merges, filters (gain>=10% and trades>=100), groups by
 // tier, and sorts within each tier.
-func ComputeDayData(label string, trades []store.TradeRecord, tierMap map[string]string, open930ET int64, sortByRegular bool) DayData {
+func ComputeDayData(label string, trades []store.TradeRecord, tierMap map[string]string, open930ET int64, sortMode int) DayData {
 	pre, reg := SplitBySession(trades, open930ET)
 	preStats := AggregateTrades(pre)
 	regStats := AggregateTrades(reg)
@@ -182,8 +288,8 @@ func ComputeDayData(label string, trades []store.TradeRecord, tierMap map[string
 	tierCounts := map[string]int{"ACTIVE": 0, "MODERATE": 0, "SPORADIC": 0}
 
 	for sym, c := range combined {
-		preOK := c.Pre != nil && c.Pre.MaxGain >= 0.10 && c.Pre.Trades >= 100
-		regOK := c.Reg != nil && c.Reg.MaxGain >= 0.10 && c.Reg.Trades >= 100
+		preOK := c.Pre != nil && c.Pre.MaxGain >= 0.10 && c.Pre.Trades >= 500
+		regOK := c.Reg != nil && c.Reg.MaxGain >= 0.10 && c.Reg.Trades >= 500
 		if !preOK && !regOK {
 			continue
 		}
@@ -195,16 +301,15 @@ func ComputeDayData(label string, trades []store.TradeRecord, tierMap map[string
 		tierCounts[tier]++
 	}
 
-	// Sort within each tier by trades desc, then turnover desc.
+	// Within each tier, keep only stocks in the top 10 of any metric
+	// (trades, turnover, or gain%) in either session.
+	for tier, ss := range tiers {
+		tiers[tier] = filterTop10(ss)
+	}
+
+	// Sort within each tier.
 	for _, ss := range tiers {
-		sort.Slice(ss, func(i, j int) bool {
-			si, sj := sessionStats(ss[i], sortByRegular), sessionStats(ss[j], sortByRegular)
-			ti, tj := si.Trades, sj.Trades
-			if ti != tj {
-				return ti > tj
-			}
-			return si.Turnover > sj.Turnover
-		})
+		sortSymbols(ss, sortMode)
 	}
 
 	var groups []TierGroup

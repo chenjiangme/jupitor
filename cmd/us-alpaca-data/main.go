@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +18,9 @@ import (
 )
 
 func main() {
+	exIndexOnly := flag.Bool("ex-index-only", false, "only backfill non-ETF, non-index (SPX/NDX) stocks")
+	flag.Parse()
+
 	cfgPath := "config/jupitor.yaml"
 	if p := os.Getenv("JUPITOR_CONFIG"); p != "" {
 		cfgPath = p
@@ -58,10 +62,14 @@ func main() {
 		"reference/us",
 	)
 
+	if *exIndexOnly {
+		gatherer.SetExIndexOnly(true)
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	slog.Info("starting us-alpaca-data daemon", "logFile", logFileName)
+	slog.Info("starting us-alpaca-data daemon", "logFile", logFileName, "exIndexOnly", *exIndexOnly)
 	if err := gatherer.Run(ctx); err != nil {
 		log.Fatalf("daemon error: %v", err)
 	}
