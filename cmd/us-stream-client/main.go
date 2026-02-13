@@ -1,23 +1,271 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
 	"os"
-	"os/signal"
-	"path/filepath"
-	"sort"
 	"strings"
-	"syscall"
 	"time"
-	"unsafe"
 
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"jupitor/internal/dashboard"
 	"jupitor/internal/live"
-	"jupitor/internal/store"
 )
+
+// Styles.
+var (
+	tierActiveStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10")) // green
+	tierModerateStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11")) // yellow
+	tierSporadicStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9"))  // red
+	symbolStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")) // bright blue
+	gainStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))             // green
+	lossStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))              // red
+	headerStyle       = lipgloss.NewStyle().Bold(true)
+	colHeaderStyle    = lipgloss.NewStyle().Bold(true).Underline(true)
+	footerStyle       = lipgloss.NewStyle().Faint(true)
+	dayLabelStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14")) // cyan
+)
+
+func tierStyle(name string) lipgloss.Style {
+	switch name {
+	case "ACTIVE":
+		return tierActiveStyle
+	case "MODERATE":
+		return tierModerateStyle
+	case "SPORADIC":
+		return tierSporadicStyle
+	default:
+		return lipgloss.NewStyle()
+	}
+}
+
+// Messages.
+type tickMsg time.Time
+type syncErrMsg struct{ err error }
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(5*time.Second, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
+// Model.
+type model struct {
+	liveModel     *live.LiveModel
+	tierMap       map[string]string
+	loc           *time.Location
+	todayData     dashboard.DayData
+	nextData      dashboard.DayData
+	seen          int
+	todayCount    int
+	nextCount     int
+	now           time.Time
+	sortByRegular bool
+	viewport      viewport.Model
+	ready         bool
+	width, height int
+	syncCancel    context.CancelFunc
+}
+
+func initialModel(lm *live.LiveModel, tierMap map[string]string, loc *time.Location, cancel context.CancelFunc) model {
+	return model{
+		liveModel:  lm,
+		tierMap:    tierMap,
+		loc:        loc,
+		now:        time.Now().In(loc),
+		syncCancel: cancel,
+	}
+}
+
+func (m model) Init() tea.Cmd {
+	return tickCmd()
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "ctrl+c":
+			m.syncCancel()
+			return m, tea.Quit
+		case "s":
+			m.sortByRegular = !m.sortByRegular
+			m.refreshData()
+			m.viewport.SetContent(m.renderContent())
+			return m, nil
+		}
+
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		headerH := 1
+		footerH := 1
+		vpHeight := m.height - headerH - footerH
+		if vpHeight < 1 {
+			vpHeight = 1
+		}
+		if !m.ready {
+			m.viewport = viewport.New(m.width, vpHeight)
+			m.viewport.MouseWheelEnabled = true
+			m.ready = true
+			m.refreshData()
+			m.viewport.SetContent(m.renderContent())
+		} else {
+			m.viewport.Width = m.width
+			m.viewport.Height = vpHeight
+		}
+		return m, nil
+
+	case tickMsg:
+		m.refreshData()
+		if m.ready {
+			m.viewport.SetContent(m.renderContent())
+		}
+		return m, tickCmd()
+
+	case syncErrMsg:
+		return m, tea.Quit
+	}
+
+	if m.ready {
+		m.viewport, cmd = m.viewport.Update(msg)
+	}
+	return m, cmd
+}
+
+func (m *model) refreshData() {
+	_, todayExIdx := m.liveModel.TodaySnapshot()
+	_, nextExIdx := m.liveModel.NextSnapshot()
+	m.seen = m.liveModel.SeenCount()
+	m.todayCount = len(todayExIdx)
+	m.nextCount = len(nextExIdx)
+	m.now = time.Now().In(m.loc)
+
+	todayOpen930 := time.Date(m.now.Year(), m.now.Month(), m.now.Day(), 9, 30, 0, 0, m.loc).UnixMilli()
+	_, off := m.now.Zone()
+	todayOpen930ET := todayOpen930 + int64(off)*1000
+	nextOpen930ET := todayOpen930ET + 24*60*60*1000
+
+	m.todayData = dashboard.ComputeDayData("TODAY", todayExIdx, m.tierMap, todayOpen930ET, m.sortByRegular)
+	if len(nextExIdx) > 0 {
+		m.nextData = dashboard.ComputeDayData("NEXT DAY", nextExIdx, m.tierMap, nextOpen930ET, m.sortByRegular)
+	} else {
+		m.nextData = dashboard.DayData{}
+	}
+}
+
+func (m model) View() string {
+	if !m.ready {
+		return "Loading..."
+	}
+
+	sortLabel := "PRE"
+	if m.sortByRegular {
+		sortLabel = "REG"
+	}
+
+	header := headerStyle.Render(fmt.Sprintf(
+		"Live Ex-Index Dashboard — %s    (seen: %s  today: %s  next: %s)    [sort: %s]",
+		m.now.Format("2006-01-02 15:04:05 MST"),
+		dashboard.FormatInt(m.seen),
+		dashboard.FormatInt(m.todayCount),
+		dashboard.FormatInt(m.nextCount),
+		sortLabel,
+	))
+
+	pct := m.viewport.ScrollPercent() * 100
+	footer := footerStyle.Render(fmt.Sprintf(
+		"  q quit | s toggle sort | arrows/pgup/pgdn scroll    %.0f%%", pct,
+	))
+
+	return header + "\n" + m.viewport.View() + "\n" + footer
+}
+
+func (m model) renderContent() string {
+	var b strings.Builder
+	renderDay(&b, m.todayData)
+	if m.nextData.Label != "" {
+		b.WriteString("\n")
+		renderDay(&b, m.nextData)
+	}
+	return b.String()
+}
+
+func renderDay(b *strings.Builder, d dashboard.DayData) {
+	b.WriteString(dayLabelStyle.Render(fmt.Sprintf(
+		"========== %s (pre: %s  reg: %s) ==========",
+		d.Label, dashboard.FormatInt(d.PreCount), dashboard.FormatInt(d.RegCount),
+	)))
+	b.WriteString("\n")
+
+	for _, tier := range d.Tiers {
+		b.WriteString("\n")
+		style := tierStyle(tier.Name)
+		b.WriteString(style.Render(tier.Name))
+		b.WriteString(fmt.Sprintf("    %s symbols\n", dashboard.FormatInt(tier.Count)))
+
+		b.WriteString(colHeaderStyle.Render(fmt.Sprintf(
+			"  %-3s %-8s | %7s %7s %6s %6s %6s %9s | %7s %7s %6s %6s %6s %9s",
+			"#", "Symbol",
+			"preO", "preC", "Gain%", "Loss%", "Trd", "TO",
+			"regO", "regC", "Gain%", "Loss%", "Trd", "TO",
+		)))
+		b.WriteString("\n")
+
+		for i, c := range tier.Symbols {
+			// Pad text first, then apply color (ANSI codes break width counting).
+			num := fmt.Sprintf("  %-3d ", i+1)
+			sym := fmt.Sprintf("%-8s", c.Symbol)
+			b.WriteString(num)
+			b.WriteString(symbolStyle.Render(sym))
+			b.WriteString(" | ")
+			writeSessionCols(b, c.Pre)
+			b.WriteString(" | ")
+			writeSessionCols(b, c.Reg)
+			b.WriteString("\n")
+		}
+	}
+}
+
+func writeSessionCols(b *strings.Builder, s *dashboard.SymbolStats) {
+	if s == nil {
+		b.WriteString(fmt.Sprintf("%7s %7s %6s %6s %6s %9s", "-", "-", "-", "-", "-", "-"))
+		return
+	}
+	b.WriteString(fmt.Sprintf("%7s %7s ",
+		dashboard.FormatPrice(s.Open),
+		dashboard.FormatPrice(s.Close),
+	))
+
+	gain := dashboard.FormatGain(s.MaxGain)
+	loss := dashboard.FormatLoss(s.MaxLoss)
+
+	// Pad before coloring so width is correct.
+	gainPad := fmt.Sprintf("%6s", gain)
+	lossPad := fmt.Sprintf("%6s", loss)
+	if gain != "" {
+		b.WriteString(gainStyle.Render(gainPad))
+	} else {
+		b.WriteString(gainPad)
+	}
+	b.WriteString(" ")
+	if loss != "" {
+		b.WriteString(lossStyle.Render(lossPad))
+	} else {
+		b.WriteString(lossPad)
+	}
+
+	b.WriteString(fmt.Sprintf(" %6s %9s",
+		dashboard.FormatInt(s.Trades),
+		dashboard.FormatTurnover(s.Turnover),
+	))
+}
 
 func main() {
 	dataDir := os.Getenv("DATA_1")
@@ -31,21 +279,26 @@ func main() {
 		addr = a
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
-	// Load tier map from latest trade-universe CSV.
-	tierMap, err := loadTierMap(dataDir)
+	// Logger writes to file since bubbletea owns stdout.
+	logPath := fmt.Sprintf("/tmp/us-stream-client-%s.log", time.Now().Format("2006-01-02"))
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		logger.Error("loading tier map", "error", err)
+		fmt.Fprintf(os.Stderr, "opening log file: %v\n", err)
+		os.Exit(1)
+	}
+	defer logFile.Close()
+	logger := slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	tierMap, err := dashboard.LoadTierMap(dataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "loading tier map: %v\n", err)
 		os.Exit(1)
 	}
 	logger.Info("loaded tier map", "symbols", len(tierMap))
 
-	// Compute today's cutoff = 4PM ET in ET-shifted millisecond frame
-	// (must match how the stream server stores timestamps via utcToETMilli).
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
-		logger.Error("loading timezone", "error", err)
+		fmt.Fprintf(os.Stderr, "loading timezone: %v\n", err)
 		os.Exit(1)
 	}
 	now := time.Now().In(loc)
@@ -53,376 +306,30 @@ func main() {
 	_, offset := close4pm.Zone()
 	todayCutoff := close4pm.UnixMilli() + int64(offset)*1000
 
-	model := live.NewLiveModel(todayCutoff)
-	client := live.NewClient(addr, model, logger)
+	lm := live.NewLiveModel(todayCutoff)
+	client := live.NewClient(addr, lm, logger)
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start sync in background.
+	// Start gRPC sync in background.
 	go func() {
 		if err := client.Sync(ctx); err != nil && ctx.Err() == nil {
 			logger.Error("sync error", "error", err)
-			cancel()
 		}
 	}()
 
-	// Enable raw mode for 'q' to quit (non-fatal if not a terminal).
-	restore, rawErr := enableRawMode()
-	if rawErr != nil {
-		logger.Warn("raw mode unavailable, q to quit disabled", "error", rawErr)
-	} else {
-		defer restore()
-		go func() {
-			buf := make([]byte, 1)
-			for {
-				n, err := os.Stdin.Read(buf)
-				if err != nil || n == 0 {
-					return
-				}
-				if buf[0] == 'q' || buf[0] == 'Q' {
-					cancel()
-					return
-				}
-			}
-		}()
+	// Wait briefly for initial data.
+	time.Sleep(2 * time.Second)
+
+	p := tea.NewProgram(
+		initialModel(lm, tierMap, loc, cancel),
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
+	)
+
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
-
-	// Wait briefly for initial data, then start refresh loop.
-	select {
-	case <-time.After(2 * time.Second):
-	case <-ctx.Done():
-		return
-	}
-	printDashboard(model, tierMap, loc)
-
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			printDashboard(model, tierMap, loc)
-		case <-ctx.Done():
-			fmt.Println("\nshutdown")
-			return
-		}
-	}
-}
-
-// symbolStats holds aggregated trade statistics for a single symbol.
-type symbolStats struct {
-	Symbol    string
-	Trades    int
-	High      float64
-	Low       float64
-	Open      float64 // first trade price (by timestamp)
-	Close     float64 // last trade price (by timestamp)
-	TotalSize int64
-	Turnover  float64 // sum(price * size)
-	MaxGain   float64 // max possible gain over all (buy, sell) pairs where sell is after buy
-	MaxLoss   float64 // max possible loss over all (buy, sell) pairs where sell is after buy
-}
-
-func printDashboard(model *live.LiveModel, tierMap map[string]string, loc *time.Location) {
-	_, todayExIdx := model.TodaySnapshot()
-	_, nextExIdx := model.NextSnapshot()
-	seen := model.SeenCount()
-
-	now := time.Now().In(loc)
-	todayOpen930 := time.Date(now.Year(), now.Month(), now.Day(), 9, 30, 0, 0, loc).UnixMilli()
-	_, off := now.Zone()
-	todayOpen930ET := todayOpen930 + int64(off)*1000
-	// Next day's 9:30 AM — post-market trades are all pre-market for next day.
-	nextOpen930ET := todayOpen930ET + 24*60*60*1000
-
-	// Clear screen and print header.
-	fmt.Print("\033[H\033[2J")
-	fmt.Printf("Live Ex-Index Dashboard — %s    (seen: %s  today: %s  next: %s)\n",
-		now.Format("2006-01-02 15:04:05 MST"),
-		formatInt(seen), formatInt(len(todayExIdx)), formatInt(len(nextExIdx)))
-
-	// TODAY section.
-	printDay("TODAY", todayExIdx, tierMap, todayOpen930ET)
-
-	// NEXT DAY section.
-	if len(nextExIdx) > 0 {
-		printDay("NEXT DAY", nextExIdx, tierMap, nextOpen930ET)
-	}
-}
-
-func printDay(label string, trades []store.TradeRecord, tierMap map[string]string, open930ET int64) {
-	var preTrades, regTrades []store.TradeRecord
-	for i := range trades {
-		if trades[i].Timestamp < open930ET {
-			preTrades = append(preTrades, trades[i])
-		} else {
-			regTrades = append(regTrades, trades[i])
-		}
-	}
-
-	preStats := aggregateTrades(preTrades)
-	regStats := aggregateTrades(regTrades)
-
-	fmt.Printf("\n========== %s (pre: %s  reg: %s) ==========\n",
-		label, formatInt(len(preTrades)), formatInt(len(regTrades)))
-
-	for _, session := range []struct {
-		name  string
-		stats map[string]*symbolStats
-	}{
-		{"PRE-MARKET", preStats},
-		{"REGULAR", regStats},
-	} {
-		if len(session.stats) == 0 {
-			continue
-		}
-		fmt.Printf("\n--- %s ---\n", session.name)
-		printSession(session.stats, tierMap)
-	}
-}
-
-func printSession(stats map[string]*symbolStats, tierMap map[string]string) {
-	tiers := map[string][]*symbolStats{
-		"ACTIVE":   {},
-		"MODERATE": {},
-		"SPORADIC": {},
-	}
-	tierCounts := map[string]int{"ACTIVE": 0, "MODERATE": 0, "SPORADIC": 0}
-
-	for sym, s := range stats {
-		tier, ok := tierMap[sym]
-		if !ok {
-			continue
-		}
-		tiers[tier] = append(tiers[tier], s)
-		tierCounts[tier]++
-	}
-
-	for _, ss := range tiers {
-		sort.Slice(ss, func(i, j int) bool {
-			return ss[i].Trades > ss[j].Trades
-		})
-	}
-
-	for _, tier := range []string{"ACTIVE", "MODERATE", "SPORADIC"} {
-		ss := tiers[tier]
-		if tierCounts[tier] == 0 {
-			continue
-		}
-		fmt.Printf("%s (top 10 by trades)%stotal: %s symbols\n",
-			tier, strings.Repeat(" ", 40-len(tier)-len("(top 10 by trades)")), formatInt(tierCounts[tier]))
-		fmt.Printf("  %-3s %-8s %8s %8s %8s %8s %8s %8s %12s %7s %7s\n",
-			"#", "Symbol", "O", "H", "L", "C", "VWAP", "Trades", "Turnover", "Gain%", "Loss%")
-
-		n := len(ss)
-		if n > 10 {
-			n = 10
-		}
-		for i := 0; i < n; i++ {
-			s := ss[i]
-			vwap := 0.0
-			if s.TotalSize > 0 {
-				vwap = s.Turnover / float64(s.TotalSize)
-			}
-			gain := ""
-			if s.MaxGain > 0 {
-				gain = fmt.Sprintf("+%.1f%%", s.MaxGain*100)
-			}
-			loss := ""
-			if s.MaxLoss > 0 {
-				loss = fmt.Sprintf("-%.1f%%", s.MaxLoss*100)
-			}
-			fmt.Printf("  %-3d %-8s %8s %8s %8s %8s %8s %8s %12s %7s %7s\n",
-				i+1,
-				s.Symbol,
-				formatPrice(s.Open),
-				formatPrice(s.High),
-				formatPrice(s.Low),
-				formatPrice(s.Close),
-				formatPrice(vwap),
-				formatInt(s.Trades),
-				formatTurnover(s.Turnover),
-				gain,
-				loss,
-			)
-		}
-		fmt.Println()
-	}
-}
-
-func aggregateTrades(records []store.TradeRecord) map[string]*symbolStats {
-	// Group record indices by symbol.
-	groups := make(map[string][]int)
-	for i := range records {
-		sym := records[i].Symbol
-		groups[sym] = append(groups[sym], i)
-	}
-
-	m := make(map[string]*symbolStats, len(groups))
-	for sym, indices := range groups {
-		// Sort by timestamp so we can compute temporal max gain/loss.
-		sort.Slice(indices, func(a, b int) bool {
-			return records[indices[a]].Timestamp < records[indices[b]].Timestamp
-		})
-
-		s := &symbolStats{
-			Symbol: sym,
-			Low:    math.MaxFloat64,
-		}
-		minPrice := math.MaxFloat64
-		maxPrice := 0.0
-
-		for j, idx := range indices {
-			r := &records[idx]
-			s.Trades++
-			s.Turnover += r.Price * float64(r.Size)
-			s.TotalSize += r.Size
-			if r.Price > s.High {
-				s.High = r.Price
-			}
-			if r.Price < s.Low {
-				s.Low = r.Price
-			}
-			if j == 0 {
-				s.Open = r.Price
-			}
-			s.Close = r.Price
-
-			// Max gain: buy at lowest seen so far, sell now.
-			if r.Price < minPrice {
-				minPrice = r.Price
-			}
-			if minPrice > 0 {
-				if g := (r.Price - minPrice) / minPrice; g > s.MaxGain {
-					s.MaxGain = g
-				}
-			}
-			// Max loss: buy at highest seen so far, sell now.
-			if r.Price > maxPrice {
-				maxPrice = r.Price
-			}
-			if maxPrice > 0 {
-				if l := (maxPrice - r.Price) / maxPrice; l > s.MaxLoss {
-					s.MaxLoss = l
-				}
-			}
-		}
-		m[sym] = s
-	}
-	return m
-}
-
-// loadTierMap reads the latest trade-universe CSV and returns symbol→tier
-// for ex-index stocks (non-empty tier field).
-func loadTierMap(dataDir string) (map[string]string, error) {
-	dir := filepath.Join(dataDir, "us", "trade-universe")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("reading trade-universe dir: %w", err)
-	}
-
-	// Find latest CSV by name (lexicographic = chronological for YYYY-MM-DD).
-	var latest string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".csv") {
-			continue
-		}
-		if e.Name() > latest {
-			latest = e.Name()
-		}
-	}
-	if latest == "" {
-		return nil, fmt.Errorf("no trade-universe CSV files found in %s", dir)
-	}
-
-	path := filepath.Join(dir, latest)
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	tierMap := make(map[string]string)
-	scanner := bufio.NewScanner(f)
-	first := true
-	for scanner.Scan() {
-		if first {
-			first = false
-			continue // skip header
-		}
-		fields := strings.Split(scanner.Text(), ",")
-		if len(fields) < 5 {
-			continue
-		}
-		tier := strings.TrimSpace(fields[4])
-		if tier != "" {
-			tierMap[fields[0]] = tier
-		}
-	}
-
-	slog.Info("loaded trade-universe CSV", "file", latest, "exIndexSymbols", len(tierMap))
-	return tierMap, scanner.Err()
-}
-
-func formatInt(n int) string {
-	s := fmt.Sprintf("%d", n)
-	if len(s) <= 3 {
-		return s
-	}
-	var b strings.Builder
-	start := len(s) % 3
-	if start > 0 {
-		b.WriteString(s[:start])
-	}
-	for i := start; i < len(s); i += 3 {
-		if b.Len() > 0 {
-			b.WriteByte(',')
-		}
-		b.WriteString(s[i : i+3])
-	}
-	return b.String()
-}
-
-func formatTurnover(v float64) string {
-	switch {
-	case v >= 1e9:
-		return fmt.Sprintf("$%.1fB", v/1e9)
-	case v >= 1e6:
-		return fmt.Sprintf("$%.1fM", v/1e6)
-	case v >= 1e3:
-		return fmt.Sprintf("$%.1fK", v/1e3)
-	default:
-		return fmt.Sprintf("$%.0f", v)
-	}
-}
-
-func formatPrice(p float64) string {
-	if p == math.MaxFloat64 || p == 0 {
-		return "-"
-	}
-	return fmt.Sprintf("$%.2f", p)
-}
-
-// enableRawMode puts stdin into raw mode so single keypresses can be read.
-// Returns a restore function that must be called on exit.
-func enableRawMode() (restore func(), err error) {
-	fd := int(os.Stdin.Fd())
-	var orig syscall.Termios
-	if _, _, e := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd),
-		uintptr(syscall.TIOCGETA), uintptr(unsafe.Pointer(&orig)), 0, 0, 0); e != 0 {
-		return nil, fmt.Errorf("TIOCGETA: %w", e)
-	}
-	raw := orig
-	raw.Lflag &^= syscall.ICANON | syscall.ECHO
-	raw.Cc[syscall.VMIN] = 1
-	raw.Cc[syscall.VTIME] = 0
-	if _, _, e := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd),
-		uintptr(syscall.TIOCSETA), uintptr(unsafe.Pointer(&raw)), 0, 0, 0); e != 0 {
-		return nil, fmt.Errorf("TIOCSETA: %w", e)
-	}
-	return func() {
-		syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd),
-			uintptr(syscall.TIOCSETA), uintptr(unsafe.Pointer(&orig)), 0, 0, 0)
-	}, nil
 }
