@@ -3,15 +3,17 @@ from __future__ import annotations
 
 """cn-baostock-data: daemon for China A-share data collection via BaoStock.
 
-Collects CSI 300/500 constituent history, daily bars, 30-minute bars, and
-quarterly fundamentals. Uses 4 worker processes for parallel BaoStock queries.
+Collects CSI 300/500 constituent history, daily bars, 30-minute bars, 5-minute
+bars, and quarterly fundamentals. Uses 4 worker processes for parallel BaoStock
+queries.
 
 Priority:
   1. Build CSI 300 + CSI 500 constituent history (as far back as BaoStock allows)
   2. Daily: update today's bars + detect new index additions → backfill new symbols
   3. Backfill full daily bar history for all unique symbols ever in either index
   4. Backfill 30-minute bars (from 2019 onwards)
-  5. Backfill quarterly fundamentals (from 2007 onwards)
+  5. Backfill 5-minute bars (from 2019 onwards)
+  6. Backfill quarterly fundamentals (from 2007 onwards)
 
 Storage layout:
   $DATA_1/cn/index/csi300/YYYY-MM-DD.txt            (sorted symbol list)
@@ -19,6 +21,7 @@ Storage layout:
   $DATA_1/cn/daily/<SYMBOL>/YYYY.parquet             (all 18 BaoStock fields)
   $DATA_1/cn/daily/.last-completed                   (date of last daily update)
   $DATA_1/cn/30min/<SYMBOL>/YYYY.parquet             (30-min bars, from 2019)
+  $DATA_1/cn/5min/<SYMBOL>/YYYY.parquet              (5-min bars, from 2019)
   $DATA_1/cn/fundamentals/{type}/<SYMBOL>.parquet    (quarterly, from 2007)
 
 Usage:
@@ -87,10 +90,10 @@ _INDEXES = {
 }
 
 # ---------------------------------------------------------------------------
-# 30-minute bar schema (BaoStock provides 30-min data from 2019 onwards)
+# Intraday bar schema (BaoStock 5-min and 30-min, available from 2019 onwards)
 # ---------------------------------------------------------------------------
 
-BAR_30MIN_SCHEMA = pa.schema([
+INTRADAY_SCHEMA = pa.schema([
     ("symbol",     pa.string()),      # "sh.600000"
     ("date",       pa.string()),      # "2026-02-10"
     ("time",       pa.string()),      # "20260210100000000"
@@ -103,10 +106,11 @@ BAR_30MIN_SCHEMA = pa.schema([
     ("adjustflag", pa.string()),
 ])
 
-BAR_30MIN_FIELDS = "date,time,code,open,high,low,close,volume,amount,adjustflag"
+INTRADAY_FIELDS = "date,time,code,open,high,low,close,volume,amount,adjustflag"
 BAR_30MIN_START = "2019-01-01"
+BAR_5MIN_START = "2019-01-01"
 
-_30MIN_FLOAT_COLUMNS = {"open", "high", "low", "close", "amount"}
+_INTRADAY_FLOAT_COLUMNS = {"open", "high", "low", "close", "amount"}
 
 # ---------------------------------------------------------------------------
 # Quarterly fundamentals (6 types, BaoStock data from 2007 onwards)
@@ -236,20 +240,23 @@ def _query_daily_bars(symbol: str, start_date: str, end_date: str) -> list[dict]
     return rows
 
 
-def _query_30min_bars(symbol: str, start_date: str, end_date: str) -> list[dict]:
-    """Query 30-minute bars for a single symbol from BaoStock."""
+def _query_intraday_bars(symbol: str, start_date: str, end_date: str, frequency: str) -> list[dict]:
+    """Query intraday bars for a single symbol from BaoStock.
+
+    frequency: "5" for 5-min, "30" for 30-min.
+    """
     rs = bs.query_history_k_data_plus(
         code=symbol,
-        fields=BAR_30MIN_FIELDS,
+        fields=INTRADAY_FIELDS,
         start_date=start_date,
         end_date=end_date,
-        frequency="30",
+        frequency=frequency,
         adjustflag="3",
     )
     if rs.error_code != "0":
         return []
 
-    field_names = BAR_30MIN_FIELDS.split(",")
+    field_names = INTRADAY_FIELDS.split(",")
     rows = []
     while rs.next():
         raw = rs.get_row_data()
@@ -261,7 +268,7 @@ def _query_30min_bars(symbol: str, start_date: str, end_date: str) -> list[dict]
                 row["symbol"] = val
             elif name == "volume":
                 row["volume"] = int(val) if val else 0
-            elif name in _30MIN_FLOAT_COLUMNS:
+            elif name in _INTRADAY_FLOAT_COLUMNS:
                 row[name] = float(val) if val else 0.0
             else:
                 row[name] = val
@@ -320,15 +327,16 @@ def _task_fetch_bars(args: tuple) -> tuple:
     return (symbol, 0)
 
 
-def _task_fetch_30min(args: tuple) -> tuple:
-    """Worker task: fetch and write 30-min bars for one symbol.
+def _task_fetch_intraday(args: tuple) -> tuple:
+    """Worker task: fetch and write intraday bars for one symbol.
 
+    args: (symbol, fetch_start, fetch_end, bar_dir_str, frequency)
     Returns (symbol, num_bars_written).
     """
-    symbol, fetch_start, fetch_end, bar_dir_str = args
+    symbol, fetch_start, fetch_end, bar_dir_str, frequency = args
     bar_dir = Path(bar_dir_str)
 
-    rows = _query_30min_bars(symbol, fetch_start, fetch_end)
+    rows = _query_intraday_bars(symbol, fetch_start, fetch_end, frequency)
     if rows:
         by_year: dict[str, list[dict]] = {}
         for r in rows:
@@ -336,7 +344,7 @@ def _task_fetch_30min(args: tuple) -> tuple:
             by_year.setdefault(year, []).append(r)
         for year, year_rows in by_year.items():
             path = bar_dir / symbol / f"{year}.parquet"
-            _write_30min_parquet(path, year_rows)
+            _write_intraday_parquet(path, year_rows)
         return (symbol, len(rows))
     return (symbol, 0)
 
@@ -454,14 +462,14 @@ def _read_latest_bar_date(symbol: str, daily_dir: Path) -> str | None:
     return None
 
 
-def _write_30min_parquet(path: Path, rows: list[dict]):
-    """Write 30-min bars to parquet with merge-on-write dedup on (symbol, date, time)."""
+def _write_intraday_parquet(path: Path, rows: list[dict]):
+    """Write intraday bars to parquet with merge-on-write dedup on (symbol, date, time)."""
     path.parent.mkdir(parents=True, exist_ok=True)
 
     existing_rows = []
     if path.exists():
         try:
-            table = pq.read_table(path, schema=BAR_30MIN_SCHEMA)
+            table = pq.read_table(path, schema=INTRADAY_SCHEMA)
             existing_rows = table.to_pylist()
         except Exception:
             pass
@@ -475,16 +483,16 @@ def _write_30min_parquet(path: Path, rows: list[dict]):
     merged = sorted(by_key.values(), key=lambda r: (r["date"], r["time"]))
 
     arrays = []
-    for field in BAR_30MIN_SCHEMA:
+    for field in INTRADAY_SCHEMA:
         col = [r.get(field.name) for r in merged]
         arrays.append(pa.array(col, type=field.type))
 
-    table = pa.table(arrays, schema=BAR_30MIN_SCHEMA)
+    table = pa.table(arrays, schema=INTRADAY_SCHEMA)
     pq.write_table(table, path)
 
 
-def _read_latest_30min_date(symbol: str, bar_dir: Path) -> str | None:
-    """Find the latest 30-min bar date for a symbol from its parquet files."""
+def _read_latest_intraday_date(symbol: str, bar_dir: Path) -> str | None:
+    """Find the latest intraday bar date for a symbol from its parquet files."""
     sym_dir = bar_dir / symbol
     if not sym_dir.exists():
         return None
@@ -598,6 +606,23 @@ def _all_index_symbols(data_dir: Path) -> list[str]:
     return sorted(symbols)
 
 
+def _symbol_last_index_date(data_dir: Path) -> dict[str, str]:
+    """Build a map of symbol -> latest date the symbol appeared in any index.
+
+    Used to cap backfill end dates: once a symbol leaves all indices,
+    there's no need to fetch bars beyond that date.
+    """
+    last_date: dict[str, str] = {}
+    for index_name in _INDEXES:
+        index_dir = data_dir / "cn" / "index" / index_name
+        for f in sorted(index_dir.glob("*.txt")):
+            d = f.stem  # "YYYY-MM-DD"
+            for sym in _read_index_file(f):
+                if sym not in last_date or d > last_date[sym]:
+                    last_date[sym] = d
+    return last_date
+
+
 # ---------------------------------------------------------------------------
 # Daemon
 # ---------------------------------------------------------------------------
@@ -608,6 +633,7 @@ class CNBaoStockDaemon:
         self.start_date = start_date
         self.daily_dir = self.data_dir / "cn" / "daily"
         self.bar_30min_dir = self.data_dir / "cn" / "30min"
+        self.bar_5min_dir = self.data_dir / "cn" / "5min"
         self.fund_dir = self.data_dir / "cn" / "fundamentals"
         self._daily_update_done_today = None
 
@@ -636,7 +662,11 @@ class CNBaoStockDaemon:
                 if not did_work:
                     did_work = self._30min_backfill()
 
-                # 5. Fundamentals backfill
+                # 5. 5-minute bar backfill
+                if not did_work:
+                    did_work = self._5min_backfill()
+
+                # 6. Fundamentals backfill
                 if not did_work:
                     did_work = self._fundamentals_backfill()
 
@@ -734,27 +764,31 @@ class CNBaoStockDaemon:
     def _bar_backfill(self) -> bool:
         """Backfill bars for all symbols missing data, using 4 workers.
 
+        Each symbol's fetch end date is capped to the latest date it appeared
+        in CSI 300/500, so removed/delisted symbols don't spin forever.
+
         Returns True if work was done.
         """
-        all_symbols = _all_index_symbols(self.data_dir)
-        if not all_symbols:
+        last_index = _symbol_last_index_date(self.data_dir)
+        if not last_index:
             return False
 
         today_str = date.today().isoformat()
 
         # Build work list: symbols needing bar data
         work = []
-        for symbol in all_symbols:
+        for symbol in sorted(last_index):
+            end_date = min(last_index[symbol], today_str)
             latest = _read_latest_bar_date(symbol, self.daily_dir)
-            if latest is not None and latest >= today_str:
+            if latest is not None and latest >= end_date:
                 continue
             if latest is None:
                 fetch_start = self.start_date
             else:
                 fetch_start = (date.fromisoformat(latest) + timedelta(days=1)).isoformat()
-            if fetch_start > today_str:
+            if fetch_start > end_date:
                 continue
-            work.append((symbol, fetch_start, today_str, str(self.daily_dir)))
+            work.append((symbol, fetch_start, end_date, str(self.daily_dir)))
 
         if not work:
             return False
@@ -785,36 +819,67 @@ class CNBaoStockDaemon:
     def _30min_backfill(self) -> bool:
         """Backfill 30-minute bars for all symbols, using 4 workers.
 
+        Each symbol's fetch end date is capped to the latest date it appeared
+        in CSI 300/500, so removed/delisted symbols don't spin forever.
+
         Returns True if work was done.
         """
-        all_symbols = _all_index_symbols(self.data_dir)
-        if not all_symbols:
+        return self._intraday_backfill(
+            bar_dir=self.bar_30min_dir,
+            frequency="30",
+            start_date=BAR_30MIN_START,
+            label="30min",
+        )
+
+    def _5min_backfill(self) -> bool:
+        """Backfill 5-minute bars for all symbols, using 4 workers.
+
+        Each symbol's fetch end date is capped to the latest date it appeared
+        in CSI 300/500, so removed/delisted symbols don't spin forever.
+
+        Returns True if work was done.
+        """
+        return self._intraday_backfill(
+            bar_dir=self.bar_5min_dir,
+            frequency="5",
+            start_date=BAR_5MIN_START,
+            label="5min",
+        )
+
+    def _intraday_backfill(self, bar_dir: Path, frequency: str, start_date: str, label: str) -> bool:
+        """Backfill intraday bars for all symbols at a given frequency.
+
+        Returns True if work was done.
+        """
+        last_index = _symbol_last_index_date(self.data_dir)
+        if not last_index:
             return False
 
         today_str = date.today().isoformat()
 
         work = []
-        for symbol in all_symbols:
-            latest = _read_latest_30min_date(symbol, self.bar_30min_dir)
-            if latest is not None and latest >= today_str:
+        for symbol in sorted(last_index):
+            end_date = min(last_index[symbol], today_str)
+            latest = _read_latest_intraday_date(symbol, bar_dir)
+            if latest is not None and latest >= end_date:
                 continue
             if latest is None:
-                fetch_start = BAR_30MIN_START
+                fetch_start = start_date
             else:
                 fetch_start = (date.fromisoformat(latest) + timedelta(days=1)).isoformat()
-            if fetch_start > today_str:
+            if fetch_start > end_date:
                 continue
-            work.append((symbol, fetch_start, today_str, str(self.bar_30min_dir)))
+            work.append((symbol, fetch_start, end_date, str(bar_dir), frequency))
 
         if not work:
             return False
 
-        log.info("30min backfill: %d symbols to process with %d workers", len(work), NUM_WORKERS)
+        log.info("%s backfill: %d symbols to process with %d workers", label, len(work), NUM_WORKERS)
 
         total_bars = 0
         with multiprocessing.Pool(NUM_WORKERS, initializer=_worker_init) as pool:
             done = 0
-            for result in pool.imap_unordered(_task_fetch_30min, work, chunksize=1):
+            for result in pool.imap_unordered(_task_fetch_intraday, work, chunksize=1):
                 if _shutdown:
                     pool.terminate()
                     break
@@ -822,9 +887,9 @@ class CNBaoStockDaemon:
                 sym, count = result
                 total_bars += count
                 if count > 0:
-                    log.info("30min %s: %d bars (%d/%d)", sym, count, done, len(work))
+                    log.info("%s %s: %d bars (%d/%d)", label, sym, count, done, len(work))
                 if done % 50 == 0 and count == 0:
-                    log.info("30min backfill progress: %d/%d symbols done", done, len(work))
+                    log.info("%s backfill progress: %d/%d symbols done", label, done, len(work))
 
         return total_bars > 0
 
@@ -929,7 +994,7 @@ class CNBaoStockDaemon:
                 self._daily_update_done_today = today
                 return False
 
-        cutoff_hour, cutoff_min = 16, 30
+        cutoff_hour, cutoff_min = 20, 0
         if now.hour < cutoff_hour or (now.hour == cutoff_hour and now.minute < cutoff_min):
             return False
 
