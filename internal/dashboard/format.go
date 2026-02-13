@@ -48,30 +48,20 @@ func FormatPrice(p float64) string {
 	return fmt.Sprintf("%.2f", p)
 }
 
-// FormatGain formats a gain percentage as "+X.X%", or "" if zero.
-// Drops decimal for values >= 100% to keep width compact.
+// FormatGain formats a gain percentage as "+X%", or "" if zero.
 func FormatGain(g float64) string {
 	if g <= 0 {
 		return ""
 	}
-	pct := g * 100
-	if pct >= 100 {
-		return fmt.Sprintf("+%.0f%%", pct)
-	}
-	return fmt.Sprintf("+%.1f%%", pct)
+	return fmt.Sprintf("+%.0f%%", g*100)
 }
 
-// FormatLoss formats a loss percentage as "-X.X%", or "" if zero.
-// Drops decimal for values >= 100% to keep width compact.
+// FormatLoss formats a loss percentage as "-X%", or "" if zero.
 func FormatLoss(l float64) string {
 	if l <= 0 {
 		return ""
 	}
-	pct := l * 100
-	if pct >= 100 {
-		return fmt.Sprintf("-%.0f%%", pct)
-	}
-	return fmt.Sprintf("-%.1f%%", pct)
+	return fmt.Sprintf("-%.0f%%", l*100)
 }
 
 // FormatCount formats a trade count, using K suffix for large values.
