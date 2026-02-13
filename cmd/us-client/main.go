@@ -456,21 +456,31 @@ func (m model) renderContent() string {
 			b.WriteString(dimStyle.Render("  Loading..."))
 			b.WriteString("\n")
 		} else {
-			renderDay(&b, m.historyData, m.width, false)
+			renderDay(&b, m.historyData, m.width)
 		}
 	} else {
-		renderDay(&b, m.todayData, m.width, false)
+		renderDay(&b, m.todayData, m.width)
 		if m.nextData.Label != "" {
 			b.WriteString("\n")
-			renderDay(&b, m.nextData, m.width, true)
+			renderDay(&b, m.nextData, m.width)
 		}
 	}
 	return b.String()
 }
 
-func renderDay(b *strings.Builder, d dashboard.DayData, width int, preOnly bool) {
-	labelText := fmt.Sprintf("  %s    pre: %s    reg: %s  ",
-		d.Label, dashboard.FormatInt(d.PreCount), dashboard.FormatInt(d.RegCount))
+func renderDay(b *strings.Builder, d dashboard.DayData, width int) {
+	hasPre := d.PreCount > 0
+	hasReg := d.RegCount > 0
+
+	// Build day label with only non-zero session counts.
+	labelParts := []string{"  " + d.Label}
+	if hasPre {
+		labelParts = append(labelParts, fmt.Sprintf("pre: %s", dashboard.FormatInt(d.PreCount)))
+	}
+	if hasReg {
+		labelParts = append(labelParts, fmt.Sprintf("reg: %s", dashboard.FormatInt(d.RegCount)))
+	}
+	labelText := strings.Join(labelParts, "    ") + "  "
 	b.WriteString(dayLabelStyle.Width(width).Render(labelText))
 	b.WriteString("\n")
 
@@ -491,18 +501,21 @@ func renderDay(b *strings.Builder, d dashboard.DayData, width int, preOnly bool)
 		}
 		b.WriteString("\n")
 
+		// Column headers: show PRE and/or REG based on data.
+		sessionHdr := "%7s %7s %7s %7s %6s %9s %7s %7s"
 		var colLine string
-		if preOnly {
+		switch {
+		case hasPre && hasReg:
 			colLine = fmt.Sprintf(
-				"  %-3s %-8s  %7s %7s %7s %7s %6s %9s %7s %7s",
+				"  %-3s %-8s  "+sessionHdr+"  "+sessionHdr,
 				"#", "Symbol",
+				"Open", "High", "Low", "Close", "Trd", "TO", "Gain%", "Loss%",
 				"Open", "High", "Low", "Close", "Trd", "TO", "Gain%", "Loss%",
 			)
-		} else {
+		default:
 			colLine = fmt.Sprintf(
-				"  %-3s %-8s  %7s %7s %7s %7s %6s %9s %7s %7s  %7s %7s %7s %7s %6s %9s %7s %7s",
+				"  %-3s %-8s  "+sessionHdr,
 				"#", "Symbol",
-				"Open", "High", "Low", "Close", "Trd", "TO", "Gain%", "Loss%",
 				"Open", "High", "Low", "Close", "Trd", "TO", "Gain%", "Loss%",
 			)
 		}
@@ -515,9 +528,13 @@ func renderDay(b *strings.Builder, d dashboard.DayData, width int, preOnly bool)
 			b.WriteString(dimStyle.Render(num))
 			b.WriteString(symbolStyle.Render(sym))
 			b.WriteString("  ")
-			writeSessionCols(b, c.Pre)
-			if !preOnly {
+			if hasPre && hasReg {
+				writeSessionCols(b, c.Pre)
 				b.WriteString("  ")
+				writeSessionCols(b, c.Reg)
+			} else if hasPre {
+				writeSessionCols(b, c.Pre)
+			} else {
 				writeSessionCols(b, c.Reg)
 			}
 			b.WriteString("\n")

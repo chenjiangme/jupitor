@@ -149,40 +149,55 @@ func printDashboard(model *live.LiveModel, tierMap map[string]string, loc *time.
 		dashboard.FormatInt(seen), dashboard.FormatInt(len(todayExIdx)), dashboard.FormatInt(len(nextExIdx)), sortLabel)
 
 	todayData := dashboard.ComputeDayData("TODAY", todayExIdx, tierMap, todayOpen930ET, byReg)
-	printDay(todayData, false)
+	printDay(todayData)
 
 	if len(nextExIdx) > 0 {
 		nextData := dashboard.ComputeDayData("NEXT DAY", nextExIdx, tierMap, nextOpen930ET, false)
-		printDay(nextData, true)
+		printDay(nextData)
 	}
 }
 
-func printDay(d dashboard.DayData, preOnly bool) {
-	fmt.Printf("\n========== %s (pre: %s  reg: %s) ==========\n",
-		d.Label, dashboard.FormatInt(d.PreCount), dashboard.FormatInt(d.RegCount))
+func printDay(d dashboard.DayData) {
+	hasPre := d.PreCount > 0
+	hasReg := d.RegCount > 0
 
+	// Build label with only non-zero session counts.
+	label := fmt.Sprintf("\n========== %s", d.Label)
+	if hasPre {
+		label += fmt.Sprintf("  pre: %s", dashboard.FormatInt(d.PreCount))
+	}
+	if hasReg {
+		label += fmt.Sprintf("  reg: %s", dashboard.FormatInt(d.RegCount))
+	}
+	fmt.Println(label + " ==========")
+
+	sessionHdr := "%7s %7s %7s %7s %6s %9s %7s %7s"
 	for _, tier := range d.Tiers {
 		fmt.Printf("\n%s    %s symbols\n", tier.Name, dashboard.FormatInt(tier.Count))
-		if preOnly {
-			fmt.Printf("  %-3s %-8s | %7s %7s %7s %7s %6s %9s %7s %7s\n",
-				"#", "Symbol",
-				"Open", "High", "Low", "Close", "Trd", "TO", "Gain%", "Loss%")
-		} else {
-			fmt.Printf("  %-3s %-8s | %7s %7s %7s %7s %6s %9s %7s %7s | %7s %7s %7s %7s %6s %9s %7s %7s\n",
+		if hasPre && hasReg {
+			fmt.Printf("  %-3s %-8s | "+sessionHdr+" | "+sessionHdr+"\n",
 				"#", "Symbol",
 				"Open", "High", "Low", "Close", "Trd", "TO", "Gain%", "Loss%",
+				"Open", "High", "Low", "Close", "Trd", "TO", "Gain%", "Loss%")
+		} else {
+			fmt.Printf("  %-3s %-8s | "+sessionHdr+"\n",
+				"#", "Symbol",
 				"Open", "High", "Low", "Close", "Trd", "TO", "Gain%", "Loss%")
 		}
 
 		for i, c := range tier.Symbols {
-			if preOnly {
+			if hasPre && hasReg {
+				fmt.Printf("  %-3d %-8s | %s | %s\n",
+					i+1, c.Symbol,
+					formatSessionCols(c.Pre),
+					formatSessionCols(c.Reg))
+			} else if hasPre {
 				fmt.Printf("  %-3d %-8s | %s\n",
 					i+1, c.Symbol,
 					formatSessionCols(c.Pre))
 			} else {
-				fmt.Printf("  %-3d %-8s | %s | %s\n",
+				fmt.Printf("  %-3d %-8s | %s\n",
 					i+1, c.Symbol,
-					formatSessionCols(c.Pre),
 					formatSessionCols(c.Reg))
 			}
 		}
