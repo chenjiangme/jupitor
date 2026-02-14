@@ -36,6 +36,7 @@ final class DashboardViewModel {
 
     private let api: APIService
     private var refreshTimer: AnyCancellable?
+    private var historyCache: [String: (today: DayDataJSON, next: DayDataJSON?)] = [:]
 
     // MARK: - Init
 
@@ -117,6 +118,14 @@ final class DashboardViewModel {
 
     func loadHistory(date: String) async {
         selectedHistoryDate = date
+
+        let cacheKey = "\(date):\(sortMode.rawValue)"
+        if let cached = historyCache[cacheKey] {
+            self.historyDay = cached.today
+            self.historyNext = cached.next
+            return
+        }
+
         isLoadingHistory = true
         defer { isLoadingHistory = false }
 
@@ -124,6 +133,7 @@ final class DashboardViewModel {
             let resp = try await api.fetchHistory(date: date, sortMode: sortMode.rawValue)
             self.historyDay = resp.today
             self.historyNext = resp.next
+            historyCache[cacheKey] = (resp.today, resp.next)
         } catch {
             self.historyDay = nil
             self.historyNext = nil
