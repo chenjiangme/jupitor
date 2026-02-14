@@ -1523,14 +1523,14 @@ func (m model) renderContent() string {
 			renderDay(&b, m.historyData, m.width, selDay0, wl, wlOnly, nc, m.sortMode)
 			if m.historyNextData.Label != "" {
 				b.WriteString("\n")
-				renderDay(&b, m.historyNextData, m.width, selDay1, wl, wlOnly, nil, m.sortMode)
+				renderDay(&b, m.historyNextData, m.width, selDay1, wl, wlOnly, nc, m.sortMode)
 			}
 		}
 	} else {
 		renderDay(&b, m.todayData, m.width, selDay0, wl, wlOnly, nc, m.sortMode)
 		if m.nextData.Label != "" {
 			b.WriteString("\n")
-			renderDay(&b, m.nextData, m.width, selDay1, wl, wlOnly, nil, m.sortMode)
+			renderDay(&b, m.nextData, m.width, selDay1, wl, wlOnly, nc, m.sortMode)
 		}
 	}
 
