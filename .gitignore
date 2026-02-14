@@ -39,6 +39,9 @@ build/
 *.egg
 .ipynb_checkpoints/
 
+# Trial / scratch
+cmd/us-alpaca-data/trial/
+
 # OS
 .DS_Store
 Thumbs.db

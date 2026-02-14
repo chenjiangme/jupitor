@@ -2,7 +2,7 @@ import SwiftUI
 
 struct DashboardView: View {
     @State private var vm = DashboardViewModel(
-        baseURL: URL(string: UserDefaults.standard.string(forKey: "serverURL") ?? "http://mbpro:8080")!
+        baseURL: URL(string: UserDefaults.standard.string(forKey: "serverURL") ?? "http://localhost:8080")!
     )
     @State private var showingSettings = false
 
@@ -144,7 +144,7 @@ struct DashboardView: View {
 // MARK: - Settings
 
 struct SettingsView: View {
-    @AppStorage("serverURL") private var serverURL = "http://mbpro:8080"
+    @AppStorage("serverURL") private var serverURL = "http://localhost:8080"
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
