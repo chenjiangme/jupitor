@@ -11,12 +11,19 @@
 		A10002 /* DashboardModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10002; };
 		A10003 /* APIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10003; };
 		A10004 /* DashboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10004; };
-		A10005 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10005; };
 		A10006 /* TierSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10006; };
-		A10007 /* SymbolRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10007; };
-		A10008 /* NewsSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10008; };
 		A10009 /* Formatters.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10009; };
 		A10010 /* Colors.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10010; };
+		A10020 /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10020; };
+		A10021 /* LiveDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10021; };
+		A10022 /* SymbolCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10022; };
+		A10023 /* SymbolListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10023; };
+		A10024 /* HistoryDateListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10024; };
+		A10025 /* WatchlistView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10025; };
+		A10026 /* SymbolDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10026; };
+		A10027 /* SessionCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10027; };
+		A10028 /* MetricCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10028; };
+		A10029 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10029; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,13 +31,20 @@
 		B10002 /* DashboardModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardModels.swift; sourceTree = "<group>"; };
 		B10003 /* APIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIService.swift; sourceTree = "<group>"; };
 		B10004 /* DashboardViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardViewModel.swift; sourceTree = "<group>"; };
-		B10005 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		B10006 /* TierSectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TierSectionView.swift; sourceTree = "<group>"; };
-		B10007 /* SymbolRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SymbolRowView.swift; sourceTree = "<group>"; };
-		B10008 /* NewsSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewsSheetView.swift; sourceTree = "<group>"; };
 		B10009 /* Formatters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatters.swift; sourceTree = "<group>"; };
 		B10010 /* Colors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Colors.swift; sourceTree = "<group>"; };
 		B10011 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B10020 /* RootTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootTabView.swift; sourceTree = "<group>"; };
+		B10021 /* LiveDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveDashboardView.swift; sourceTree = "<group>"; };
+		B10022 /* SymbolCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SymbolCardView.swift; sourceTree = "<group>"; };
+		B10023 /* SymbolListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SymbolListView.swift; sourceTree = "<group>"; };
+		B10024 /* HistoryDateListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryDateListView.swift; sourceTree = "<group>"; };
+		B10025 /* WatchlistView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistView.swift; sourceTree = "<group>"; };
+		B10026 /* SymbolDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SymbolDetailView.swift; sourceTree = "<group>"; };
+		B10027 /* SessionCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCard.swift; sourceTree = "<group>"; };
+		B10028 /* MetricCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricCell.swift; sourceTree = "<group>"; };
+		B10029 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		C10001 /* Jupitor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jupitor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -94,10 +108,13 @@
 		E10006 /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				B10005 /* DashboardView.swift */,
+				B10020 /* RootTabView.swift */,
 				B10006 /* TierSectionView.swift */,
-				B10007 /* SymbolRowView.swift */,
-				B10008 /* NewsSheetView.swift */,
+				E10010 /* Live */,
+				E10011 /* History */,
+				E10012 /* Watchlist */,
+				E10013 /* Detail */,
+				E10014 /* Settings */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -117,6 +134,50 @@
 				C10001 /* Jupitor.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		E10010 /* Live */ = {
+			isa = PBXGroup;
+			children = (
+				B10021 /* LiveDashboardView.swift */,
+				B10022 /* SymbolCardView.swift */,
+				B10023 /* SymbolListView.swift */,
+			);
+			path = Live;
+			sourceTree = "<group>";
+		};
+		E10011 /* History */ = {
+			isa = PBXGroup;
+			children = (
+				B10024 /* HistoryDateListView.swift */,
+			);
+			path = History;
+			sourceTree = "<group>";
+		};
+		E10012 /* Watchlist */ = {
+			isa = PBXGroup;
+			children = (
+				B10025 /* WatchlistView.swift */,
+			);
+			path = Watchlist;
+			sourceTree = "<group>";
+		};
+		E10013 /* Detail */ = {
+			isa = PBXGroup;
+			children = (
+				B10026 /* SymbolDetailView.swift */,
+				B10027 /* SessionCard.swift */,
+				B10028 /* MetricCell.swift */,
+			);
+			path = Detail;
+			sourceTree = "<group>";
+		};
+		E10014 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				B10029 /* SettingsView.swift */,
+			);
+			path = Settings;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -191,12 +252,19 @@
 				A10002 /* DashboardModels.swift in Sources */,
 				A10003 /* APIService.swift in Sources */,
 				A10004 /* DashboardViewModel.swift in Sources */,
-				A10005 /* DashboardView.swift in Sources */,
 				A10006 /* TierSectionView.swift in Sources */,
-				A10007 /* SymbolRowView.swift in Sources */,
-				A10008 /* NewsSheetView.swift in Sources */,
 				A10009 /* Formatters.swift in Sources */,
 				A10010 /* Colors.swift in Sources */,
+				A10020 /* RootTabView.swift in Sources */,
+				A10021 /* LiveDashboardView.swift in Sources */,
+				A10022 /* SymbolCardView.swift in Sources */,
+				A10023 /* SymbolListView.swift in Sources */,
+				A10024 /* HistoryDateListView.swift in Sources */,
+				A10025 /* WatchlistView.swift in Sources */,
+				A10026 /* SymbolDetailView.swift in Sources */,
+				A10027 /* SessionCard.swift in Sources */,
+				A10028 /* MetricCell.swift in Sources */,
+				A10029 /* SettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

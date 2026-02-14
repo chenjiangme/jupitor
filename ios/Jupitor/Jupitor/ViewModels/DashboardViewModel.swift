@@ -3,24 +3,31 @@ import Combine
 
 @MainActor @Observable
 final class DashboardViewModel {
-    // MARK: - State
+    // MARK: - Live State
 
     var today: DayDataJSON?
     var next: DayDataJSON?
     var date: String = ""
+
+    // MARK: - Sort & Session
+
     var sortMode: SortMode = .preTrades
     var sortLabel: String = "PRE:TRD"
     var sessionView: SessionView = .pre
 
+    // MARK: - History
+
     var historyDates: [String] = []
-    var historyIndex: Int = -1  // -1 = live mode
-    var isHistoryMode: Bool { historyIndex >= 0 }
+    var selectedHistoryDate: String?
+    var historyDay: DayDataJSON?
+    var historyNext: DayDataJSON?
+    var isLoadingHistory = false
+
+    // MARK: - Watchlist
 
     var watchlistSymbols: Set<String> = []
 
-    var selectedSymbol: String?
-    var newsArticles: [NewsArticleJSON] = []
-    var showingNews = false
+    // MARK: - Status
 
     var isLoading = false
     var error: String?
@@ -29,7 +36,6 @@ final class DashboardViewModel {
 
     private let api: APIService
     private var refreshTimer: AnyCancellable?
-    private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Init
 
@@ -55,25 +61,17 @@ final class DashboardViewModel {
 
     private func startAutoRefresh() {
         refreshTimer?.cancel()
-        guard !isHistoryMode else { return }
         refreshTimer = Timer.publish(every: 5, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
-                guard let self, !self.isHistoryMode else { return }
-                Task {
-                    await self.refreshLive()
-                }
+                guard let self else { return }
+                Task { await self.refreshLive() }
             }
-    }
-
-    private func stopAutoRefresh() {
-        refreshTimer?.cancel()
-        refreshTimer = nil
     }
 
     // MARK: - Data Loading
 
-private func loadInitial() async {
+    private func loadInitial() async {
         isLoading = true
         defer { isLoading = false }
 
@@ -84,7 +82,7 @@ private func loadInitial() async {
         _ = await (dashTask, datesTask, watchlistTask)
     }
 
-func refreshLive() async {
+    func refreshLive() async {
         do {
             let resp = try await api.fetchDashboard(sortMode: sortMode.rawValue)
             self.date = resp.date
@@ -97,7 +95,7 @@ func refreshLive() async {
         }
     }
 
-private func loadDates() async {
+    private func loadDates() async {
         do {
             let resp = try await api.fetchDates()
             self.historyDates = resp.dates
@@ -106,7 +104,7 @@ private func loadDates() async {
         }
     }
 
-func loadWatchlist() async {
+    func loadWatchlist() async {
         do {
             let resp = try await api.fetchWatchlist()
             self.watchlistSymbols = Set(resp.symbols)
@@ -115,69 +113,37 @@ func loadWatchlist() async {
         }
     }
 
-    // MARK: - History Navigation
+    // MARK: - History
 
-func navigateHistory(delta: Int) async {
-        if !isHistoryMode {
-            if delta > 0 { return }
-            guard !historyDates.isEmpty else { return }
-            historyIndex = historyDates.count - 1
-            stopAutoRefresh()
-        } else {
-            let newIdx = historyIndex + delta
-            if newIdx >= historyDates.count {
-                // Return to live.
-                historyIndex = -1
-                startAutoRefresh()
-                await refreshLive()
-                return
-            }
-            if newIdx < 0 { return }
-            historyIndex = newIdx
-        }
-
-        await loadHistoryDate()
-    }
-
-func goToLive() async {
-        historyIndex = -1
-        startAutoRefresh()
-        await refreshLive()
-    }
-
-private func loadHistoryDate() async {
-        guard historyIndex >= 0, historyIndex < historyDates.count else { return }
-        let date = historyDates[historyIndex]
-
-        isLoading = true
-        defer { isLoading = false }
+    func loadHistory(date: String) async {
+        selectedHistoryDate = date
+        isLoadingHistory = true
+        defer { isLoadingHistory = false }
 
         do {
             let resp = try await api.fetchHistory(date: date, sortMode: sortMode.rawValue)
-            self.date = resp.date
-            self.today = resp.today
-            self.next = resp.next
-            self.sortLabel = resp.sortLabel
-            self.error = nil
+            self.historyDay = resp.today
+            self.historyNext = resp.next
         } catch {
-            self.error = error.localizedDescription
+            self.historyDay = nil
+            self.historyNext = nil
         }
     }
 
     // MARK: - Sort
 
-func cycleSortMode() async {
-        sortMode = sortMode.next
-        if isHistoryMode {
-            await loadHistoryDate()
-        } else {
-            await refreshLive()
+    func setSortMode(_ mode: SortMode) async {
+        sortMode = mode
+        sortLabel = mode.label
+        await refreshLive()
+        if let date = selectedHistoryDate {
+            await loadHistory(date: date)
         }
     }
 
     // MARK: - Watchlist
 
-func toggleWatchlist(symbol: String) async {
+    func toggleWatchlist(symbol: String) async {
         let wasInWatchlist = watchlistSymbols.contains(symbol)
 
         // Optimistic update.
@@ -205,15 +171,12 @@ func toggleWatchlist(symbol: String) async {
 
     // MARK: - News
 
-func loadNews(symbol: String) async {
-        selectedSymbol = symbol
+    func fetchNewsArticles(symbol: String, date: String) async -> [NewsArticleJSON] {
         do {
             let resp = try await api.fetchNews(symbol: symbol, date: date)
-            newsArticles = resp.articles
-            showingNews = true
+            return resp.articles
         } catch {
-            newsArticles = []
-            showingNews = true
+            return []
         }
     }
 }

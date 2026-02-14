@@ -1,14 +1,12 @@
 import SwiftUI
 
 struct TierSectionView: View {
+    @Environment(DashboardViewModel.self) private var vm
     let tier: TierGroupJSON
-    let session: SessionView
-    let watchlist: Set<String>
-    let onSelect: (String) -> Void
-    let onToggleWatchlist: (String) -> Void
+    let date: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 4) {
             // Tier header.
             HStack(spacing: 6) {
                 Circle()
@@ -26,36 +24,19 @@ struct TierSectionView: View {
             .padding(.top, 10)
             .padding(.bottom, 4)
 
-            // Column header.
-            HStack(spacing: 0) {
-                Text("")
-                    .frame(width: 14) // watchlist marker
-                Text("Symbol")
-                    .frame(width: 56, alignment: .leading)
-                Text("Gain%")
-                    .frame(width: 52, alignment: .trailing)
-                Text("Trd")
-                    .frame(width: 48, alignment: .trailing)
-                Text("TO")
-                    .frame(width: 56, alignment: .trailing)
-                Text("News")
-                    .frame(width: 36, alignment: .trailing)
-                Spacer()
-            }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal)
-            .padding(.bottom, 2)
-
-            // Symbol rows.
+            // Symbol cards.
             ForEach(tier.symbols) { combined in
-                SymbolRowView(
-                    combined: combined,
-                    session: session,
-                    isWatchlist: watchlist.contains(combined.symbol),
-                    onTap: { onSelect(combined.symbol) },
-                    onLongPress: { onToggleWatchlist(combined.symbol) }
-                )
+                NavigationLink {
+                    SymbolDetailView(combined: combined, date: date)
+                } label: {
+                    SymbolCardView(
+                        combined: combined,
+                        session: vm.sessionView,
+                        isWatchlist: vm.watchlistSymbols.contains(combined.symbol)
+                    )
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 8)
             }
         }
     }

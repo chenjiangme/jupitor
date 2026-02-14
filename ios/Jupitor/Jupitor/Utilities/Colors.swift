@@ -20,3 +20,22 @@ extension Color {
         }
     }
 }
+
+// MARK: - Pulse Animation
+
+extension View {
+    func pulseAnimation() -> some View {
+        modifier(PulseModifier())
+    }
+}
+
+struct PulseModifier: ViewModifier {
+    @State private var isPulsing = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isPulsing ? 0.4 : 1.0)
+            .animation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true), value: isPulsing)
+            .onAppear { isPulsing = true }
+    }
+}

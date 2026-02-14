@@ -13,6 +13,7 @@ Unified financial platform for US equities and China A-shares. Go handles all co
 - `python/` — Python subsystem (analysis, notebooks, CLI)
 - `migrations/` — SQL migrations
 - `reference/` — Static reference data (CSVs)
+- `ios/` — SwiftUI iOS app (Xcode project)
 - `data/` — Local data dir (gitignored, symlink to $DATA_1)
 
 ## Build & Test
@@ -173,6 +174,48 @@ For the latest history date, next-day data comes from the live model's `TodaySna
 - `internal/dashboard/format.go` — Price/count/turnover/gain/loss formatting
 - `internal/dashboard/history.go` — History file loading, tier map loading
 - `internal/dashboard/tiermap.go` — Tier map from trade-universe CSV
+
+## iOS App (SwiftUI)
+
+The `ios/Jupitor/` directory contains a native SwiftUI iPhone app that connects to the us-stream HTTP REST API. Requires iOS 17+.
+
+### Navigation Structure
+
+```
+TabView (3 bottom tabs):
+  Live        → SymbolListView → SymbolDetailView
+  History     → DateListView   → SymbolListView → SymbolDetailView
+  Watchlist   → filtered list  → SymbolDetailView
+```
+
+### Architecture
+
+- **RootTabView**: Bottom tab bar with Live/History/Watchlist tabs, each wrapped in NavigationStack
+- **DashboardViewModel**: Shared `@Observable` injected via `.environment()` at app level. Manages live data (auto-refresh 5s), history loading, watchlist, sort mode, session toggle
+- **SymbolCardView**: Two-line card (symbol+gain+trades / turnover+loss+news+star) replacing old fixed-width column rows
+- **SymbolListView**: Reusable tier-sectioned list used by all 3 tabs
+- **SymbolDetailView**: Push navigation on tap. Shows SessionCards (OHLC grid + metrics), inline news, star toggle
+- **Sort**: Menu dropdown grouped by session (Pre-Market / Regular / News) with checkmark on current selection
+
+### Key Files
+
+- `ios/Jupitor/Jupitor/JupitorApp.swift` — App entry, creates ViewModel, injects environment
+- `ios/Jupitor/Jupitor/ViewModels/DashboardViewModel.swift` — Shared state: live refresh, history, watchlist, sort, news
+- `ios/Jupitor/Jupitor/Views/RootTabView.swift` — TabView with 3 tabs
+- `ios/Jupitor/Jupitor/Views/Live/LiveDashboardView.swift` — Live tab: day picker, session toggle, sort menu, pulse indicator
+- `ios/Jupitor/Jupitor/Views/Live/SymbolCardView.swift` — Two-line symbol card
+- `ios/Jupitor/Jupitor/Views/Live/SymbolListView.swift` — Reusable tier-sectioned list
+- `ios/Jupitor/Jupitor/Views/History/HistoryDateListView.swift` — Date list + HistoryDayView
+- `ios/Jupitor/Jupitor/Views/Watchlist/WatchlistView.swift` — Filtered watchlist symbols
+- `ios/Jupitor/Jupitor/Views/Detail/SymbolDetailView.swift` — Full detail with SessionCards + news
+- `ios/Jupitor/Jupitor/Views/Detail/SessionCard.swift` — OHLC grid + trades/turnover/gain/loss
+- `ios/Jupitor/Jupitor/Views/Detail/MetricCell.swift` — Label + value cell
+- `ios/Jupitor/Jupitor/Views/TierSectionView.swift` — Tier header + SymbolCardView list with NavigationLinks
+- `ios/Jupitor/Jupitor/Views/Settings/SettingsView.swift` — Server URL configuration
+- `ios/Jupitor/Jupitor/Models/DashboardModels.swift` — API response types, SortMode, SessionView enums
+- `ios/Jupitor/Jupitor/Services/APIService.swift` — REST API client (actor-based)
+- `ios/Jupitor/Jupitor/Utilities/Formatters.swift` — Fmt enum for count/turnover/price/gain/loss
+- `ios/Jupitor/Jupitor/Utilities/Colors.swift` — Tier/gain/loss/watchlist colors + PulseModifier
 
 ## Consolidated Trade Files
 
