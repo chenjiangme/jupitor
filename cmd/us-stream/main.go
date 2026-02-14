@@ -7,15 +7,19 @@ import (
 	"log"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	alpacaapi "github.com/alpacahq/alpaca-trade-api-go/v3/alpaca"
 	"google.golang.org/grpc"
 
 	"jupitor/internal/config"
+	"jupitor/internal/dashboard"
 	"jupitor/internal/gather/us"
+	"jupitor/internal/httpapi"
 	"jupitor/internal/live"
 )
 
@@ -69,6 +73,46 @@ func main() {
 
 	model := gatherer.Model()
 
+	// Load tier map and history dates for HTTP API.
+	tierMap, err := dashboard.LoadTierMap(cfg.Storage.DataDir)
+	if err != nil {
+		slog.Warn("loading tier map for HTTP API", "error", err)
+		tierMap = make(map[string]string)
+	}
+
+	histDates, err := dashboard.ListHistoryDates(cfg.Storage.DataDir)
+	if err != nil {
+		slog.Warn("listing history dates for HTTP API", "error", err)
+	}
+
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		log.Fatalf("loading timezone: %v", err)
+	}
+
+	// Optional Alpaca trading client for watchlist support.
+	var alpacaClient *alpacaapi.Client
+	if cfg.Alpaca.APIKey != "" {
+		alpacaClient = alpacaapi.NewClient(alpacaapi.ClientOpts{
+			APIKey:    cfg.Alpaca.APIKey,
+			APISecret: cfg.Alpaca.APISecret,
+		})
+	}
+
+	// Start HTTP API server.
+	httpAddr := ":8080"
+	dashSrv := httpapi.NewDashboardServer(model, cfg.Storage.DataDir, loc, logger, tierMap, histDates, alpacaClient)
+	httpServer := &http.Server{
+		Addr:    httpAddr,
+		Handler: dashSrv.Handler(),
+	}
+	go func() {
+		slog.Info("HTTP API server listening", "addr", httpAddr)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("HTTP server error", "error", err)
+		}
+	}()
+
 	// Start gRPC server.
 	grpcAddr := ":50051"
 	lis, err := net.Listen("tcp", grpcAddr)
@@ -92,6 +136,10 @@ func main() {
 		slog.Error("gatherer error", "error", err)
 	}
 
+	// Graceful shutdown.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	httpServer.Shutdown(shutdownCtx)
 	gs.GracefulStop()
 	slog.Info("shutdown complete", "logFile", logFileName)
 }
