@@ -77,8 +77,7 @@ struct BubbleChartView: View {
         let isDragged = draggedId == bubble.id
         let diameter = bubble.radius * 2
         let ringWidth = max(3, bubble.radius * 0.12)
-        let borderWidth: CGFloat = isWatchlist ? 2.5 : 1
-        let outerDia = diameter - ringWidth - borderWidth * 2 - 1
+        let outerDia = diameter - ringWidth - 1
         let innerDia = outerDia * innerRatio
 
         ZStack {
@@ -104,12 +103,11 @@ struct BubbleChartView: View {
                 lineWidth: ringWidth
             )
 
-            // Tier / watchlist border.
-            Circle()
-                .strokeBorder(
-                    isWatchlist ? Color.watchlistColor : Color.tierColor(for: bubble.tier).opacity(0.5),
-                    lineWidth: borderWidth
-                )
+            // Watchlist border.
+            if isWatchlist {
+                Circle()
+                    .strokeBorder(Color.watchlistColor, lineWidth: 2.5)
+            }
 
             // Symbol label only.
             Text(bubble.id)
@@ -154,13 +152,14 @@ struct BubbleChartView: View {
 
     // MARK: - Session Ring
 
+    @ViewBuilder
     private func sessionRing(gain: Double, loss: Double, hasData: Bool, diameter: CGFloat, lineWidth: CGFloat) -> some View {
-        ZStack {
-            // Background track.
-            Circle()
-                .stroke(Color.white.opacity(hasData ? 0.1 : 0.04), lineWidth: lineWidth)
+        if hasData {
+            ZStack {
+                // Background track.
+                Circle()
+                    .stroke(Color.white.opacity(0.1), lineWidth: lineWidth)
 
-            if hasData {
                 // Green gain arc (clockwise from top).
                 if gain > 0 {
                     Circle()
@@ -177,8 +176,8 @@ struct BubbleChartView: View {
                         .rotationEffect(.degrees(-90))
                 }
             }
+            .frame(width: diameter, height: diameter)
         }
-        .frame(width: diameter, height: diameter)
     }
 
     // MARK: - Physics Simulation
@@ -354,23 +353,9 @@ struct BubbleChartView: View {
                     Text("Loss").font(.system(size: 8)).foregroundStyle(.secondary)
                 }
             }
-
-            Spacer()
-
-            HStack(spacing: 8) {
-                tierLegendDot("MOD", color: .tierModerate)
-                tierLegendDot("SPO", color: .tierSporadic)
-            }
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
-    }
-
-    private func tierLegendDot(_ label: String, color: Color) -> some View {
-        HStack(spacing: 3) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text(label).font(.system(size: 8)).foregroundStyle(.secondary)
-        }
     }
 }
 
