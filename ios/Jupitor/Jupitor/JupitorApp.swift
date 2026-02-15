@@ -3,7 +3,7 @@ import SwiftUI
 @main
 struct JupitorApp: App {
     @State private var vm = DashboardViewModel(
-        baseURL: URL(string: UserDefaults.standard.string(forKey: "serverURL") ?? "http://localhost:8080")!
+        baseURL: URL(string: UserDefaults.standard.string(forKey: "serverURL") ?? "http://mbpro:8080")!
     )
 
     var body: some Scene {

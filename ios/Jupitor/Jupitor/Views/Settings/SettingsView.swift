@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage("serverURL") private var serverURL = "http://localhost:8080"
+    @AppStorage("serverURL") private var serverURL = "http://mbpro:8080"
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
