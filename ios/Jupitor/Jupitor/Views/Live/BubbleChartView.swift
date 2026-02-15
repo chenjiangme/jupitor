@@ -55,7 +55,6 @@ struct BubbleChartView: View {
                     }
                 }
 
-                legend
             }
         }
         .onChange(of: day) { _, _ in
@@ -90,6 +89,8 @@ struct BubbleChartView: View {
                 gain: bubble.combined.reg?.maxGain ?? 0,
                 loss: bubble.combined.reg?.maxLoss ?? 0,
                 hasData: bubble.combined.reg != nil,
+                gainColor: .green,
+                lossColor: .red,
                 diameter: outerDia,
                 lineWidth: ringWidth
             )
@@ -99,6 +100,8 @@ struct BubbleChartView: View {
                 gain: bubble.combined.pre?.maxGain ?? 0,
                 loss: bubble.combined.pre?.maxLoss ?? 0,
                 hasData: bubble.combined.pre != nil,
+                gainColor: .mint,
+                lossColor: .pink,
                 diameter: innerDia,
                 lineWidth: ringWidth
             )
@@ -153,27 +156,43 @@ struct BubbleChartView: View {
     // MARK: - Session Ring
 
     @ViewBuilder
-    private func sessionRing(gain: Double, loss: Double, hasData: Bool, diameter: CGFloat, lineWidth: CGFloat) -> some View {
+    private func sessionRing(gain: Double, loss: Double, hasData: Bool, gainColor: Color, lossColor: Color, diameter: CGFloat, lineWidth: CGFloat) -> some View {
         if hasData {
+            let gainFrac = min(gain, 0.5)
+            let lossFrac = min(loss, 0.5)
+
             ZStack {
                 // Background track.
                 Circle()
                     .stroke(Color.white.opacity(0.1), lineWidth: lineWidth)
 
-                // Green gain arc (clockwise from top).
-                if gain > 0 {
-                    Circle()
-                        .trim(from: 0, to: min(gain, 0.5))
-                        .stroke(Color.green, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                }
-
-                // Red loss arc (counter-clockwise from top).
-                if loss > 0 {
-                    Circle()
-                        .trim(from: 1 - min(loss, 0.5), to: 1)
-                        .stroke(Color.red, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
+                // Larger % at full width, smaller % at half width (nested inside).
+                if gainFrac >= lossFrac {
+                    if gainFrac > 0 {
+                        Circle()
+                            .trim(from: 0, to: gainFrac)
+                            .stroke(gainColor, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                    }
+                    if lossFrac > 0 {
+                        Circle()
+                            .trim(from: 0, to: lossFrac)
+                            .stroke(lossColor, style: StrokeStyle(lineWidth: lineWidth * 0.5, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                    }
+                } else {
+                    if lossFrac > 0 {
+                        Circle()
+                            .trim(from: 0, to: lossFrac)
+                            .stroke(lossColor, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                    }
+                    if gainFrac > 0 {
+                        Circle()
+                            .trim(from: 0, to: gainFrac)
+                            .stroke(gainColor, style: StrokeStyle(lineWidth: lineWidth * 0.5, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                    }
                 }
             }
             .frame(width: diameter, height: diameter)
@@ -333,30 +352,6 @@ struct BubbleChartView: View {
         .background(Color.cyan.opacity(0.3))
     }
 
-    // MARK: - Legend
-
-    private var legend: some View {
-        HStack(spacing: 8) {
-            Text("inner=PRE  outer=REG")
-                .font(.system(size: 8))
-                .foregroundStyle(.secondary)
-
-            Spacer()
-
-            HStack(spacing: 6) {
-                HStack(spacing: 2) {
-                    Circle().fill(.green).frame(width: 6, height: 6)
-                    Text("Gain").font(.system(size: 8)).foregroundStyle(.secondary)
-                }
-                HStack(spacing: 2) {
-                    Circle().fill(.red).frame(width: 6, height: 6)
-                    Text("Loss").font(.system(size: 8)).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 6)
-    }
 }
 
 // MARK: - Bubble State
