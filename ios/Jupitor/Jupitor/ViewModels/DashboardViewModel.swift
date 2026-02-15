@@ -123,6 +123,7 @@ final class DashboardViewModel {
         if let cached = historyCache[cacheKey] {
             self.historyDay = cached.today
             self.historyNext = cached.next
+            prefetchNearby(date: date)
             return
         }
 
@@ -134,9 +135,36 @@ final class DashboardViewModel {
             self.historyDay = resp.today
             self.historyNext = resp.next
             historyCache[cacheKey] = (resp.today, resp.next)
+            prefetchNearby(date: date)
         } catch {
             self.historyDay = nil
             self.historyNext = nil
+        }
+    }
+
+    /// Prefetch up to 5 dates around the given date in background.
+    private func prefetchNearby(date: String) {
+        guard let idx = historyDates.firstIndex(of: date) else { return }
+        let mode = sortMode.rawValue
+        let start = max(0, idx - 5)
+        let end = min(historyDates.count - 1, idx + 5)
+        let datesToFetch = (start...end).map { historyDates[$0] }
+            .filter { historyCache["\($0):\(mode)"] == nil }
+
+        guard !datesToFetch.isEmpty else { return }
+
+        Task.detached { [api] in
+            for d in datesToFetch {
+                guard !Task.isCancelled else { break }
+                do {
+                    let resp = try await api.fetchHistory(date: d, sortMode: mode)
+                    await MainActor.run { [weak self] in
+                        self?.historyCache["\(d):\(mode)"] = (resp.today, resp.next)
+                    }
+                } catch {
+                    // Non-fatal.
+                }
+            }
         }
     }
 
