@@ -9,8 +9,7 @@ struct SymbolHistoryView: View {
     @State private var hasMore = false
     @State private var isLoadingMore = false
 
-    private let maxDiameter: CGFloat = 60
-    private let minDiameter: CGFloat = 20
+    private let minRatio: CGFloat = 0.33
     private let minInnerRatio: CGFloat = 0.15
 
     private var maxTurnover: Double {
@@ -69,30 +68,32 @@ struct SymbolHistoryView: View {
                     Spacer()
                 }
             } else {
-                ScrollView {
-                    let cellSize = maxDiameter + 2
-                    LazyVStack(spacing: 0) {
-                        if hasMore {
-                            Color.clear.frame(height: 1)
-                                .onAppear { loadMore() }
-                        }
+                GeometryReader { geo in
+                    let cellSize = geo.size.width / 5
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            if hasMore {
+                                Color.clear.frame(height: 1)
+                                    .onAppear { loadMore() }
+                            }
 
-                        ForEach(weekRows) { row in
-                            HStack(spacing: 0) {
-                                ForEach(0..<5, id: \.self) { col in
-                                    if let entry = row.slots[col] {
-                                        ringView(entry)
-                                            .frame(width: cellSize, height: cellSize)
-                                    } else {
-                                        Color.clear
-                                            .frame(width: cellSize, height: cellSize)
+                            ForEach(weekRows) { row in
+                                HStack(spacing: 0) {
+                                    ForEach(0..<5, id: \.self) { col in
+                                        if let entry = row.slots[col] {
+                                            ringView(entry, maxDiameter: cellSize)
+                                                .frame(width: cellSize, height: cellSize)
+                                        } else {
+                                            Color.clear
+                                                .frame(width: cellSize, height: cellSize)
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                    .defaultScrollAnchor(.bottom)
                 }
-                .defaultScrollAnchor(.bottom)
             }
         }
         .navigationTitle(symbol)
@@ -103,12 +104,13 @@ struct SymbolHistoryView: View {
     // MARK: - Ring View
 
     @ViewBuilder
-    private func ringView(_ entry: SymbolDateStats) -> some View {
+    private func ringView(_ entry: SymbolDateStats, maxDiameter: CGFloat) -> some View {
         let preTurnover = entry.pre?.turnover ?? 0
         let regTurnover = entry.reg?.turnover ?? 0
         let total = preTurnover + regTurnover
-        let ratio = maxTurnover > 0 ? sqrt(CGFloat(total / maxTurnover)) : 0
-        let diameter = minDiameter + (maxDiameter - minDiameter) * ratio
+        let sizeRatio = maxTurnover > 0 ? sqrt(CGFloat(total / maxTurnover)) : 0
+        let minDiameter = maxDiameter * minRatio
+        let diameter = minDiameter + (maxDiameter - minDiameter) * sizeRatio
         let preRatio = total > 0 ? sqrt(CGFloat(preTurnover / total)) : 0
         let lineWidth = max(3, diameter * 0.12)
         let outerDia = diameter - lineWidth
