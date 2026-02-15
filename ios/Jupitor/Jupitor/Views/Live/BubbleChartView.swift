@@ -131,7 +131,7 @@ struct BubbleChartView: View {
             // Symbol label.
             Text(bubble.id)
                 .font(.system(size: max(9, bubble.radius * 0.38), weight: .heavy))
-                .foregroundStyle((isWatchlist ? Color.watchlistColor : .white).opacity(0.75))
+                .foregroundStyle((isWatchlist ? Color.watchlistColor : .white).opacity(0.5))
                 .minimumScaleFactor(0.5)
                 .padding(3)
         }
