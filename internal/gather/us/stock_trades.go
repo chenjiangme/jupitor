@@ -151,11 +151,6 @@ func processStockTradesForDate(dataDir string, prevDate, date string, skipIdx, s
 		if err := parquet.WriteFile(idxPath, indexTrades); err != nil {
 			return fmt.Errorf("writing index stock trades for %s: %w", date, err)
 		}
-		log.Info("stock trades index written",
-			"date", date,
-			"stocks", len(indexSyms),
-			"filtered", len(indexTrades),
-		)
 	}
 
 	if !skipEx {
@@ -167,11 +162,6 @@ func processStockTradesForDate(dataDir string, prevDate, date string, skipIdx, s
 		if err := parquet.WriteFile(exPath, exIndexTrades); err != nil {
 			return fmt.Errorf("writing ex-index stock trades for %s: %w", date, err)
 		}
-		log.Info("stock trades ex-index written",
-			"date", date,
-			"stocks", len(symbols)-len(indexSyms),
-			"filtered", len(exIndexTrades),
-		)
 	}
 
 	return nil
@@ -299,7 +289,6 @@ func GenerateDailySummaries(ctx context.Context, dataDir string, maxDates int, l
 			log.Error("writing daily summary", "date", date, "error", err)
 			continue
 		}
-		log.Info("daily summary backfilled", "date", date, "symbols", len(daily))
 		wrote++
 	}
 
@@ -637,12 +626,6 @@ func processRollingBarsForDate(dataDir, date string, log *slog.Logger) error {
 	if err := parquet.WriteFile(outPath, result); err != nil {
 		return fmt.Errorf("writing rolling bars for %s: %w", date, err)
 	}
-
-	log.Info("rolling bars written",
-		"date", date,
-		"symbols", len(symbolBins),
-		"bars", len(result),
-	)
 	return nil
 }
 
