@@ -13,9 +13,7 @@ struct BubbleChartView: View {
     @State private var detailCombined: CombinedStatsJSON?
     @State private var simTime: Double = 0
 
-    private let innerRatio: CGFloat = 0.65
-    private let preColor = Color(hue: 0.52, saturation: 0.6, brightness: 0.7)   // teal
-    private let regColor = Color(hue: 0.08, saturation: 0.6, brightness: 0.75)  // amber
+    private let innerRatio: CGFloat = 0.6
 
     private var symbolData: [(combined: CombinedStatsJSON, tier: String)] {
         day.tiers
@@ -78,51 +76,47 @@ struct BubbleChartView: View {
         let breathScale = 1.0 + sin(simTime * 1.5 + bubble.phaseOffset) * 0.015
         let isDragged = draggedId == bubble.id
         let diameter = bubble.radius * 2
-        let innerDiameter = diameter * innerRatio
-        let hasPre = bubble.combined.pre != nil
-        let hasReg = bubble.combined.reg != nil
+        let ringWidth = max(3, bubble.radius * 0.12)
+        let borderWidth: CGFloat = isWatchlist ? 2.5 : 1
+        let outerDia = diameter - ringWidth - borderWidth * 2 - 1
+        let innerDia = outerDia * innerRatio
 
         ZStack {
-            // Outer circle (regular session).
+            // Subtle background.
             Circle()
-                .fill(hasReg ? regColor.opacity(0.8) : Color.white.opacity(0.08))
+                .fill(Color.white.opacity(0.04))
 
-            // Inner circle (pre-market session).
-            Circle()
-                .fill(hasPre ? preColor.opacity(0.8) : Color.white.opacity(0.08))
-                .frame(width: innerDiameter, height: innerDiameter)
+            // Outer ring (regular session).
+            sessionRing(
+                gain: bubble.combined.reg?.maxGain ?? 0,
+                loss: bubble.combined.reg?.maxLoss ?? 0,
+                hasData: bubble.combined.reg != nil,
+                diameter: outerDia,
+                lineWidth: ringWidth
+            )
+
+            // Inner ring (pre-market session).
+            sessionRing(
+                gain: bubble.combined.pre?.maxGain ?? 0,
+                loss: bubble.combined.pre?.maxLoss ?? 0,
+                hasData: bubble.combined.pre != nil,
+                diameter: innerDia,
+                lineWidth: ringWidth
+            )
 
             // Tier / watchlist border.
             Circle()
                 .strokeBorder(
                     isWatchlist ? Color.watchlistColor : Color.tierColor(for: bubble.tier).opacity(0.5),
-                    lineWidth: isWatchlist ? 2.5 : 1
+                    lineWidth: borderWidth
                 )
 
-            VStack(spacing: 1) {
-                Text(bubble.id)
-                    .font(bubble.radius > 40 ? .caption.bold() : bubble.radius > 24 ? .caption2.bold() : .system(size: 9, weight: .bold))
-                    .foregroundStyle(.white)
-                    .minimumScaleFactor(0.5)
-
-                if bubble.radius > 20 {
-                    let preGain = bubble.combined.pre?.maxGain ?? 0
-                    let regGain = bubble.combined.reg?.maxGain ?? 0
-
-                    if preGain > 0 {
-                        Text("P " + Fmt.gain(preGain))
-                            .font(.system(size: bubble.radius > 40 ? 10 : 8, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.85))
-                    }
-
-                    if regGain > 0 && bubble.radius > 32 {
-                        Text("R " + Fmt.gain(regGain))
-                            .font(.system(size: bubble.radius > 40 ? 10 : 8, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.85))
-                    }
-                }
-            }
-            .padding(3)
+            // Symbol label only.
+            Text(bubble.id)
+                .font(bubble.radius > 40 ? .caption.bold() : bubble.radius > 24 ? .caption2.bold() : .system(size: 9, weight: .bold))
+                .foregroundStyle(.white)
+                .minimumScaleFactor(0.5)
+                .padding(3)
         }
         .frame(width: diameter, height: diameter)
         .scaleEffect(breathScale * (isDragged ? 1.1 : 1.0))
@@ -156,6 +150,35 @@ struct BubbleChartView: View {
                     }
                 }
         )
+    }
+
+    // MARK: - Session Ring
+
+    private func sessionRing(gain: Double, loss: Double, hasData: Bool, diameter: CGFloat, lineWidth: CGFloat) -> some View {
+        ZStack {
+            // Background track.
+            Circle()
+                .stroke(Color.white.opacity(hasData ? 0.1 : 0.04), lineWidth: lineWidth)
+
+            if hasData {
+                // Green gain arc (clockwise from top).
+                if gain > 0 {
+                    Circle()
+                        .trim(from: 0, to: min(gain, 0.5))
+                        .stroke(Color.green, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                }
+
+                // Red loss arc (counter-clockwise from top).
+                if loss > 0 {
+                    Circle()
+                        .trim(from: 1 - min(loss, 0.5), to: 1)
+                        .stroke(Color.red, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                }
+            }
+        }
+        .frame(width: diameter, height: diameter)
     }
 
     // MARK: - Physics Simulation
@@ -315,13 +338,22 @@ struct BubbleChartView: View {
 
     private var legend: some View {
         HStack(spacing: 8) {
-            sessionLegend
+            Text("inner=PRE  outer=REG")
+                .font(.system(size: 8))
+                .foregroundStyle(.secondary)
 
             Spacer()
 
-            Text("Size = Turnover")
-                .font(.system(size: 8))
-                .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                HStack(spacing: 2) {
+                    Circle().fill(.green).frame(width: 6, height: 6)
+                    Text("Gain").font(.system(size: 8)).foregroundStyle(.secondary)
+                }
+                HStack(spacing: 2) {
+                    Circle().fill(.red).frame(width: 6, height: 6)
+                    Text("Loss").font(.system(size: 8)).foregroundStyle(.secondary)
+                }
+            }
 
             Spacer()
 
@@ -332,32 +364,6 @@ struct BubbleChartView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
-    }
-
-    private var sessionLegend: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 3) {
-                Circle()
-                    .fill(preColor)
-                    .frame(width: 8, height: 8)
-                Text("PRE")
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            HStack(spacing: 3) {
-                ZStack {
-                    Circle()
-                        .fill(regColor)
-                        .frame(width: 8, height: 8)
-                    Circle()
-                        .fill(Color.black)
-                        .frame(width: 5, height: 5)
-                }
-                Text("REG")
-                    .font(.system(size: 8, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-        }
     }
 
     private func tierLegendDot(_ label: String, color: Color) -> some View {
