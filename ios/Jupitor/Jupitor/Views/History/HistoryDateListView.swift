@@ -68,7 +68,7 @@ struct HistoryDayView: View {
                     .padding(.vertical, 8)
 
                     let displayDay = selectedDay == .next ? (vm.historyNext ?? day) : day
-                    SymbolListView(day: displayDay, date: date)
+                    BubbleChartView(day: displayDay, date: date)
                 }
             } else {
                 Text("Failed to load data")

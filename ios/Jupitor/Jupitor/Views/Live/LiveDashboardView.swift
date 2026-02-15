@@ -44,7 +44,7 @@ struct LiveDashboardView: View {
                     .padding(.vertical, 8)
 
                     let day = selectedDay == .next ? (vm.next ?? today) : today
-                    SymbolListView(day: day, date: vm.date)
+                    BubbleChartView(day: day, date: vm.date)
                 }
             } else if let error = vm.error {
                 VStack(spacing: 12) {

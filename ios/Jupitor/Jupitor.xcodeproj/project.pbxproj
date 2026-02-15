@@ -24,6 +24,7 @@
 		A10027 /* SessionCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10027; };
 		A10028 /* MetricCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10028; };
 		A10029 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10029; };
+		A10030 /* BubbleChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10030; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +46,7 @@
 		B10027 /* SessionCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCard.swift; sourceTree = "<group>"; };
 		B10028 /* MetricCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricCell.swift; sourceTree = "<group>"; };
 		B10029 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		B10030 /* BubbleChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BubbleChartView.swift; sourceTree = "<group>"; };
 		C10001 /* Jupitor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jupitor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -142,6 +144,7 @@
 				B10021 /* LiveDashboardView.swift */,
 				B10022 /* SymbolCardView.swift */,
 				B10023 /* SymbolListView.swift */,
+				B10030 /* BubbleChartView.swift */,
 			);
 			path = Live;
 			sourceTree = "<group>";
@@ -265,6 +268,7 @@
 				A10027 /* SessionCard.swift in Sources */,
 				A10028 /* MetricCell.swift in Sources */,
 				A10029 /* SettingsView.swift in Sources */,
+				A10030 /* BubbleChartView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
