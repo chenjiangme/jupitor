@@ -12,6 +12,7 @@ struct BubbleChartView: View {
     @State private var showDetail = false
     @State private var detailCombined: CombinedStatsJSON?
     @State private var isSettled = false
+    @State private var showWatchlistOnly = false
 
     private let minInnerRatio: CGFloat = 0.15
 
@@ -36,6 +37,7 @@ struct BubbleChartView: View {
             .filter { $0.name == "MODERATE" || $0.name == "SPORADIC" }
             .flatMap { tier in tier.symbols.map { (combined: $0, tier: tier.name) } }
         let watchlist = all.filter { vm.watchlistSymbols.contains($0.combined.symbol) }
+        if showWatchlistOnly { return watchlist }
         let rest = all.filter { !vm.watchlistSymbols.contains($0.combined.symbol) }
         return watchlist + rest
     }
@@ -72,6 +74,22 @@ struct BubbleChartView: View {
                         try? await Task.sleep(for: .milliseconds(16))
                     }
                 }
+                .gesture(
+                    MagnifyGesture()
+                        .onEnded { value in
+                            let newValue: Bool
+                            if value.magnification < 0.7 {
+                                newValue = true
+                            } else if value.magnification > 1.3 {
+                                newValue = false
+                            } else {
+                                return
+                            }
+                            guard newValue != showWatchlistOnly else { return }
+                            showWatchlistOnly = newValue
+                            if viewSize.width > 0 { syncBubbles(in: viewSize) }
+                        }
+                )
 
             }
         }
