@@ -62,8 +62,10 @@ struct BubbleChartView: View {
         .onChange(of: day) { _, _ in
             if viewSize.width > 0 { syncBubbles(in: viewSize) }
         }
-        .onChange(of: vm.watchlistSymbols) { _, _ in
-            if viewSize.width > 0 { updateHomePositions() }
+        .onChange(of: vm.watchlistSymbols) { old, new in
+            if viewSize.width > 0 {
+                onWatchlistChanged(added: new.subtracting(old), removed: old.subtracting(new))
+            }
         }
         .navigationDestination(isPresented: $showDetail) {
             if let combined = detailCombined {
@@ -211,10 +213,6 @@ struct BubbleChartView: View {
             var fx: CGFloat = 0
             var fy: CGFloat = 0
 
-            // Gentle vertical pull toward home zone (not exact position).
-            let hy = bubbles[i].homePosition.y - bubbles[i].position.y
-            fy += hy * 0.02
-
             // Collision avoidance.
             for j in bubbles.indices where j != i {
                 let dx = bubbles[i].position.x - bubbles[j].position.x
@@ -223,7 +221,7 @@ struct BubbleChartView: View {
                 let minDist = bubbles[i].radius + bubbles[j].radius + pad
                 if dist < minDist && dist > 0.01 {
                     let overlap = minDist - dist
-                    let strength: CGFloat = bubbles[j].id == draggedId ? 0.8 : 0.3
+                    let strength: CGFloat = bubbles[j].id == draggedId ? 0.8 : 0.4
                     fx += (dx / dist) * overlap * strength
                     fy += (dy / dist) * overlap * strength
                 }
@@ -302,35 +300,29 @@ struct BubbleChartView: View {
         let cellW = size.width / CGFloat(cols)
         let cellH = size.height / CGFloat(rows)
 
-        let watchlist = vm.watchlistSymbols
         var newBubbles: [BubbleState] = []
         for (idx, item) in items.enumerated() {
             let radius = radii[idx]
-            let col = idx % cols
-            let row = idx / cols
-            let gridPos = CGPoint(
-                x: max(radius, min(size.width - radius, (CGFloat(col) + 0.5) * cellW + CGFloat.random(in: -cellW * 0.15...cellW * 0.15))),
-                y: max(radius, min(size.height - radius, (CGFloat(row) + 0.5) * cellH + CGFloat.random(in: -cellH * 0.15...cellH * 0.15)))
-            )
-            let isW = watchlist.contains(item.0.symbol)
-            let homeY = isW ? size.height * 0.2 : size.height * 0.55
 
             if var old = existing[item.0.symbol] {
                 old.combined = item.0
                 old.tier = item.1
                 old.radius = radius
-                old.homePosition = CGPoint(x: old.position.x, y: max(radius, min(size.height - radius, homeY)))
                 newBubbles.append(old)
             } else {
-                let home = CGPoint(x: gridPos.x, y: max(radius, min(size.height - radius, homeY)))
+                let col = idx % cols
+                let row = idx / cols
+                let pos = CGPoint(
+                    x: max(radius, min(size.width - radius, (CGFloat(col) + 0.5) * cellW + CGFloat.random(in: -cellW * 0.15...cellW * 0.15))),
+                    y: max(radius, min(size.height - radius, (CGFloat(row) + 0.5) * cellH + CGFloat.random(in: -cellH * 0.15...cellH * 0.15)))
+                )
                 newBubbles.append(BubbleState(
                     id: item.0.symbol,
                     combined: item.0,
                     tier: item.1,
                     radius: radius,
-                    position: gridPos,
-                    velocity: .zero,
-                    homePosition: home
+                    position: pos,
+                    velocity: .zero
                 ))
             }
         }
@@ -338,20 +330,16 @@ struct BubbleChartView: View {
         isSettled = false
     }
 
-    /// Update home positions when watchlist changes (smooth vertical drift).
-    private func updateHomePositions() {
-        guard !bubbles.isEmpty else { return }
-        let watchlist = vm.watchlistSymbols
+    // MARK: - Watchlist Change
 
+    /// Give added symbols an upward impulse, removed symbols a downward nudge.
+    private func onWatchlistChanged(added: Set<String>, removed: Set<String>) {
         for idx in bubbles.indices {
-            let r = bubbles[idx].radius
-            let isW = watchlist.contains(bubbles[idx].id)
-            // Watchlist → top quarter, others → center.
-            let targetY = isW ? viewSize.height * 0.2 : viewSize.height * 0.55
-            bubbles[idx].homePosition = CGPoint(
-                x: bubbles[idx].position.x,
-                y: max(r, min(viewSize.height - r, targetY))
-            )
+            if added.contains(bubbles[idx].id) {
+                bubbles[idx].velocity.y = -6
+            } else if removed.contains(bubbles[idx].id) {
+                bubbles[idx].velocity.y = 3
+            }
         }
         isSettled = false
     }
@@ -367,5 +355,4 @@ private struct BubbleState: Identifiable {
     var radius: CGFloat
     var position: CGPoint
     var velocity: CGPoint
-    var homePosition: CGPoint
 }
