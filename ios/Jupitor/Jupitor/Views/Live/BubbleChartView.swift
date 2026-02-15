@@ -130,8 +130,8 @@ struct BubbleChartView: View {
 
             // Symbol label.
             Text(bubble.id)
-                .font(bubble.radius > 40 ? .caption.bold() : bubble.radius > 24 ? .caption2.bold() : .system(size: 9, weight: .bold))
-                .foregroundStyle(isWatchlist ? Color.watchlistColor : .white)
+                .font(.system(size: max(9, bubble.radius * 0.38), weight: .heavy))
+                .foregroundStyle((isWatchlist ? Color.watchlistColor : .white).opacity(0.75))
                 .minimumScaleFactor(0.5)
                 .padding(3)
         }
