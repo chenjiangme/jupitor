@@ -57,21 +57,8 @@ struct RootTabView: View {
                     ProgressView()
                         .foregroundStyle(.secondary)
                 } else if let day = dayData {
-                    VStack(spacing: 0) {
-                        if nextData != nil {
-                            Picker("Day", selection: $selectedDay) {
-                                ForEach(DaySelection.allCases, id: \.self) { d in
-                                    Text(d.rawValue).tag(d)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .padding(.horizontal)
-                            .padding(.top, 8)
-                        }
-
-                        let displayDay = selectedDay == .next ? (nextData ?? day) : day
-                        BubbleChartView(day: displayDay, date: currentDate)
-                    }
+                    let displayDay = selectedDay == .next ? (nextData ?? day) : day
+                    BubbleChartView(day: displayDay, date: currentDate)
                 } else if isLive, let error = vm.error {
                     VStack(spacing: 12) {
                         Image(systemName: "wifi.slash")
@@ -93,24 +80,45 @@ struct RootTabView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    if isLive {
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(.green)
-                                .frame(width: 8, height: 8)
-                                .pulseAnimation()
-                            Text("LIVE")
-                                .font(.caption2.bold())
-                                .foregroundStyle(.green)
+                    HStack(spacing: 8) {
+                        if isLive {
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(.green)
+                                    .frame(width: 8, height: 8)
+                                    .pulseAnimation()
+                                Text("LIVE")
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(.green)
+                            }
+                        } else {
+                            Button {
+                                currentDate = vm.date
+                                selectedDay = .today
+                            } label: {
+                                Text("LIVE")
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                    } else {
-                        Button {
-                            currentDate = vm.date
-                            selectedDay = .today
-                        } label: {
-                            Text("LIVE")
-                                .font(.caption2.bold())
-                                .foregroundStyle(.secondary)
+
+                        if nextData != nil {
+                            HStack(spacing: 4) {
+                                Button {
+                                    selectedDay = .today
+                                } label: {
+                                    Text("T")
+                                        .font(.caption2.bold())
+                                        .foregroundStyle(selectedDay == .today ? .white : .secondary)
+                                }
+                                Button {
+                                    selectedDay = .next
+                                } label: {
+                                    Text("N")
+                                        .font(.caption2.bold())
+                                        .foregroundStyle(selectedDay == .next ? .white : .secondary)
+                                }
+                            }
                         }
                     }
                 }
