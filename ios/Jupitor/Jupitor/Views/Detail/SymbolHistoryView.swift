@@ -17,6 +17,46 @@ struct SymbolHistoryView: View {
         dates.map { ($0.pre?.turnover ?? 0) + ($0.reg?.turnover ?? 0) }.max() ?? 1
     }
 
+    /// Build week rows from dates. Each row has 5 slots (Mon–Fri).
+    private var weekRows: [WeekRow] {
+        guard !dates.isEmpty else { return [] }
+        let cal = Calendar(identifier: .gregorian)
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        df.timeZone = TimeZone(identifier: "America/New_York")
+
+        // Map dates by ISO year-week + weekday (Mon=0..Fri=4).
+        var lookup: [String: SymbolDateStats] = [:]
+        for d in dates { lookup[d.date] = d }
+
+        var rows: [WeekRow] = []
+        var currentWeek: (year: Int, week: Int)? = nil
+        var slots: [SymbolDateStats?] = Array(repeating: nil, count: 5)
+
+        for d in dates {
+            guard let date = df.date(from: d.date) else { continue }
+            let comps = cal.dateComponents([.yearForWeekOfYear, .weekOfYear, .weekday], from: date)
+            guard let y = comps.yearForWeekOfYear, let w = comps.weekOfYear, let wd = comps.weekday else { continue }
+            // weekday: 1=Sun..7=Sat → Mon=0, Tue=1, Wed=2, Thu=3, Fri=4
+            let col = (wd + 5) % 7  // Mon=0..Sun=6
+            guard col < 5 else { continue }
+
+            let thisWeek = (y, w)
+            if currentWeek == nil {
+                currentWeek = thisWeek
+            } else if currentWeek! != thisWeek {
+                rows.append(WeekRow(id: "\(currentWeek!.year)-\(currentWeek!.week)", slots: slots))
+                slots = Array(repeating: nil, count: 5)
+                currentWeek = thisWeek
+            }
+            slots[col] = d
+        }
+        if currentWeek != nil {
+            rows.append(WeekRow(id: "\(currentWeek!.year)-\(currentWeek!.week)", slots: slots))
+        }
+        return rows
+    }
+
     var body: some View {
         Group {
             if isLoading {
@@ -31,15 +71,24 @@ struct SymbolHistoryView: View {
             } else {
                 ScrollView {
                     let cellSize = maxDiameter + 2
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: cellSize, maximum: cellSize), spacing: 0)], spacing: 0) {
+                    LazyVStack(spacing: 0) {
                         if hasMore {
-                            Color.clear.frame(width: 1, height: 1)
+                            Color.clear.frame(height: 1)
                                 .onAppear { loadMore() }
                         }
 
-                        ForEach(dates) { entry in
-                            ringView(entry)
-                                .frame(width: cellSize, height: cellSize)
+                        ForEach(weekRows) { row in
+                            HStack(spacing: 0) {
+                                ForEach(0..<5, id: \.self) { col in
+                                    if let entry = row.slots[col] {
+                                        ringView(entry)
+                                            .frame(width: cellSize, height: cellSize)
+                                    } else {
+                                        Color.clear
+                                            .frame(width: cellSize, height: cellSize)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -112,4 +161,11 @@ struct SymbolHistoryView: View {
             isLoadingMore = false
         }
     }
+}
+
+// MARK: - Week Row
+
+private struct WeekRow: Identifiable {
+    let id: String
+    let slots: [SymbolDateStats?]  // [Mon, Tue, Wed, Thu, Fri]
 }
