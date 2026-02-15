@@ -438,6 +438,8 @@ func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Req
 		}
 	}
 	sort.Strings(tradeDates)
+	allDates := make([]string, len(tradeDates))
+	copy(allDates, tradeDates)
 
 	// Apply "until" filter: only dates <= the given date.
 	if until != "" {
@@ -464,7 +466,13 @@ func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Req
 	// Load and aggregate each date, using cache.
 	var dates []SymbolDateStats
 	for _, date := range tradeDates {
-		entry := s.loadSymbolDateStats(symbol, date)
+		// Find prev date in the full list.
+		idx := sort.SearchStrings(allDates, date)
+		prevDate := ""
+		if idx > 0 {
+			prevDate = allDates[idx-1]
+		}
+		entry := s.loadSymbolDateStats(symbol, date, prevDate)
 		if entry != nil {
 			dates = append(dates, *entry)
 		}
@@ -508,22 +516,51 @@ func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Req
 	writeJSON(w, SymbolHistoryResponse{Symbol: symbol, Dates: dates, HasMore: hasMore})
 }
 
-// loadSymbolDateStats reads a single per-symbol trade file, filters, splits
-// by session, and aggregates. Results are cached forever (history is immutable).
-func (s *DashboardServer) loadSymbolDateStats(symbol, date string) *SymbolDateStats {
+// loadSymbolDateStats reads per-symbol trade files using the same (P 4PM, D 4PM]
+// window as consolidated files: after-hours from prevDate's file + current date's
+// file up to 4PM. Results are cached forever (history is immutable).
+func (s *DashboardServer) loadSymbolDateStats(symbol, date, prevDate string) *SymbolDateStats {
 	cacheKey := symbol + ":" + date
 	if v, ok := s.symbolHistoryCache.Load(cacheKey); ok {
 		return v.(*SymbolDateStats)
 	}
 
-	path := filepath.Join(s.dataDir, "us", "trades", symbol, date+".parquet")
-	records, err := parquet.ReadFile[store.TradeRecord](path)
-	if err != nil || len(records) == 0 {
-		return nil
+	tradesDir := filepath.Join(s.dataDir, "us", "trades", symbol)
+
+	// regularClose returns 4PM as ET-shifted millis (same convention as stock_trades.go).
+	close4pm := func(d string) int64 {
+		t, _ := time.Parse("2006-01-02", d)
+		return time.Date(t.Year(), t.Month(), t.Day(), 16, 0, 0, 0, time.UTC).UnixMilli()
+	}
+
+	dateClose := close4pm(date)
+	var trades []store.TradeRecord
+
+	// Read previous date's file: trades after P 4PM (after-hours → pre-market).
+	if prevDate != "" {
+		prevClose := close4pm(prevDate)
+		pPath := filepath.Join(tradesDir, prevDate+".parquet")
+		if records, err := parquet.ReadFile[store.TradeRecord](pPath); err == nil {
+			for _, r := range records {
+				if r.Timestamp > prevClose {
+					trades = append(trades, r)
+				}
+			}
+		}
+	}
+
+	// Read current date's file: trades up to D 4PM.
+	dPath := filepath.Join(tradesDir, date+".parquet")
+	if records, err := parquet.ReadFile[store.TradeRecord](dPath); err == nil {
+		for _, r := range records {
+			if r.Timestamp <= dateClose {
+				trades = append(trades, r)
+			}
+		}
 	}
 
 	// Apply exchange/condition filter (same as consolidated files).
-	filtered := dashboard.FilterTradeRecords(records)
+	filtered := dashboard.FilterTradeRecords(trades)
 	if len(filtered) == 0 {
 		return nil
 	}
