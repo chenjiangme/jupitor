@@ -13,6 +13,7 @@ struct BubbleChartView: View {
     @State private var detailCombined: CombinedStatsJSON?
     @State private var isSettled = false
     @State private var showWatchlistOnly = false
+    @State private var isPinching = false
 
     private let minInnerRatio: CGFloat = 0.15
 
@@ -76,7 +77,15 @@ struct BubbleChartView: View {
                 }
                 .gesture(
                     MagnifyGesture()
+                        .onChanged { _ in
+                            isPinching = true
+                        }
                         .onEnded { value in
+                            isPinching = false
+                            if let idx = bubbles.firstIndex(where: { $0.id == draggedId }) {
+                                bubbles[idx].velocity = .zero
+                            }
+                            draggedId = nil
                             let newValue: Bool
                             if value.magnification < 0.7 {
                                 newValue = true
@@ -169,6 +178,7 @@ struct BubbleChartView: View {
         .simultaneousGesture(
             DragGesture(minimumDistance: 6, coordinateSpace: .named("canvas"))
                 .onChanged { value in
+                    guard !isPinching else { return }
                     wasDragged = true
                     draggedId = bubble.id
                     isSettled = false
