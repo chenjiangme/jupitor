@@ -9,8 +9,13 @@ struct SymbolHistoryView: View {
     @State private var hasMore = false
     @State private var isLoadingMore = false
 
-    private let ringDiameter: CGFloat = 44
+    private let maxDiameter: CGFloat = 60
+    private let minDiameter: CGFloat = 20
     private let minInnerRatio: CGFloat = 0.15
+
+    private var maxTurnover: Double {
+        dates.map { ($0.pre?.turnover ?? 0) + ($0.reg?.turnover ?? 0) }.max() ?? 1
+    }
 
     var body: some View {
         Group {
@@ -25,7 +30,8 @@ struct SymbolHistoryView: View {
                 }
             } else {
                 ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: ringDiameter, maximum: ringDiameter), spacing: 4)], spacing: 4) {
+                    let cellSize = maxDiameter + 2
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: cellSize, maximum: cellSize), spacing: 0)], spacing: 0) {
                         if hasMore {
                             Color.clear.frame(width: 1, height: 1)
                                 .onAppear { loadMore() }
@@ -33,9 +39,9 @@ struct SymbolHistoryView: View {
 
                         ForEach(dates) { entry in
                             ringView(entry)
+                                .frame(width: cellSize, height: cellSize)
                         }
                     }
-                    .padding(4)
                 }
                 .defaultScrollAnchor(.bottom)
             }
@@ -52,9 +58,11 @@ struct SymbolHistoryView: View {
         let preTurnover = entry.pre?.turnover ?? 0
         let regTurnover = entry.reg?.turnover ?? 0
         let total = preTurnover + regTurnover
+        let ratio = maxTurnover > 0 ? sqrt(CGFloat(total / maxTurnover)) : 0
+        let diameter = minDiameter + (maxDiameter - minDiameter) * ratio
         let preRatio = total > 0 ? sqrt(CGFloat(preTurnover / total)) : 0
-        let lineWidth: CGFloat = max(3, ringDiameter * 0.09)
-        let outerDia = ringDiameter - lineWidth
+        let lineWidth = max(3, diameter * 0.12)
+        let outerDia = diameter - lineWidth
         let innerDia = outerDia * max(minInnerRatio, preRatio)
 
         ZStack {
@@ -76,7 +84,7 @@ struct SymbolHistoryView: View {
                 lineWidth: lineWidth
             )
         }
-        .frame(width: ringDiameter, height: ringDiameter)
+        .frame(width: diameter, height: diameter)
     }
 
     // MARK: - Data Loading
