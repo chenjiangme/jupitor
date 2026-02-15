@@ -55,12 +55,45 @@ struct BubbleChartView: View {
             } else {
                 GeometryReader { geo in
                     ZStack {
+                        // Invisible background to receive pinch on empty areas.
+                        Color.clear.contentShape(Rectangle())
+
                         ForEach(bubbles) { bubble in
                             bubbleView(bubble)
                         }
                     }
                     .coordinateSpace(name: "canvas")
                     .frame(width: geo.size.width, height: geo.size.height)
+                    .highPriorityGesture(
+                        MagnifyGesture()
+                            .onChanged { _ in
+                                if !isPinching {
+                                    isPinching = true
+                                    // Snap back any bubble that was dragged before pinch was recognized.
+                                    if let id = draggedId, let pos = preDragPosition,
+                                       let idx = bubbles.firstIndex(where: { $0.id == id }) {
+                                        bubbles[idx].position = pos
+                                        bubbles[idx].velocity = .zero
+                                    }
+                                    draggedId = nil
+                                    preDragPosition = nil
+                                }
+                            }
+                            .onEnded { value in
+                                isPinching = false
+                                let newValue: Bool
+                                if value.magnification < 0.7 {
+                                    newValue = true
+                                } else if value.magnification > 1.3 {
+                                    newValue = false
+                                } else {
+                                    return
+                                }
+                                guard newValue != showWatchlistOnly else { return }
+                                showWatchlistOnly = newValue
+                                if viewSize.width > 0 { syncBubbles(in: viewSize) }
+                            }
+                    )
                     .onAppear {
                         viewSize = geo.size
                         if bubbles.isEmpty { syncBubbles(in: geo.size) }
@@ -76,36 +109,6 @@ struct BubbleChartView: View {
                         try? await Task.sleep(for: .milliseconds(16))
                     }
                 }
-                .gesture(
-                    MagnifyGesture()
-                        .onChanged { _ in
-                            if !isPinching {
-                                isPinching = true
-                                // Snap back any bubble that was dragged before pinch was recognized.
-                                if let id = draggedId, let pos = preDragPosition,
-                                   let idx = bubbles.firstIndex(where: { $0.id == id }) {
-                                    bubbles[idx].position = pos
-                                    bubbles[idx].velocity = .zero
-                                }
-                                draggedId = nil
-                                preDragPosition = nil
-                            }
-                        }
-                        .onEnded { value in
-                            isPinching = false
-                            let newValue: Bool
-                            if value.magnification < 0.7 {
-                                newValue = true
-                            } else if value.magnification > 1.3 {
-                                newValue = false
-                            } else {
-                                return
-                            }
-                            guard newValue != showWatchlistOnly else { return }
-                            showWatchlistOnly = newValue
-                            if viewSize.width > 0 { syncBubbles(in: viewSize) }
-                        }
-                )
 
             }
         }
