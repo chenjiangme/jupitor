@@ -438,6 +438,12 @@ func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Req
 	}
 	sort.Strings(tradeDates)
 
+	// Cap to most recent 252 trading days (1 year).
+	const maxDays = 252
+	if len(tradeDates) > maxDays {
+		tradeDates = tradeDates[len(tradeDates)-maxDays:]
+	}
+
 	// Apply "before" filter: only dates strictly before the given date.
 	if before != "" {
 		end := sort.SearchStrings(tradeDates, before)
