@@ -14,6 +14,7 @@ struct BubbleChartView: View {
     @State private var isSettled = false
     @State private var showWatchlistOnly = false
     @State private var isPinching = false
+    @State private var preDragPosition: CGPoint?
 
     private let minInnerRatio: CGFloat = 0.15
 
@@ -78,14 +79,20 @@ struct BubbleChartView: View {
                 .gesture(
                     MagnifyGesture()
                         .onChanged { _ in
-                            isPinching = true
+                            if !isPinching {
+                                isPinching = true
+                                // Snap back any bubble that was dragged before pinch was recognized.
+                                if let id = draggedId, let pos = preDragPosition,
+                                   let idx = bubbles.firstIndex(where: { $0.id == id }) {
+                                    bubbles[idx].position = pos
+                                    bubbles[idx].velocity = .zero
+                                }
+                                draggedId = nil
+                                preDragPosition = nil
+                            }
                         }
                         .onEnded { value in
                             isPinching = false
-                            if let idx = bubbles.firstIndex(where: { $0.id == draggedId }) {
-                                bubbles[idx].velocity = .zero
-                            }
-                            draggedId = nil
                             let newValue: Bool
                             if value.magnification < 0.7 {
                                 newValue = true
@@ -179,19 +186,23 @@ struct BubbleChartView: View {
             DragGesture(minimumDistance: 6, coordinateSpace: .named("canvas"))
                 .onChanged { value in
                     guard !isPinching else { return }
-                    wasDragged = true
-                    draggedId = bubble.id
-                    isSettled = false
                     if let idx = bubbles.firstIndex(where: { $0.id == bubble.id }) {
+                        if preDragPosition == nil {
+                            preDragPosition = bubbles[idx].position
+                        }
+                        wasDragged = true
+                        draggedId = bubble.id
+                        isSettled = false
                         bubbles[idx].position = value.location
                         bubbles[idx].velocity = .zero
                     }
                 }
-                .onEnded { value in
+                .onEnded { _ in
                     if let idx = bubbles.firstIndex(where: { $0.id == bubble.id }) {
                         bubbles[idx].velocity = .zero
                     }
                     draggedId = nil
+                    preDragPosition = nil
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                         wasDragged = false
                     }
