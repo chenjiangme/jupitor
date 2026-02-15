@@ -73,7 +73,7 @@ struct BubbleChartView: View {
         let isWatchlist = vm.watchlistSymbols.contains(bubble.id)
         let isDragged = draggedId == bubble.id
         let diameter = bubble.radius * 2
-        let ringWidth = max(3, bubble.radius * 0.12)
+        let ringWidth = max(4, bubble.radius * 0.18)
         let outerDia = diameter - ringWidth
         let innerDia = outerDia * innerRatio
 
