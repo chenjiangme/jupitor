@@ -95,24 +95,24 @@ struct BubbleChartView: View {
                     lineWidth: isWatchlist ? 2.5 : 1
                 )
 
-            VStack(spacing: 0) {
+            VStack(spacing: 1) {
                 Text(bubble.id)
-                    .font(bubble.radius > 28 ? .caption2.bold() : .system(size: 9, weight: .bold))
+                    .font(bubble.radius > 40 ? .caption.bold() : bubble.radius > 24 ? .caption2.bold() : .system(size: 9, weight: .bold))
                     .foregroundStyle(.white)
-                    .minimumScaleFactor(0.6)
+                    .minimumScaleFactor(0.5)
 
-                if bubble.radius > 24 {
+                if bubble.radius > 20 {
                     let preGain = bubble.combined.pre?.maxGain ?? 0
                     let regGain = bubble.combined.reg?.maxGain ?? 0
                     let gain = max(preGain, regGain)
                     if gain > 0 {
                         Text(Fmt.gain(gain))
-                            .font(.system(size: bubble.radius > 32 ? 10 : 8, weight: .semibold))
+                            .font(.system(size: bubble.radius > 40 ? 12 : bubble.radius > 28 ? 10 : 8, weight: .semibold))
                             .foregroundStyle(.white.opacity(0.85))
                     }
                 }
             }
-            .padding(2)
+            .padding(3)
         }
         .frame(width: diameter, height: diameter)
         .scaleEffect(breathScale * (isDragged ? 1.1 : 1.0))
@@ -227,14 +227,21 @@ struct BubbleChartView: View {
         }
         guard !items.isEmpty else { bubbles = []; return }
 
-        let maxTrades = items.map(\.2).max()!
-        let count = items.count
-        let maxR: CGFloat = count > 25 ? 26 : count > 15 ? 34 : 44
-        let minR: CGFloat = 16
+        // Area-proportional sizing: fill ~70% of canvas.
+        let totalArea = size.width * size.height * 0.7
+        let weights = items.map { sqrt(Double($0.2)) }
+        let totalWeight = weights.reduce(0, +)
+        let minR: CGFloat = 14
+        let maxR = min(size.width, size.height) / 2.5
+
+        let radii: [CGFloat] = weights.map { w in
+            let area = totalArea * CGFloat(w / totalWeight)
+            return max(minR, min(maxR, sqrt(area / .pi)))
+        }
 
         let existing = Dictionary(uniqueKeysWithValues: bubbles.map { ($0.id, $0) })
 
-        // Grid layout for new bubble placement (fills full space).
+        let count = items.count
         let cols = max(1, Int(ceil(sqrt(Double(count) * Double(size.width) / Double(size.height)))))
         let rows = max(1, Int(ceil(Double(count) / Double(cols))))
         let cellW = size.width / CGFloat(cols)
@@ -242,8 +249,7 @@ struct BubbleChartView: View {
 
         var newBubbles: [BubbleState] = []
         for (idx, item) in items.enumerated() {
-            let norm = sqrt(Double(item.2)) / sqrt(Double(maxTrades))
-            let radius = minR + CGFloat(norm) * (maxR - minR)
+            let radius = radii[idx]
 
             if var old = existing[item.0.symbol] {
                 old.combined = item.0
