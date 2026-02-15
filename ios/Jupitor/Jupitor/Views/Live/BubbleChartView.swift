@@ -11,7 +11,7 @@ struct BubbleChartView: View {
     @State private var wasDragged = false
     @State private var showDetail = false
     @State private var detailCombined: CombinedStatsJSON?
-    @State private var simTime: Double = 0
+    @State private var isSettled = false
 
     private let innerRatio: CGFloat = 0.6
 
@@ -48,7 +48,8 @@ struct BubbleChartView: View {
                         viewSize = newSize
                     }
                 }
-                .task {
+                .task(id: isSettled) {
+                    guard !isSettled else { return }
                     while !Task.isCancelled {
                         if viewSize.width > 0 { simulationStep() }
                         try? await Task.sleep(for: .milliseconds(16))
@@ -72,7 +73,6 @@ struct BubbleChartView: View {
     @ViewBuilder
     private func bubbleView(_ bubble: BubbleState) -> some View {
         let isWatchlist = vm.watchlistSymbols.contains(bubble.id)
-        let breathScale = 1.0 + sin(simTime * 1.5 + bubble.phaseOffset) * 0.015
         let isDragged = draggedId == bubble.id
         let diameter = bubble.radius * 2
         let ringWidth = max(3, bubble.radius * 0.12)
@@ -114,7 +114,7 @@ struct BubbleChartView: View {
                 .padding(3)
         }
         .frame(width: diameter, height: diameter)
-        .scaleEffect(breathScale * (isDragged ? 1.1 : 1.0))
+        .scaleEffect(isDragged ? 1.1 : 1.0)
         .shadow(color: isDragged ? .white.opacity(0.3) : .clear, radius: 8)
         .zIndex(isDragged ? 100 : 0)
         .position(bubble.position)
@@ -128,6 +128,7 @@ struct BubbleChartView: View {
                 .onChanged { value in
                     wasDragged = true
                     draggedId = bubble.id
+                    isSettled = false
                     if let idx = bubbles.firstIndex(where: { $0.id == bubble.id }) {
                         bubbles[idx].position = value.location
                         bubbles[idx].velocity = .zero
@@ -196,8 +197,8 @@ struct BubbleChartView: View {
     // MARK: - Physics Simulation
 
     private func simulationStep() {
-        simTime += 1.0 / 60.0
         let pad: CGFloat = 2
+        var maxVel: CGFloat = 0
 
         for i in bubbles.indices {
             guard bubbles[i].id != draggedId else { continue }
@@ -229,17 +230,13 @@ struct BubbleChartView: View {
             if by - r < margin { fy += (margin - (by - r)) * 0.5 }
             if by + r > viewSize.height - margin { fy -= ((by + r) - (viewSize.height - margin)) * 0.5 }
 
-            // Brownian motion (alive feel).
-            fx += CGFloat.random(in: -0.12...0.12)
-            fy += CGFloat.random(in: -0.12...0.12)
-
             // Apply forces.
             bubbles[i].velocity.x += fx
             bubbles[i].velocity.y += fy
 
             // Damping.
-            bubbles[i].velocity.x *= 0.9
-            bubbles[i].velocity.y *= 0.9
+            bubbles[i].velocity.x *= 0.88
+            bubbles[i].velocity.y *= 0.88
 
             // Clamp velocity.
             let vel = hypot(bubbles[i].velocity.x, bubbles[i].velocity.y)
@@ -247,6 +244,7 @@ struct BubbleChartView: View {
                 bubbles[i].velocity.x *= 4 / vel
                 bubbles[i].velocity.y *= 4 / vel
             }
+            maxVel = max(maxVel, vel)
 
             // Update position.
             bubbles[i].position.x += bubbles[i].velocity.x
@@ -255,6 +253,11 @@ struct BubbleChartView: View {
             // Hard clamp to bounds.
             bubbles[i].position.x = max(r, min(viewSize.width - r, bubbles[i].position.x))
             bubbles[i].position.y = max(r, min(viewSize.height - r, bubbles[i].position.y))
+        }
+
+        // Stop simulation once settled.
+        if maxVel < 0.05 {
+            isSettled = true
         }
     }
 
@@ -314,12 +317,12 @@ struct BubbleChartView: View {
                     tier: item.1,
                     radius: radius,
                     position: pos,
-                    velocity: .zero,
-                    phaseOffset: Double.random(in: 0...(2 * .pi))
+                    velocity: .zero
                 ))
             }
         }
         bubbles = newBubbles
+        isSettled = false
     }
 
     // MARK: - Day Header
@@ -357,5 +360,4 @@ private struct BubbleState: Identifiable {
     var radius: CGFloat
     var position: CGPoint
     var velocity: CGPoint
-    let phaseOffset: Double
 }
