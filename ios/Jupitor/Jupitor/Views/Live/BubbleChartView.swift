@@ -16,9 +16,12 @@ struct BubbleChartView: View {
     private let innerRatio: CGFloat = 0.6
 
     private var symbolData: [(combined: CombinedStatsJSON, tier: String)] {
-        day.tiers
+        let all = day.tiers
             .filter { $0.name == "MODERATE" || $0.name == "SPORADIC" }
             .flatMap { tier in tier.symbols.map { (combined: $0, tier: tier.name) } }
+        let watchlist = all.filter { vm.watchlistSymbols.contains($0.combined.symbol) }
+        let rest = all.filter { !vm.watchlistSymbols.contains($0.combined.symbol) }
+        return watchlist + rest
     }
 
     var body: some View {
