@@ -3,12 +3,17 @@ import Foundation
 actor APIService {
     private let baseURL: URL
     private let session: URLSession
+    private let longSession: URLSession
 
     init(baseURL: URL) {
         self.baseURL = baseURL
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
         self.session = URLSession(configuration: config)
+
+        let longConfig = URLSessionConfiguration.default
+        longConfig.timeoutIntervalForRequest = 120
+        self.longSession = URLSession(configuration: longConfig)
     }
 
     // MARK: - Dashboard
@@ -74,7 +79,11 @@ actor APIService {
 
     func fetchSymbolHistory(symbol: String) async throws -> SymbolHistoryResponse {
         let url = baseURL.appendingPathComponent("api/symbol-history/\(symbol)")
-        return try await fetch(url)
+        let (data, response) = try await longSession.data(from: url)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw APIError.requestFailed
+        }
+        return try JSONDecoder().decode(SymbolHistoryResponse.self, from: data)
     }
 
     // MARK: - Private

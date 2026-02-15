@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	alpacaapi "github.com/alpacahq/alpaca-trade-api-go/v3/alpaca"
@@ -406,31 +407,56 @@ func (s *DashboardServer) handleNews(w http.ResponseWriter, r *http.Request) {
 func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Request) {
 	symbol := strings.ToUpper(r.PathValue("symbol"))
 
+	// Load all history dates concurrently.
+	type result struct {
+		idx   int
+		entry SymbolDateStats
+		ok    bool
+	}
+
+	histDates := s.historyDates
+	results := make([]result, len(histDates))
+	sem := make(chan struct{}, 8) // limit concurrent file reads
+	var wg sync.WaitGroup
+
+	for i, date := range histDates {
+		wg.Add(1)
+		go func(i int, date string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			trades, err := dashboard.LoadHistoryTrades(s.dataDir, date)
+			if err != nil {
+				return
+			}
+			symTrades := dashboard.FilterTradesBySymbol(trades, symbol)
+			if len(symTrades) == 0 {
+				return
+			}
+			open930 := open930ET(date, s.loc)
+			pre, reg := dashboard.SplitBySession(symTrades, open930)
+			preStats := dashboard.AggregateTrades(pre)
+			regStats := dashboard.AggregateTrades(reg)
+
+			entry := SymbolDateStats{Date: date}
+			if ps, ok := preStats[symbol]; ok {
+				entry.Pre = convertSymbolStats(ps)
+			}
+			if rs, ok := regStats[symbol]; ok {
+				entry.Reg = convertSymbolStats(rs)
+			}
+			results[i] = result{idx: i, entry: entry, ok: true}
+		}(i, date)
+	}
+	wg.Wait()
+
+	// Collect in chronological order.
 	var dates []SymbolDateStats
-
-	// Scan all history dates.
-	for _, date := range s.historyDates {
-		trades, err := dashboard.LoadHistoryTrades(s.dataDir, date)
-		if err != nil {
-			continue
+	for _, r := range results {
+		if r.ok {
+			dates = append(dates, r.entry)
 		}
-		symTrades := dashboard.FilterTradesBySymbol(trades, symbol)
-		if len(symTrades) == 0 {
-			continue
-		}
-		open930 := open930ET(date, s.loc)
-		pre, reg := dashboard.SplitBySession(symTrades, open930)
-		preStats := dashboard.AggregateTrades(pre)
-		regStats := dashboard.AggregateTrades(reg)
-
-		entry := SymbolDateStats{Date: date}
-		if ps, ok := preStats[symbol]; ok {
-			entry.Pre = convertSymbolStats(ps)
-		}
-		if rs, ok := regStats[symbol]; ok {
-			entry.Reg = convertSymbolStats(rs)
-		}
-		dates = append(dates, entry)
 	}
 
 	// Append live data (today).
