@@ -325,8 +325,6 @@ struct BubbleChartView: View {
 
 }
 
-}
-
 // MARK: - Bubble State
 
 private struct BubbleState: Identifiable {
