@@ -37,6 +37,7 @@ final class DashboardViewModel {
     private let api: APIService
     private var refreshTimer: AnyCancellable?
     private var historyCache: [String: (today: DayDataJSON, next: DayDataJSON?)] = [:]
+    private var prefetchTask: Task<Void, Never>?
 
     // MARK: - Init
 
@@ -153,7 +154,8 @@ final class DashboardViewModel {
 
         guard !datesToFetch.isEmpty else { return }
 
-        Task.detached { [api] in
+        prefetchTask?.cancel()
+        prefetchTask = Task.detached { [api] in
             for d in datesToFetch {
                 guard !Task.isCancelled else { break }
                 do {
