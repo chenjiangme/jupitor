@@ -216,20 +216,20 @@ struct BubbleChartView: View {
     // MARK: - Sync Bubbles
 
     private func syncBubbles(in size: CGSize) {
-        let items: [(CombinedStatsJSON, String, Int, Color?, Color?)] = symbolData.compactMap { combined, tier in
-            let preTrades = combined.pre?.trades ?? 0
-            let regTrades = combined.reg?.trades ?? 0
-            let total = preTrades + regTrades
+        let items: [(CombinedStatsJSON, String, Double, Color?, Color?)] = symbolData.compactMap { combined, tier in
+            let preTurnover = combined.pre?.turnover ?? 0
+            let regTurnover = combined.reg?.turnover ?? 0
+            let total = preTurnover + regTurnover
             guard total > 0 else { return nil }
-            let preCol: Color? = combined.pre.map { turnoverColor($0.turnover) }
-            let regCol: Color? = combined.reg.map { turnoverColor($0.turnover) }
+            let preCol: Color? = combined.pre.map { tradesColor($0.trades) }
+            let regCol: Color? = combined.reg.map { tradesColor($0.trades) }
             return (combined, tier, total, preCol, regCol)
         }
         guard !items.isEmpty else { bubbles = []; return }
 
-        // Area-proportional sizing: fill ~70% of canvas.
+        // Area-proportional sizing by turnover: fill ~70% of canvas.
         let totalArea = size.width * size.height * 0.7
-        let weights = items.map { sqrt(Double($0.2)) }
+        let weights = items.map { sqrt($0.2) }
         let totalWeight = weights.reduce(0, +)
         let minR: CGFloat = 14
         let maxR = min(size.width, size.height) / 2.5
@@ -285,9 +285,10 @@ struct BubbleChartView: View {
 
     // MARK: - Colors
 
-    private func turnoverColor(_ turnover: Double) -> Color {
-        let logVal = log10(max(turnover, 1e4))
-        let t = max(0, min(1, (logVal - 4) / 4))
+    /// Trades color: log scale 100 (blue) → 100K (red).
+    private func tradesColor(_ trades: Int) -> Color {
+        let logVal = log10(max(Double(trades), 100))
+        let t = max(0, min(1, (logVal - 2) / 3)) // 10^2=100 → 10^5=100K
         let hue = 0.6 * (1 - t)
         return Color(hue: hue, saturation: 0.75, brightness: 0.85)
     }
@@ -325,17 +326,17 @@ struct BubbleChartView: View {
 
             Spacer()
 
-            // Turnover scale.
-            Text("TO:")
+            // Trades color scale.
+            Text("TRD:")
                 .font(.system(size: 8))
                 .foregroundStyle(.secondary)
             legendGradient
                 .frame(width: 80, height: 6)
                 .clipShape(Capsule())
             HStack {
-                Text("$10K")
+                Text("100")
                 Spacer()
-                Text("$100M")
+                Text("100K")
             }
             .font(.system(size: 7))
             .foregroundStyle(.secondary)
@@ -380,7 +381,7 @@ struct BubbleChartView: View {
 
     private var legendGradient: some View {
         LinearGradient(
-            colors: [turnoverColor(1e4), turnoverColor(1e5), turnoverColor(1e6), turnoverColor(1e7), turnoverColor(1e8)],
+            colors: [tradesColor(100), tradesColor(1_000), tradesColor(10_000), tradesColor(50_000), tradesColor(100_000)],
             startPoint: .leading,
             endPoint: .trailing
         )
