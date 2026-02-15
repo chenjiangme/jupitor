@@ -257,7 +257,11 @@ func filterTopN(ss []*CombinedStats, n int) []*CombinedStats {
 	for _, fn := range metrics {
 		copy(tmp, ss)
 		sort.Slice(tmp, func(i, j int) bool {
-			return fn(tmp[i]) > fn(tmp[j])
+			vi, vj := fn(tmp[i]), fn(tmp[j])
+			if vi != vj {
+				return vi > vj
+			}
+			return tmp[i].Symbol < tmp[j].Symbol
 		})
 		for i := 0; i < n && i < len(tmp); i++ {
 			keep[tmp[i].Symbol] = true
@@ -318,7 +322,7 @@ func ComputeDayData(label string, trades []store.TradeRecord, tierMap map[string
 
 	// Within each tier, keep only stocks in the top N of any metric
 	// (trades, turnover, or gain%) in either session.
-	tierTopN := map[string]int{"ACTIVE": 8, "MODERATE": 12, "SPORADIC": 12}
+	tierTopN := map[string]int{"ACTIVE": 5, "MODERATE": 8, "SPORADIC": 8}
 	for tier, ss := range tiers {
 		tiers[tier] = filterTopN(ss, tierTopN[tier])
 	}
