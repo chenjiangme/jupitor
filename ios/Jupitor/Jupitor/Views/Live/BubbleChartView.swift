@@ -62,6 +62,9 @@ struct BubbleChartView: View {
         .onChange(of: day) { _, _ in
             if viewSize.width > 0 { syncBubbles(in: viewSize) }
         }
+        .onChange(of: vm.watchlistSymbols) { _, _ in
+            if viewSize.width > 0 { relayoutBubbles() }
+        }
         .navigationDestination(isPresented: $showDetail) {
             if let combined = detailCombined {
                 SymbolDetailView(combined: combined, date: date)
@@ -327,6 +330,36 @@ struct BubbleChartView: View {
             }
         }
         bubbles = newBubbles
+        isSettled = false
+    }
+
+    /// Re-layout all bubbles with watchlist symbols at top.
+    private func relayoutBubbles() {
+        guard !bubbles.isEmpty else { return }
+        let watchlist = vm.watchlistSymbols
+        bubbles.sort { a, b in
+            let aW = watchlist.contains(a.id)
+            let bW = watchlist.contains(b.id)
+            if aW != bW { return aW }
+            return false
+        }
+
+        let count = bubbles.count
+        let cols = max(1, Int(ceil(sqrt(Double(count) * Double(viewSize.width) / Double(viewSize.height)))))
+        let rows = max(1, Int(ceil(Double(count) / Double(cols))))
+        let cellW = viewSize.width / CGFloat(cols)
+        let cellH = viewSize.height / CGFloat(rows)
+
+        for idx in bubbles.indices {
+            let col = idx % cols
+            let row = idx / cols
+            let r = bubbles[idx].radius
+            bubbles[idx].position = CGPoint(
+                x: max(r, min(viewSize.width - r, (CGFloat(col) + 0.5) * cellW)),
+                y: max(r, min(viewSize.height - r, (CGFloat(row) + 0.5) * cellH))
+            )
+            bubbles[idx].velocity = .zero
+        }
         isSettled = false
     }
 
