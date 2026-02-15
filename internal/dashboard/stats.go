@@ -277,6 +277,17 @@ func filterTopN(ss []*CombinedStats, n int) []*CombinedStats {
 	return result
 }
 
+// FilterTradesBySymbol returns only the trades matching the given symbol.
+func FilterTradesBySymbol(trades []store.TradeRecord, symbol string) []store.TradeRecord {
+	var out []store.TradeRecord
+	for i := range trades {
+		if trades[i].Symbol == symbol {
+			out = append(out, trades[i])
+		}
+	}
+	return out
+}
+
 // ComputeDayData builds a complete DayData for a set of trades. It splits by
 // session, aggregates, merges, filters (gain>=10% and trades>=100), groups by
 // tier, and sorts within each tier.

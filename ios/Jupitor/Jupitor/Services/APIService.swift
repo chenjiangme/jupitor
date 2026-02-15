@@ -70,6 +70,13 @@ actor APIService {
         return try await fetch(components.url!)
     }
 
+    // MARK: - Symbol History
+
+    func fetchSymbolHistory(symbol: String) async throws -> SymbolHistoryResponse {
+        let url = baseURL.appendingPathComponent("api/symbol-history/\(symbol)")
+        return try await fetch(url)
+    }
+
     // MARK: - Private
 
     private func fetch<T: Decodable>(_ url: URL) async throws -> T {

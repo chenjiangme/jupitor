@@ -11,28 +11,14 @@ struct BubbleChartView: View {
     @State private var wasDragged = false
     @State private var showDetail = false
     @State private var detailCombined: CombinedStatsJSON?
+    @State private var showHistory = false
+    @State private var historySymbol: String = ""
     @State private var isSettled = false
     @State private var showWatchlistOnly = false
     @State private var isPinching = false
     @State private var preDragPosition: CGPoint?
 
     private let minInnerRatio: CGFloat = 0.15
-
-    // Dark-to-light shades for gain (green) and loss (red), one per 100% band up to 500%.
-    private static let gainShades: [Color] = [
-        Color(hue: 0.33, saturation: 1.00, brightness: 0.45),
-        Color(hue: 0.33, saturation: 0.85, brightness: 0.60),
-        Color(hue: 0.33, saturation: 0.70, brightness: 0.75),
-        Color(hue: 0.33, saturation: 0.50, brightness: 0.88),
-        Color(hue: 0.33, saturation: 0.30, brightness: 1.00),
-    ]
-    private static let lossShades: [Color] = [
-        Color(hue: 0.00, saturation: 1.00, brightness: 0.50),
-        Color(hue: 0.00, saturation: 0.85, brightness: 0.65),
-        Color(hue: 0.00, saturation: 0.65, brightness: 0.80),
-        Color(hue: 0.00, saturation: 0.45, brightness: 0.92),
-        Color(hue: 0.00, saturation: 0.25, brightness: 1.00),
-    ]
 
     private var symbolData: [(combined: CombinedStatsJSON, tier: String)] {
         let all = day.tiers
@@ -166,6 +152,9 @@ struct BubbleChartView: View {
                 SymbolDetailView(combined: combined, date: date)
             }
         }
+        .navigationDestination(isPresented: $showHistory) {
+            SymbolHistoryView(symbol: historySymbol)
+        }
     }
 
     // MARK: - Bubble View
@@ -189,7 +178,7 @@ struct BubbleChartView: View {
                 .fill(Color.white.opacity(0.04))
 
             // Outer ring (regular session).
-            sessionRing(
+            SessionRingView(
                 gain: bubble.combined.reg?.maxGain ?? 0,
                 loss: bubble.combined.reg?.maxLoss ?? 0,
                 hasData: bubble.combined.reg != nil,
@@ -198,7 +187,7 @@ struct BubbleChartView: View {
             )
 
             // Inner ring (pre-market session).
-            sessionRing(
+            SessionRingView(
                 gain: bubble.combined.pre?.maxGain ?? 0,
                 loss: bubble.combined.pre?.maxLoss ?? 0,
                 hasData: bubble.combined.pre != nil,
@@ -222,48 +211,14 @@ struct BubbleChartView: View {
             guard !wasDragged else { return }
             Task { await vm.toggleWatchlist(symbol: bubble.id) }
         }
+        .onTapGesture(count: 1) {
+            guard !wasDragged else { return }
+            historySymbol = bubble.id
+            showHistory = true
+        }
         .onLongPressGesture {
             detailCombined = bubble.combined
             showDetail = true
-        }
-    }
-
-    // MARK: - Session Ring
-
-    @ViewBuilder
-    private func sessionRing(gain: Double, loss: Double, hasData: Bool, diameter: CGFloat, lineWidth: CGFloat) -> some View {
-        if hasData {
-            ZStack {
-                // Background track.
-                Circle()
-                    .stroke(Color.white.opacity(0.1), lineWidth: lineWidth)
-
-                // Larger % at full width, smaller % at half width (nested inside).
-                if gain >= loss {
-                    gradientArcs(value: gain, shades: Self.gainShades, lineWidth: lineWidth)
-                    gradientArcs(value: loss, shades: Self.lossShades, lineWidth: lineWidth * 0.5)
-                } else {
-                    gradientArcs(value: loss, shades: Self.lossShades, lineWidth: lineWidth)
-                    gradientArcs(value: gain, shades: Self.gainShades, lineWidth: lineWidth * 0.5)
-                }
-            }
-            .frame(width: diameter, height: diameter)
-        }
-    }
-
-    /// Draw overlapping arc bands: each 100% band uses a progressively lighter shade.
-    /// Later (lighter) bands draw on top of earlier (darker) ones.
-    @ViewBuilder
-    private func gradientArcs(value: Double, shades: [Color], lineWidth: CGFloat) -> some View {
-        let capped = min(value, 5.0)
-        ForEach(Array(shades.indices), id: \.self) { band in
-            let frac = min(max(capped - Double(band), 0), 1.0)
-            if frac > 0 {
-                Circle()
-                    .trim(from: 0, to: frac)
-                    .stroke(shades[band], style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-            }
         }
     }
 

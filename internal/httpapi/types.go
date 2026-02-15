@@ -79,6 +79,19 @@ type NewsResponse struct {
 	Articles []NewsArticleJSON `json:"articles"`
 }
 
+// SymbolDateStats holds pre/reg stats for a symbol on a single date.
+type SymbolDateStats struct {
+	Date string           `json:"date"`
+	Pre  *SymbolStatsJSON `json:"pre,omitempty"`
+	Reg  *SymbolStatsJSON `json:"reg,omitempty"`
+}
+
+// SymbolHistoryResponse is the response for the symbol history endpoint.
+type SymbolHistoryResponse struct {
+	Symbol string            `json:"symbol"`
+	Dates  []SymbolDateStats `json:"dates"`
+}
+
 // convertSymbolStats converts a dashboard.SymbolStats to JSON.
 func convertSymbolStats(s *dashboard.SymbolStats) *SymbolStatsJSON {
 	if s == nil {

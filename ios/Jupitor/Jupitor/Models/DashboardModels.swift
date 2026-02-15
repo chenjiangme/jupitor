@@ -76,6 +76,21 @@ struct NewsResponse: Codable {
     let articles: [NewsArticleJSON]
 }
 
+// MARK: - Symbol History
+
+struct SymbolDateStats: Codable, Identifiable {
+    let date: String
+    let pre: SymbolStatsJSON?
+    let reg: SymbolStatsJSON?
+
+    var id: String { date }
+}
+
+struct SymbolHistoryResponse: Codable {
+    let symbol: String
+    let dates: [SymbolDateStats]
+}
+
 // MARK: - Sort Modes
 
 enum SortMode: Int, CaseIterable {

@@ -207,6 +207,16 @@ final class DashboardViewModel {
         }
     }
 
+    // MARK: - Symbol History
+
+    func fetchSymbolHistory(symbol: String) async -> SymbolHistoryResponse? {
+        do {
+            return try await api.fetchSymbolHistory(symbol: symbol)
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - News
 
     func fetchNewsArticles(symbol: String, date: String) async -> [NewsArticleJSON] {

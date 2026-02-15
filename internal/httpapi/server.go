@@ -107,6 +107,7 @@ func (s *DashboardServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/watchlist/{symbol}", s.handleAddWatchlist)
 	mux.HandleFunc("DELETE /api/watchlist/{symbol}", s.handleRemoveWatchlist)
 	mux.HandleFunc("GET /api/news/{symbol}", s.handleNews)
+	mux.HandleFunc("GET /api/symbol-history/{symbol}", s.handleSymbolHistory)
 }
 
 // Handler returns an http.Handler with CORS middleware.
@@ -400,4 +401,70 @@ func (s *DashboardServer) handleNews(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, NewsResponse{Symbol: symbol, Date: date, Articles: articles})
+}
+
+func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Request) {
+	symbol := strings.ToUpper(r.PathValue("symbol"))
+
+	var dates []SymbolDateStats
+
+	// Scan all history dates.
+	for _, date := range s.historyDates {
+		trades, err := dashboard.LoadHistoryTrades(s.dataDir, date)
+		if err != nil {
+			continue
+		}
+		symTrades := dashboard.FilterTradesBySymbol(trades, symbol)
+		if len(symTrades) == 0 {
+			continue
+		}
+		open930 := open930ET(date, s.loc)
+		pre, reg := dashboard.SplitBySession(symTrades, open930)
+		preStats := dashboard.AggregateTrades(pre)
+		regStats := dashboard.AggregateTrades(reg)
+
+		entry := SymbolDateStats{Date: date}
+		if ps, ok := preStats[symbol]; ok {
+			entry.Pre = convertSymbolStats(ps)
+		}
+		if rs, ok := regStats[symbol]; ok {
+			entry.Reg = convertSymbolStats(rs)
+		}
+		dates = append(dates, entry)
+	}
+
+	// Append live data (today).
+	_, todayExIdx := s.model.TodaySnapshot()
+	if len(todayExIdx) > 0 {
+		symTrades := dashboard.FilterTradesBySymbol(todayExIdx, symbol)
+		if len(symTrades) > 0 {
+			now := time.Now().In(s.loc)
+			todayDate := now.Format("2006-01-02")
+			todayOpen930 := time.Date(now.Year(), now.Month(), now.Day(), 9, 30, 0, 0, s.loc).UnixMilli()
+			_, off := now.Zone()
+			todayOpen930ET := todayOpen930 + int64(off)*1000
+
+			pre, reg := dashboard.SplitBySession(symTrades, todayOpen930ET)
+			preStats := dashboard.AggregateTrades(pre)
+			regStats := dashboard.AggregateTrades(reg)
+
+			entry := SymbolDateStats{Date: todayDate}
+			if ps, ok := preStats[symbol]; ok {
+				entry.Pre = convertSymbolStats(ps)
+			}
+			if rs, ok := regStats[symbol]; ok {
+				entry.Reg = convertSymbolStats(rs)
+			}
+			// Avoid duplicate if today is already in history.
+			if len(dates) == 0 || dates[len(dates)-1].Date != todayDate {
+				dates = append(dates, entry)
+			}
+		}
+	}
+
+	if dates == nil {
+		dates = []SymbolDateStats{}
+	}
+
+	writeJSON(w, SymbolHistoryResponse{Symbol: symbol, Dates: dates})
 }
