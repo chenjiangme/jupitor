@@ -77,46 +77,8 @@ struct HistoryDayView: View {
         }
         .navigationTitle(date)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                sortMenu
-            }
-        }
         .task {
             await vm.loadHistory(date: date)
-        }
-    }
-
-    private var sortMenu: some View {
-        Menu {
-            Section("Pre-Market") {
-                sortButton(.preTrades)
-                sortButton(.preGain)
-                sortButton(.preTurnover)
-            }
-            Section("Regular") {
-                sortButton(.regTrades)
-                sortButton(.regGain)
-                sortButton(.regTurnover)
-            }
-            Section {
-                sortButton(.news)
-            }
-        } label: {
-            Text(vm.sortLabel)
-                .font(.caption.bold())
-        }
-    }
-
-    private func sortButton(_ mode: SortMode) -> some View {
-        Button {
-            Task { await vm.setSortMode(mode) }
-        } label: {
-            if vm.sortMode == mode {
-                Label(mode.label, systemImage: "checkmark")
-            } else {
-                Text(mode.label)
-            }
         }
     }
 }
