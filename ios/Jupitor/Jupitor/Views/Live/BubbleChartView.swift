@@ -13,7 +13,7 @@ struct BubbleChartView: View {
     @State private var detailCombined: CombinedStatsJSON?
     @State private var isSettled = false
 
-    private let innerRatio: CGFloat = 0.6
+    private let minInnerRatio: CGFloat = 0.15
 
     // Dark-to-light shades for gain (green) and loss (red), one per 100% band up to 500%.
     private static let gainShades: [Color] = [
@@ -99,7 +99,11 @@ struct BubbleChartView: View {
         let diameter = bubble.radius * 2
         let ringWidth = max(4, bubble.radius * 0.18)
         let outerDia = diameter - ringWidth
-        let innerDia = outerDia * innerRatio
+        let preTurnover = bubble.combined.pre?.turnover ?? 0
+        let regTurnover = bubble.combined.reg?.turnover ?? 0
+        let total = preTurnover + regTurnover
+        let preRatio = total > 0 ? sqrt(CGFloat(preTurnover / total)) : 0
+        let innerDia = outerDia * max(minInnerRatio, preRatio)
 
         ZStack {
             // Subtle background.
