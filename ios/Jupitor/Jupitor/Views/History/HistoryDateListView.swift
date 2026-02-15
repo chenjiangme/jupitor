@@ -38,8 +38,6 @@ struct HistoryDayView: View {
     }
 
     var body: some View {
-        @Bindable var vm = vm
-
         ZStack {
             Color.black.ignoresSafeArea()
 
@@ -57,15 +55,6 @@ struct HistoryDayView: View {
                         .padding(.horizontal)
                         .padding(.top, 8)
                     }
-
-                    Picker("Session", selection: $vm.sessionView) {
-                        ForEach(SessionView.allCases, id: \.self) { s in
-                            Text(s.rawValue).tag(s)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
 
                     let displayDay = selectedDay == .next ? (vm.historyNext ?? day) : day
                     BubbleChartView(day: displayDay, date: date)

@@ -13,6 +13,8 @@ struct BubbleChartView: View {
     @State private var detailCombined: CombinedStatsJSON?
     @State private var simTime: Double = 0
 
+    private let innerRatio: CGFloat = 0.65
+
     private var symbolData: [(combined: CombinedStatsJSON, tier: String)] {
         day.tiers
             .filter { $0.name == "MODERATE" || $0.name == "SPORADIC" }
@@ -59,9 +61,6 @@ struct BubbleChartView: View {
         .onChange(of: day) { _, _ in
             if viewSize.width > 0 { syncBubbles(in: viewSize) }
         }
-        .onChange(of: vm.sessionView) { _, _ in
-            if viewSize.width > 0 { syncBubbles(in: viewSize) }
-        }
         .navigationDestination(isPresented: $showDetail) {
             if let combined = detailCombined {
                 SymbolDetailView(combined: combined, date: date)
@@ -77,11 +76,19 @@ struct BubbleChartView: View {
         let breathScale = 1.0 + sin(simTime * 1.5 + bubble.phaseOffset) * 0.015
         let isDragged = draggedId == bubble.id
         let diameter = bubble.radius * 2
+        let innerDiameter = diameter * innerRatio
 
         ZStack {
+            // Outer circle (regular session).
             Circle()
-                .fill(bubble.color.opacity(0.85))
+                .fill(bubble.regColor?.opacity(0.85) ?? Color.white.opacity(0.08))
 
+            // Inner circle (pre-market session).
+            Circle()
+                .fill(bubble.preColor?.opacity(0.85) ?? Color.white.opacity(0.08))
+                .frame(width: innerDiameter, height: innerDiameter)
+
+            // Tier / watchlist border.
             Circle()
                 .strokeBorder(
                     isWatchlist ? Color.watchlistColor : Color.tierColor(for: bubble.tier).opacity(0.5),
@@ -95,9 +102,11 @@ struct BubbleChartView: View {
                     .minimumScaleFactor(0.6)
 
                 if bubble.radius > 24 {
-                    let s = vm.sessionView == .pre ? bubble.combined.pre : bubble.combined.reg
-                    if let s, s.maxGain > 0 {
-                        Text(Fmt.gain(s.maxGain))
+                    let preGain = bubble.combined.pre?.maxGain ?? 0
+                    let regGain = bubble.combined.reg?.maxGain ?? 0
+                    let gain = max(preGain, regGain)
+                    if gain > 0 {
+                        Text(Fmt.gain(gain))
                             .font(.system(size: bubble.radius > 32 ? 10 : 8, weight: .semibold))
                             .foregroundStyle(.white.opacity(0.85))
                     }
@@ -207,11 +216,14 @@ struct BubbleChartView: View {
     // MARK: - Sync Bubbles
 
     private func syncBubbles(in size: CGSize) {
-        let session = vm.sessionView
-        let items: [(CombinedStatsJSON, String, Int, Double)] = symbolData.compactMap { combined, tier in
-            let s = session == .pre ? combined.pre : combined.reg
-            guard let s, s.trades > 0 else { return nil }
-            return (combined, tier, s.trades, s.turnover)
+        let items: [(CombinedStatsJSON, String, Int, Color?, Color?)] = symbolData.compactMap { combined, tier in
+            let preTrades = combined.pre?.trades ?? 0
+            let regTrades = combined.reg?.trades ?? 0
+            let total = preTrades + regTrades
+            guard total > 0 else { return nil }
+            let preCol: Color? = combined.pre.map { turnoverColor($0.turnover) }
+            let regCol: Color? = combined.reg.map { turnoverColor($0.turnover) }
+            return (combined, tier, total, preCol, regCol)
         }
         guard !items.isEmpty else { bubbles = []; return }
 
@@ -232,17 +244,15 @@ struct BubbleChartView: View {
         for (idx, item) in items.enumerated() {
             let norm = sqrt(Double(item.2)) / sqrt(Double(maxTrades))
             let radius = minR + CGFloat(norm) * (maxR - minR)
-            let color = turnoverColor(item.3)
 
             if var old = existing[item.0.symbol] {
-                // Preserve position and velocity, update data.
                 old.combined = item.0
                 old.tier = item.1
                 old.radius = radius
-                old.color = color
+                old.preColor = item.3
+                old.regColor = item.4
                 newBubbles.append(old)
             } else {
-                // New bubble — place on jittered grid.
                 let col = idx % cols
                 let row = idx / cols
                 let cx = (CGFloat(col) + 0.5) * cellW + CGFloat.random(in: -cellW * 0.15...cellW * 0.15)
@@ -256,7 +266,8 @@ struct BubbleChartView: View {
                     combined: item.0,
                     tier: item.1,
                     radius: radius,
-                    color: color,
+                    preColor: item.3,
+                    regColor: item.4,
                     position: pos,
                     velocity: .zero,
                     phaseOffset: Double.random(in: 0...(2 * .pi))
@@ -302,21 +313,27 @@ struct BubbleChartView: View {
     // MARK: - Legend
 
     private var legend: some View {
-        HStack(spacing: 4) {
-            Text("Turnover:")
-                .font(.caption2)
+        HStack(spacing: 6) {
+            // Session indicator.
+            sessionLegend
+
+            Spacer()
+
+            // Turnover scale.
+            Text("TO:")
+                .font(.system(size: 8))
                 .foregroundStyle(.secondary)
             legendGradient
-                .frame(width: 120, height: 6)
+                .frame(width: 80, height: 6)
                 .clipShape(Capsule())
             HStack {
                 Text("$10K")
                 Spacer()
                 Text("$100M")
             }
-            .font(.system(size: 8))
+            .font(.system(size: 7))
             .foregroundStyle(.secondary)
-            .frame(width: 120)
+            .frame(width: 80)
 
             Spacer()
 
@@ -327,6 +344,32 @@ struct BubbleChartView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
+    }
+
+    private var sessionLegend: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 3) {
+                Circle()
+                    .fill(Color.cyan.opacity(0.8))
+                    .frame(width: 8, height: 8)
+                Text("PRE")
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 3) {
+                ZStack {
+                    Circle()
+                        .fill(Color.orange.opacity(0.8))
+                        .frame(width: 8, height: 8)
+                    Circle()
+                        .fill(Color.black)
+                        .frame(width: 5, height: 5)
+                }
+                Text("REG")
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private var legendGradient: some View {
@@ -352,7 +395,8 @@ private struct BubbleState: Identifiable {
     var combined: CombinedStatsJSON
     var tier: String
     var radius: CGFloat
-    var color: Color
+    var preColor: Color?
+    var regColor: Color?
     var position: CGPoint
     var velocity: CGPoint
     let phaseOffset: Double

@@ -11,8 +11,6 @@ struct LiveDashboardView: View {
     }
 
     var body: some View {
-        @Bindable var vm = vm
-
         ZStack {
             Color.black.ignoresSafeArea()
 
@@ -32,16 +30,6 @@ struct LiveDashboardView: View {
                         .padding(.horizontal)
                         .padding(.top, 8)
                     }
-
-                    // Session toggle.
-                    Picker("Session", selection: $vm.sessionView) {
-                        ForEach(SessionView.allCases, id: \.self) { s in
-                            Text(s.rawValue).tag(s)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
 
                     let day = selectedDay == .next ? (vm.next ?? today) : today
                     BubbleChartView(day: day, date: vm.date)
