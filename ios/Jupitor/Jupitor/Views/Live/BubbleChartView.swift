@@ -15,6 +15,22 @@ struct BubbleChartView: View {
 
     private let innerRatio: CGFloat = 0.6
 
+    // Dark-to-light shades for gain (green) and loss (red), one per 100% band up to 500%.
+    private static let gainShades: [Color] = [
+        Color(hue: 0.33, saturation: 1.00, brightness: 0.45),
+        Color(hue: 0.33, saturation: 0.85, brightness: 0.60),
+        Color(hue: 0.33, saturation: 0.70, brightness: 0.75),
+        Color(hue: 0.33, saturation: 0.50, brightness: 0.88),
+        Color(hue: 0.33, saturation: 0.30, brightness: 1.00),
+    ]
+    private static let lossShades: [Color] = [
+        Color(hue: 0.00, saturation: 1.00, brightness: 0.50),
+        Color(hue: 0.00, saturation: 0.85, brightness: 0.65),
+        Color(hue: 0.00, saturation: 0.65, brightness: 0.80),
+        Color(hue: 0.00, saturation: 0.45, brightness: 0.92),
+        Color(hue: 0.00, saturation: 0.25, brightness: 1.00),
+    ]
+
     private var symbolData: [(combined: CombinedStatsJSON, tier: String)] {
         let all = day.tiers
             .filter { $0.name == "MODERATE" || $0.name == "SPORADIC" }
@@ -95,8 +111,6 @@ struct BubbleChartView: View {
                 gain: bubble.combined.reg?.maxGain ?? 0,
                 loss: bubble.combined.reg?.maxLoss ?? 0,
                 hasData: bubble.combined.reg != nil,
-                gainColor: .green,
-                lossColor: .red,
                 diameter: outerDia,
                 lineWidth: ringWidth
             )
@@ -106,8 +120,6 @@ struct BubbleChartView: View {
                 gain: bubble.combined.pre?.maxGain ?? 0,
                 loss: bubble.combined.pre?.maxLoss ?? 0,
                 hasData: bubble.combined.pre != nil,
-                gainColor: .mint,
-                lossColor: .pink,
                 diameter: innerDia,
                 lineWidth: ringWidth
             )
@@ -158,46 +170,39 @@ struct BubbleChartView: View {
     // MARK: - Session Ring
 
     @ViewBuilder
-    private func sessionRing(gain: Double, loss: Double, hasData: Bool, gainColor: Color, lossColor: Color, diameter: CGFloat, lineWidth: CGFloat) -> some View {
+    private func sessionRing(gain: Double, loss: Double, hasData: Bool, diameter: CGFloat, lineWidth: CGFloat) -> some View {
         if hasData {
-            let gainFrac = min(gain, 1.0)
-            let lossFrac = min(loss, 1.0)
-
             ZStack {
                 // Background track.
                 Circle()
                     .stroke(Color.white.opacity(0.1), lineWidth: lineWidth)
 
                 // Larger % at full width, smaller % at half width (nested inside).
-                if gainFrac >= lossFrac {
-                    if gainFrac > 0 {
-                        Circle()
-                            .trim(from: 0, to: gainFrac)
-                            .stroke(gainColor, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                    }
-                    if lossFrac > 0 {
-                        Circle()
-                            .trim(from: 0, to: lossFrac)
-                            .stroke(lossColor, style: StrokeStyle(lineWidth: lineWidth * 0.5, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                    }
+                if gain >= loss {
+                    gradientArcs(value: gain, shades: Self.gainShades, lineWidth: lineWidth)
+                    gradientArcs(value: loss, shades: Self.lossShades, lineWidth: lineWidth * 0.5)
                 } else {
-                    if lossFrac > 0 {
-                        Circle()
-                            .trim(from: 0, to: lossFrac)
-                            .stroke(lossColor, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                    }
-                    if gainFrac > 0 {
-                        Circle()
-                            .trim(from: 0, to: gainFrac)
-                            .stroke(gainColor, style: StrokeStyle(lineWidth: lineWidth * 0.5, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                    }
+                    gradientArcs(value: loss, shades: Self.lossShades, lineWidth: lineWidth)
+                    gradientArcs(value: gain, shades: Self.gainShades, lineWidth: lineWidth * 0.5)
                 }
             }
             .frame(width: diameter, height: diameter)
+        }
+    }
+
+    /// Draw overlapping arc bands: each 100% band uses a progressively lighter shade.
+    /// Later (lighter) bands draw on top of earlier (darker) ones.
+    @ViewBuilder
+    private func gradientArcs(value: Double, shades: [Color], lineWidth: CGFloat) -> some View {
+        let capped = min(value, 5.0)
+        ForEach(Array(shades.indices), id: \.self) { band in
+            let frac = min(max(capped - Double(band), 0), 1.0)
+            if frac > 0 {
+                Circle()
+                    .trim(from: 0, to: frac)
+                    .stroke(shades[band], style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
         }
     }
 
