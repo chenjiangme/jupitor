@@ -211,11 +211,9 @@ struct BubbleChartView: View {
             var fx: CGFloat = 0
             var fy: CGFloat = 0
 
-            // Spring force toward home position.
-            let hx = bubbles[i].homePosition.x - bubbles[i].position.x
+            // Gentle vertical pull toward home zone (not exact position).
             let hy = bubbles[i].homePosition.y - bubbles[i].position.y
-            fx += hx * 0.06
-            fy += hy * 0.06
+            fy += hy * 0.02
 
             // Collision avoidance.
             for j in bubbles.indices where j != i {
@@ -304,29 +302,33 @@ struct BubbleChartView: View {
         let cellW = size.width / CGFloat(cols)
         let cellH = size.height / CGFloat(rows)
 
+        let watchlist = vm.watchlistSymbols
         var newBubbles: [BubbleState] = []
         for (idx, item) in items.enumerated() {
             let radius = radii[idx]
             let col = idx % cols
             let row = idx / cols
-            let home = CGPoint(
-                x: max(radius, min(size.width - radius, (CGFloat(col) + 0.5) * cellW)),
-                y: max(radius, min(size.height - radius, (CGFloat(row) + 0.5) * cellH))
+            let gridPos = CGPoint(
+                x: max(radius, min(size.width - radius, (CGFloat(col) + 0.5) * cellW + CGFloat.random(in: -cellW * 0.15...cellW * 0.15))),
+                y: max(radius, min(size.height - radius, (CGFloat(row) + 0.5) * cellH + CGFloat.random(in: -cellH * 0.15...cellH * 0.15)))
             )
+            let isW = watchlist.contains(item.0.symbol)
+            let homeY = isW ? size.height * 0.2 : size.height * 0.55
 
             if var old = existing[item.0.symbol] {
                 old.combined = item.0
                 old.tier = item.1
                 old.radius = radius
-                old.homePosition = home
+                old.homePosition = CGPoint(x: old.position.x, y: max(radius, min(size.height - radius, homeY)))
                 newBubbles.append(old)
             } else {
+                let home = CGPoint(x: gridPos.x, y: max(radius, min(size.height - radius, homeY)))
                 newBubbles.append(BubbleState(
                     id: item.0.symbol,
                     combined: item.0,
                     tier: item.1,
                     radius: radius,
-                    position: home,
+                    position: gridPos,
                     velocity: .zero,
                     homePosition: home
                 ))
@@ -336,32 +338,19 @@ struct BubbleChartView: View {
         isSettled = false
     }
 
-    /// Update home positions when watchlist changes (smooth spring transition).
+    /// Update home positions when watchlist changes (smooth vertical drift).
     private func updateHomePositions() {
         guard !bubbles.isEmpty else { return }
-
-        // Re-sort: watchlist first.
         let watchlist = vm.watchlistSymbols
-        bubbles.sort { a, b in
-            let aW = watchlist.contains(a.id)
-            let bW = watchlist.contains(b.id)
-            if aW != bW { return aW }
-            return false
-        }
-
-        let count = bubbles.count
-        let cols = max(1, Int(ceil(sqrt(Double(count) * Double(viewSize.width) / Double(viewSize.height)))))
-        let rows = max(1, Int(ceil(Double(count) / Double(cols))))
-        let cellW = viewSize.width / CGFloat(cols)
-        let cellH = viewSize.height / CGFloat(rows)
 
         for idx in bubbles.indices {
-            let col = idx % cols
-            let row = idx / cols
             let r = bubbles[idx].radius
+            let isW = watchlist.contains(bubbles[idx].id)
+            // Watchlist → top quarter, others → center.
+            let targetY = isW ? viewSize.height * 0.2 : viewSize.height * 0.55
             bubbles[idx].homePosition = CGPoint(
-                x: max(r, min(viewSize.width - r, (CGFloat(col) + 0.5) * cellW)),
-                y: max(r, min(viewSize.height - r, (CGFloat(row) + 0.5) * cellH))
+                x: bubbles[idx].position.x,
+                y: max(r, min(viewSize.height - r, targetY))
             )
         }
         isSettled = false
