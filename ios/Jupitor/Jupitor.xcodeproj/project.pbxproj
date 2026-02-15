@@ -27,6 +27,7 @@
 		A10030 /* BubbleChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10030; };
 		A10031 /* RingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10031; };
 		A10032 /* SymbolHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10032; };
+		A10033 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10033; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -51,6 +52,7 @@
 		B10030 /* BubbleChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BubbleChartView.swift; sourceTree = "<group>"; };
 		B10031 /* RingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingView.swift; sourceTree = "<group>"; };
 		B10032 /* SymbolHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SymbolHistoryView.swift; sourceTree = "<group>"; };
+		B10033 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C10001 /* Jupitor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jupitor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -78,6 +80,7 @@
 			children = (
 				B10001 /* JupitorApp.swift */,
 				B10011 /* Info.plist */,
+				B10033 /* Assets.xcassets */,
 				E10003 /* Models */,
 				E10004 /* Services */,
 				E10005 /* ViewModels */,
@@ -255,6 +258,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10033 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
