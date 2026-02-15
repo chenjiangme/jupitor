@@ -116,6 +116,10 @@ struct BubbleChartView: View {
         .shadow(color: isDragged ? .white.opacity(0.3) : .clear, radius: 8)
         .zIndex(isDragged ? 100 : 0)
         .position(bubble.position)
+        .onTapGesture(count: 2) {
+            guard !wasDragged else { return }
+            Task { await vm.toggleWatchlist(symbol: bubble.id) }
+        }
         .onTapGesture {
             guard !wasDragged else { return }
             detailCombined = bubble.combined
