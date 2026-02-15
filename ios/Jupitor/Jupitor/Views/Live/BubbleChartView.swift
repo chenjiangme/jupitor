@@ -63,7 +63,7 @@ struct BubbleChartView: View {
             if viewSize.width > 0 { syncBubbles(in: viewSize) }
         }
         .onChange(of: vm.watchlistSymbols) { _, _ in
-            if viewSize.width > 0 { relayoutBubbles() }
+            if viewSize.width > 0 { updateHomePositions() }
         }
         .navigationDestination(isPresented: $showDetail) {
             if let combined = detailCombined {
@@ -126,8 +126,7 @@ struct BubbleChartView: View {
             guard !wasDragged else { return }
             Task { await vm.toggleWatchlist(symbol: bubble.id) }
         }
-        .onTapGesture {
-            guard !wasDragged else { return }
+        .onLongPressGesture {
             detailCombined = bubble.combined
             showDetail = true
         }
@@ -144,9 +143,7 @@ struct BubbleChartView: View {
                 }
                 .onEnded { value in
                     if let idx = bubbles.firstIndex(where: { $0.id == bubble.id }) {
-                        let vx = value.predictedEndLocation.x - value.location.x
-                        let vy = value.predictedEndLocation.y - value.location.y
-                        bubbles[idx].velocity = CGPoint(x: vx * 0.3, y: vy * 0.3)
+                        bubbles[idx].velocity = .zero
                     }
                     draggedId = nil
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
@@ -214,6 +211,12 @@ struct BubbleChartView: View {
             var fx: CGFloat = 0
             var fy: CGFloat = 0
 
+            // Spring force toward home position.
+            let hx = bubbles[i].homePosition.x - bubbles[i].position.x
+            let hy = bubbles[i].homePosition.y - bubbles[i].position.y
+            fx += hx * 0.06
+            fy += hy * 0.06
+
             // Collision avoidance.
             for j in bubbles.indices where j != i {
                 let dx = bubbles[i].position.x - bubbles[j].position.x
@@ -243,8 +246,8 @@ struct BubbleChartView: View {
             bubbles[i].velocity.y += fy
 
             // Damping.
-            bubbles[i].velocity.x *= 0.88
-            bubbles[i].velocity.y *= 0.88
+            bubbles[i].velocity.x *= 0.85
+            bubbles[i].velocity.y *= 0.85
 
             // Clamp velocity.
             let vel = hypot(bubbles[i].velocity.x, bubbles[i].velocity.y)
@@ -304,28 +307,28 @@ struct BubbleChartView: View {
         var newBubbles: [BubbleState] = []
         for (idx, item) in items.enumerated() {
             let radius = radii[idx]
+            let col = idx % cols
+            let row = idx / cols
+            let home = CGPoint(
+                x: max(radius, min(size.width - radius, (CGFloat(col) + 0.5) * cellW)),
+                y: max(radius, min(size.height - radius, (CGFloat(row) + 0.5) * cellH))
+            )
 
             if var old = existing[item.0.symbol] {
                 old.combined = item.0
                 old.tier = item.1
                 old.radius = radius
+                old.homePosition = home
                 newBubbles.append(old)
             } else {
-                let col = idx % cols
-                let row = idx / cols
-                let cx = (CGFloat(col) + 0.5) * cellW + CGFloat.random(in: -cellW * 0.15...cellW * 0.15)
-                let cy = (CGFloat(row) + 0.5) * cellH + CGFloat.random(in: -cellH * 0.15...cellH * 0.15)
-                let pos = CGPoint(
-                    x: max(radius, min(size.width - radius, cx)),
-                    y: max(radius, min(size.height - radius, cy))
-                )
                 newBubbles.append(BubbleState(
                     id: item.0.symbol,
                     combined: item.0,
                     tier: item.1,
                     radius: radius,
-                    position: pos,
-                    velocity: .zero
+                    position: home,
+                    velocity: .zero,
+                    homePosition: home
                 ))
             }
         }
@@ -333,9 +336,11 @@ struct BubbleChartView: View {
         isSettled = false
     }
 
-    /// Re-layout all bubbles with watchlist symbols at top.
-    private func relayoutBubbles() {
+    /// Update home positions when watchlist changes (smooth spring transition).
+    private func updateHomePositions() {
         guard !bubbles.isEmpty else { return }
+
+        // Re-sort: watchlist first.
         let watchlist = vm.watchlistSymbols
         bubbles.sort { a, b in
             let aW = watchlist.contains(a.id)
@@ -354,11 +359,10 @@ struct BubbleChartView: View {
             let col = idx % cols
             let row = idx / cols
             let r = bubbles[idx].radius
-            bubbles[idx].position = CGPoint(
+            bubbles[idx].homePosition = CGPoint(
                 x: max(r, min(viewSize.width - r, (CGFloat(col) + 0.5) * cellW)),
                 y: max(r, min(viewSize.height - r, (CGFloat(row) + 0.5) * cellH))
             )
-            bubbles[idx].velocity = .zero
         }
         isSettled = false
     }
@@ -374,4 +378,5 @@ private struct BubbleState: Identifiable {
     var radius: CGFloat
     var position: CGPoint
     var velocity: CGPoint
+    var homePosition: CGPoint
 }
