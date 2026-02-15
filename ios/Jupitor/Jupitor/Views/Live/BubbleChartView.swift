@@ -76,7 +76,7 @@ struct BubbleChartView: View {
         let isDragged = draggedId == bubble.id
         let diameter = bubble.radius * 2
         let ringWidth = max(3, bubble.radius * 0.12)
-        let outerDia = diameter - ringWidth - 1
+        let outerDia = diameter - ringWidth
         let innerDia = outerDia * innerRatio
 
         ZStack {
@@ -106,16 +106,10 @@ struct BubbleChartView: View {
                 lineWidth: ringWidth
             )
 
-            // Watchlist border.
-            if isWatchlist {
-                Circle()
-                    .strokeBorder(Color.watchlistColor, lineWidth: 2.5)
-            }
-
-            // Symbol label only.
+            // Symbol label.
             Text(bubble.id)
                 .font(bubble.radius > 40 ? .caption.bold() : bubble.radius > 24 ? .caption2.bold() : .system(size: 9, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(isWatchlist ? Color.watchlistColor : .white)
                 .minimumScaleFactor(0.5)
                 .padding(3)
         }
@@ -158,8 +152,8 @@ struct BubbleChartView: View {
     @ViewBuilder
     private func sessionRing(gain: Double, loss: Double, hasData: Bool, gainColor: Color, lossColor: Color, diameter: CGFloat, lineWidth: CGFloat) -> some View {
         if hasData {
-            let gainFrac = min(gain, 0.5)
-            let lossFrac = min(loss, 0.5)
+            let gainFrac = min(gain, 1.0)
+            let lossFrac = min(loss, 1.0)
 
             ZStack {
                 // Background track.
