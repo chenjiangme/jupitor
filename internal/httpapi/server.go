@@ -409,12 +409,18 @@ func (s *DashboardServer) handleNews(w http.ResponseWriter, r *http.Request) {
 
 func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Request) {
 	symbol := strings.ToUpper(r.PathValue("symbol"))
+	before := r.URL.Query().Get("before")
+	limit := 200
+	if ls := r.URL.Query().Get("limit"); ls != "" {
+		if n, err := strconv.Atoi(ls); err == nil && n > 0 {
+			limit = n
+		}
+	}
 
 	// List per-symbol trade files: $DATA_1/us/trades/{SYMBOL}/*.parquet
 	symDir := filepath.Join(s.dataDir, "us", "trades", symbol)
 	entries, err := os.ReadDir(symDir)
 	if err != nil {
-		// No trade directory for this symbol.
 		writeJSON(w, SymbolHistoryResponse{Symbol: symbol, Dates: []SymbolDateStats{}})
 		return
 	}
@@ -432,6 +438,19 @@ func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Req
 	}
 	sort.Strings(tradeDates)
 
+	// Apply "before" filter: only dates strictly before the given date.
+	if before != "" {
+		end := sort.SearchStrings(tradeDates, before)
+		tradeDates = tradeDates[:end]
+	}
+
+	// Paginate: take the last `limit` dates.
+	hasMore := false
+	if len(tradeDates) > limit {
+		hasMore = true
+		tradeDates = tradeDates[len(tradeDates)-limit:]
+	}
+
 	// Load and aggregate each date, using cache.
 	var dates []SymbolDateStats
 	for _, date := range tradeDates {
@@ -441,31 +460,32 @@ func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	// Append live data (today, not cached).
-	_, todayExIdx := s.model.TodaySnapshot()
-	if len(todayExIdx) > 0 {
-		symTrades := dashboard.FilterTradesBySymbol(todayExIdx, symbol)
-		if len(symTrades) > 0 {
-			now := time.Now().In(s.loc)
-			todayDate := now.Format("2006-01-02")
-			todayOpen930 := time.Date(now.Year(), now.Month(), now.Day(), 9, 30, 0, 0, s.loc).UnixMilli()
-			_, off := now.Zone()
-			todayOpen930ET := todayOpen930 + int64(off)*1000
+	// Append live data (today, not cached) — only on the first page (no "before").
+	if before == "" {
+		_, todayExIdx := s.model.TodaySnapshot()
+		if len(todayExIdx) > 0 {
+			symTrades := dashboard.FilterTradesBySymbol(todayExIdx, symbol)
+			if len(symTrades) > 0 {
+				now := time.Now().In(s.loc)
+				todayDate := now.Format("2006-01-02")
+				todayOpen930 := time.Date(now.Year(), now.Month(), now.Day(), 9, 30, 0, 0, s.loc).UnixMilli()
+				_, off := now.Zone()
+				todayOpen930ET := todayOpen930 + int64(off)*1000
 
-			pre, reg := dashboard.SplitBySession(symTrades, todayOpen930ET)
-			preStats := dashboard.AggregateTrades(pre)
-			regStats := dashboard.AggregateTrades(reg)
+				pre, reg := dashboard.SplitBySession(symTrades, todayOpen930ET)
+				preStats := dashboard.AggregateTrades(pre)
+				regStats := dashboard.AggregateTrades(reg)
 
-			entry := SymbolDateStats{Date: todayDate}
-			if ps, ok := preStats[symbol]; ok {
-				entry.Pre = convertSymbolStats(ps)
-			}
-			if rs, ok := regStats[symbol]; ok {
-				entry.Reg = convertSymbolStats(rs)
-			}
-			// Avoid duplicate if today is already in history files.
-			if len(dates) == 0 || dates[len(dates)-1].Date != todayDate {
-				dates = append(dates, entry)
+				entry := SymbolDateStats{Date: todayDate}
+				if ps, ok := preStats[symbol]; ok {
+					entry.Pre = convertSymbolStats(ps)
+				}
+				if rs, ok := regStats[symbol]; ok {
+					entry.Reg = convertSymbolStats(rs)
+				}
+				if len(dates) == 0 || dates[len(dates)-1].Date != todayDate {
+					dates = append(dates, entry)
+				}
 			}
 		}
 	}
@@ -474,7 +494,7 @@ func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Req
 		dates = []SymbolDateStats{}
 	}
 
-	writeJSON(w, SymbolHistoryResponse{Symbol: symbol, Dates: dates})
+	writeJSON(w, SymbolHistoryResponse{Symbol: symbol, Dates: dates, HasMore: hasMore})
 }
 
 // loadSymbolDateStats reads a single per-symbol trade file, filters, splits

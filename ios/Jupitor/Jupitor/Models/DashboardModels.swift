@@ -89,6 +89,7 @@ struct SymbolDateStats: Codable, Identifiable {
 struct SymbolHistoryResponse: Codable {
     let symbol: String
     let dates: [SymbolDateStats]
+    let hasMore: Bool
 }
 
 // MARK: - Sort Modes

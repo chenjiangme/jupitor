@@ -88,8 +88,9 @@ type SymbolDateStats struct {
 
 // SymbolHistoryResponse is the response for the symbol history endpoint.
 type SymbolHistoryResponse struct {
-	Symbol string            `json:"symbol"`
-	Dates  []SymbolDateStats `json:"dates"`
+	Symbol  string            `json:"symbol"`
+	Dates   []SymbolDateStats `json:"dates"`
+	HasMore bool              `json:"hasMore"`
 }
 
 // convertSymbolStats converts a dashboard.SymbolStats to JSON.
