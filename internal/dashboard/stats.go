@@ -318,7 +318,7 @@ func ComputeDayData(label string, trades []store.TradeRecord, tierMap map[string
 
 	// Within each tier, keep only stocks in the top N of any metric
 	// (trades, turnover, or gain%) in either session.
-	tierTopN := map[string]int{"ACTIVE": 5, "MODERATE": 8, "SPORADIC": 8}
+	tierTopN := map[string]int{"ACTIVE": 8, "MODERATE": 12, "SPORADIC": 12}
 	for tier, ss := range tiers {
 		tiers[tier] = filterTopN(ss, tierTopN[tier])
 	}
