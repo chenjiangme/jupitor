@@ -55,7 +55,7 @@ struct BubbleChartView: View {
             } else {
                 GeometryReader { geo in
                     ZStack {
-                        // Invisible background to receive pinch on empty areas.
+                        // Invisible background to receive gestures on empty areas.
                         Color.clear.contentShape(Rectangle())
 
                         ForEach(bubbles) { bubble in
@@ -64,12 +64,16 @@ struct BubbleChartView: View {
                     }
                     .coordinateSpace(name: "canvas")
                     .frame(width: geo.size.width, height: geo.size.height)
-                    .highPriorityGesture(
-                        MagnifyGesture()
-                            .onChanged { _ in
+                    .gesture(
+                        SimultaneousGesture(
+                            DragGesture(minimumDistance: 6, coordinateSpace: .named("canvas")),
+                            MagnifyGesture()
+                        )
+                        .onChanged { value in
+                            // If pinch detected, cancel any drag and block further dragging.
+                            if value.second != nil {
                                 if !isPinching {
                                     isPinching = true
-                                    // Snap back any bubble that was dragged before pinch was recognized.
                                     if let id = draggedId, let pos = preDragPosition,
                                        let idx = bubbles.firstIndex(where: { $0.id == id }) {
                                         bubbles[idx].position = pos
@@ -78,13 +82,38 @@ struct BubbleChartView: View {
                                     draggedId = nil
                                     preDragPosition = nil
                                 }
+                                return
                             }
-                            .onEnded { value in
+
+                            // Single-finger drag.
+                            guard !isPinching, let drag = value.first else { return }
+
+                            if draggedId == nil {
+                                // Hit-test: find bubble under start location.
+                                if let idx = bubbles.firstIndex(where: {
+                                    hypot($0.position.x - drag.startLocation.x,
+                                          $0.position.y - drag.startLocation.y) <= $0.radius
+                                }) {
+                                    draggedId = bubbles[idx].id
+                                    preDragPosition = bubbles[idx].position
+                                }
+                            }
+
+                            if let id = draggedId, let idx = bubbles.firstIndex(where: { $0.id == id }) {
+                                wasDragged = true
+                                isSettled = false
+                                bubbles[idx].position = drag.location
+                                bubbles[idx].velocity = .zero
+                            }
+                        }
+                        .onEnded { value in
+                            // Handle pinch end.
+                            if let magnify = value.second {
                                 isPinching = false
                                 let newValue: Bool
-                                if value.magnification < 0.7 {
+                                if magnify.magnification < 0.7 {
                                     newValue = true
-                                } else if value.magnification > 1.3 {
+                                } else if magnify.magnification > 1.3 {
                                     newValue = false
                                 } else {
                                     return
@@ -92,7 +121,19 @@ struct BubbleChartView: View {
                                 guard newValue != showWatchlistOnly else { return }
                                 showWatchlistOnly = newValue
                                 if viewSize.width > 0 { syncBubbles(in: viewSize) }
+                                return
                             }
+
+                            // Handle drag end.
+                            if let id = draggedId, let idx = bubbles.firstIndex(where: { $0.id == id }) {
+                                bubbles[idx].velocity = .zero
+                            }
+                            draggedId = nil
+                            preDragPosition = nil
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                wasDragged = false
+                            }
+                        }
                     )
                     .onAppear {
                         viewSize = geo.size
@@ -185,32 +226,6 @@ struct BubbleChartView: View {
             detailCombined = bubble.combined
             showDetail = true
         }
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 6, coordinateSpace: .named("canvas"))
-                .onChanged { value in
-                    guard !isPinching else { return }
-                    if let idx = bubbles.firstIndex(where: { $0.id == bubble.id }) {
-                        if preDragPosition == nil {
-                            preDragPosition = bubbles[idx].position
-                        }
-                        wasDragged = true
-                        draggedId = bubble.id
-                        isSettled = false
-                        bubbles[idx].position = value.location
-                        bubbles[idx].velocity = .zero
-                    }
-                }
-                .onEnded { _ in
-                    if let idx = bubbles.firstIndex(where: { $0.id == bubble.id }) {
-                        bubbles[idx].velocity = .zero
-                    }
-                    draggedId = nil
-                    preDragPosition = nil
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                        wasDragged = false
-                    }
-                }
-        )
     }
 
     // MARK: - Session Ring
