@@ -7,12 +7,17 @@ struct SymbolHistoryView: View {
     @State private var dates: [SymbolDateStats] = []
     @State private var isLoading = true
 
-    private let ringDiameter: CGFloat = 60
+    private let maxRingDiameter: CGFloat = 60
+    private let minRingDiameter: CGFloat = 20
     private let ringLineWidth: CGFloat = 5
     private let minInnerRatio: CGFloat = 0.15
     private let cellSpacing: CGFloat = 12
 
     private let columns = [GridItem(.adaptive(minimum: 68), spacing: 12)]
+
+    private var maxTurnover: Double {
+        dates.map { ($0.pre?.turnover ?? 0) + ($0.reg?.turnover ?? 0) }.max() ?? 1
+    }
 
     var body: some View {
         Group {
@@ -58,7 +63,12 @@ struct SymbolHistoryView: View {
         let regTurnover = entry.reg?.turnover ?? 0
         let total = preTurnover + regTurnover
         let preRatio = total > 0 ? sqrt(CGFloat(preTurnover / total)) : 0
-        let outerDia = ringDiameter - ringLineWidth
+
+        // Scale ring diameter by sqrt(turnover / maxTurnover) for area-proportional sizing.
+        let ratio = maxTurnover > 0 ? sqrt(CGFloat(total / maxTurnover)) : 0
+        let diameter = minRingDiameter + (maxRingDiameter - minRingDiameter) * ratio
+        let lineWidth = max(3, diameter * 0.09)
+        let outerDia = diameter - lineWidth
         let innerDia = outerDia * max(minInnerRatio, preRatio)
 
         VStack(spacing: 4) {
@@ -71,7 +81,7 @@ struct SymbolHistoryView: View {
                     loss: entry.reg?.maxLoss ?? 0,
                     hasData: entry.reg != nil,
                     diameter: outerDia,
-                    lineWidth: ringLineWidth
+                    lineWidth: lineWidth
                 )
 
                 SessionRingView(
@@ -79,10 +89,10 @@ struct SymbolHistoryView: View {
                     loss: entry.pre?.maxLoss ?? 0,
                     hasData: entry.pre != nil,
                     diameter: innerDia,
-                    lineWidth: ringLineWidth
+                    lineWidth: lineWidth
                 )
             }
-            .frame(width: ringDiameter, height: ringDiameter)
+            .frame(width: maxRingDiameter, height: maxRingDiameter)
 
             Text(shortDate(entry.date))
                 .font(.system(size: 10))

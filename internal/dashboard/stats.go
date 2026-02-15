@@ -5,6 +5,7 @@ package dashboard
 import (
 	"math"
 	"sort"
+	"strings"
 
 	"jupitor/internal/store"
 )
@@ -284,6 +285,35 @@ func FilterTradesBySymbol(trades []store.TradeRecord, symbol string) []store.Tra
 		if trades[i].Symbol == symbol {
 			out = append(out, trades[i])
 		}
+	}
+	return out
+}
+
+// allowedConds for exchange/condition filter matching consolidated trade files.
+var allowedConds = map[string]bool{" ": true, "@": true, "T": true, "F": true}
+
+// FilterTradeRecords applies the same exchange/condition filter used by the
+// consolidated stock-trades files: exchange != "D", all conditions in {" ","@","T","F"}.
+func FilterTradeRecords(trades []store.TradeRecord) []store.TradeRecord {
+	out := make([]store.TradeRecord, 0, len(trades))
+	for i := range trades {
+		r := &trades[i]
+		if r.Exchange == "D" {
+			continue
+		}
+		if r.Conditions != "" {
+			ok := true
+			for _, c := range strings.Split(r.Conditions, ",") {
+				if !allowedConds[c] {
+					ok = false
+					break
+				}
+			}
+			if !ok {
+				continue
+			}
+		}
+		out = append(out, trades[i])
 	}
 	return out
 }

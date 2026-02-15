@@ -46,6 +46,9 @@ type DashboardServer struct {
 	// Alpaca client for watchlist (nil if not configured).
 	alpacaClient *alpacaapi.Client
 	watchlistID  string
+
+	// Cache for per-symbol per-date history stats. Key: "SYMBOL:DATE".
+	symbolHistoryCache sync.Map
 }
 
 // NewDashboardServer creates a new dashboard HTTP server.
@@ -407,59 +410,38 @@ func (s *DashboardServer) handleNews(w http.ResponseWriter, r *http.Request) {
 func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Request) {
 	symbol := strings.ToUpper(r.PathValue("symbol"))
 
-	// Load all history dates concurrently.
-	type result struct {
-		idx   int
-		entry SymbolDateStats
-		ok    bool
+	// List per-symbol trade files: $DATA_1/us/trades/{SYMBOL}/*.parquet
+	symDir := filepath.Join(s.dataDir, "us", "trades", symbol)
+	entries, err := os.ReadDir(symDir)
+	if err != nil {
+		// No trade directory for this symbol.
+		writeJSON(w, SymbolHistoryResponse{Symbol: symbol, Dates: []SymbolDateStats{}})
+		return
 	}
 
-	histDates := s.historyDates
-	results := make([]result, len(histDates))
-	sem := make(chan struct{}, 8) // limit concurrent file reads
-	var wg sync.WaitGroup
-
-	for i, date := range histDates {
-		wg.Add(1)
-		go func(i int, date string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			trades, err := dashboard.LoadHistoryTrades(s.dataDir, date)
-			if err != nil {
-				return
-			}
-			symTrades := dashboard.FilterTradesBySymbol(trades, symbol)
-			if len(symTrades) == 0 {
-				return
-			}
-			open930 := open930ET(date, s.loc)
-			pre, reg := dashboard.SplitBySession(symTrades, open930)
-			preStats := dashboard.AggregateTrades(pre)
-			regStats := dashboard.AggregateTrades(reg)
-
-			entry := SymbolDateStats{Date: date}
-			if ps, ok := preStats[symbol]; ok {
-				entry.Pre = convertSymbolStats(ps)
-			}
-			if rs, ok := regStats[symbol]; ok {
-				entry.Reg = convertSymbolStats(rs)
-			}
-			results[i] = result{idx: i, entry: entry, ok: true}
-		}(i, date)
+	// Collect date files sorted chronologically.
+	var tradeDates []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".parquet") {
+			continue
+		}
+		date := strings.TrimSuffix(e.Name(), ".parquet")
+		if len(date) == 10 && date[4] == '-' && date[7] == '-' {
+			tradeDates = append(tradeDates, date)
+		}
 	}
-	wg.Wait()
+	sort.Strings(tradeDates)
 
-	// Collect in chronological order.
+	// Load and aggregate each date, using cache.
 	var dates []SymbolDateStats
-	for _, r := range results {
-		if r.ok {
-			dates = append(dates, r.entry)
+	for _, date := range tradeDates {
+		entry := s.loadSymbolDateStats(symbol, date)
+		if entry != nil {
+			dates = append(dates, *entry)
 		}
 	}
 
-	// Append live data (today).
+	// Append live data (today, not cached).
 	_, todayExIdx := s.model.TodaySnapshot()
 	if len(todayExIdx) > 0 {
 		symTrades := dashboard.FilterTradesBySymbol(todayExIdx, symbol)
@@ -481,7 +463,7 @@ func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Req
 			if rs, ok := regStats[symbol]; ok {
 				entry.Reg = convertSymbolStats(rs)
 			}
-			// Avoid duplicate if today is already in history.
+			// Avoid duplicate if today is already in history files.
 			if len(dates) == 0 || dates[len(dates)-1].Date != todayDate {
 				dates = append(dates, entry)
 			}
@@ -493,4 +475,41 @@ func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Req
 	}
 
 	writeJSON(w, SymbolHistoryResponse{Symbol: symbol, Dates: dates})
+}
+
+// loadSymbolDateStats reads a single per-symbol trade file, filters, splits
+// by session, and aggregates. Results are cached forever (history is immutable).
+func (s *DashboardServer) loadSymbolDateStats(symbol, date string) *SymbolDateStats {
+	cacheKey := symbol + ":" + date
+	if v, ok := s.symbolHistoryCache.Load(cacheKey); ok {
+		return v.(*SymbolDateStats)
+	}
+
+	path := filepath.Join(s.dataDir, "us", "trades", symbol, date+".parquet")
+	records, err := parquet.ReadFile[store.TradeRecord](path)
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+
+	// Apply exchange/condition filter (same as consolidated files).
+	filtered := dashboard.FilterTradeRecords(records)
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	open930 := open930ET(date, s.loc)
+	pre, reg := dashboard.SplitBySession(filtered, open930)
+	preStats := dashboard.AggregateTrades(pre)
+	regStats := dashboard.AggregateTrades(reg)
+
+	entry := &SymbolDateStats{Date: date}
+	if ps, ok := preStats[symbol]; ok {
+		entry.Pre = convertSymbolStats(ps)
+	}
+	if rs, ok := regStats[symbol]; ok {
+		entry.Reg = convertSymbolStats(rs)
+	}
+
+	s.symbolHistoryCache.Store(cacheKey, entry)
+	return entry
 }
