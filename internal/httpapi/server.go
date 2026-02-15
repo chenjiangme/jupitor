@@ -410,6 +410,7 @@ func (s *DashboardServer) handleNews(w http.ResponseWriter, r *http.Request) {
 func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Request) {
 	symbol := strings.ToUpper(r.PathValue("symbol"))
 	before := r.URL.Query().Get("before")
+	until := r.URL.Query().Get("until")
 	limit := 200
 	if ls := r.URL.Query().Get("limit"); ls != "" {
 		if n, err := strconv.Atoi(ls); err == nil && n > 0 {
@@ -438,6 +439,15 @@ func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Req
 	}
 	sort.Strings(tradeDates)
 
+	// Apply "until" filter: only dates <= the given date.
+	if until != "" {
+		end := sort.SearchStrings(tradeDates, until)
+		if end < len(tradeDates) && tradeDates[end] == until {
+			end++
+		}
+		tradeDates = tradeDates[:end]
+	}
+
 	// Apply "before" filter: only dates strictly before the given date.
 	if before != "" {
 		end := sort.SearchStrings(tradeDates, before)
@@ -460,8 +470,9 @@ func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	// Append live data (today, not cached) — only on the first page (no "before").
-	if before == "" {
+	// Append live data (today, not cached) — only on the first page (no "before") and no "until" cap.
+	todayDate := time.Now().In(s.loc).Format("2006-01-02")
+	if before == "" && (until == "" || until >= todayDate) {
 		_, todayExIdx := s.model.TodaySnapshot()
 		if len(todayExIdx) > 0 {
 			symTrades := dashboard.FilterTradesBySymbol(todayExIdx, symbol)

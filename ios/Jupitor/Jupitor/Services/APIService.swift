@@ -77,12 +77,13 @@ actor APIService {
 
     // MARK: - Symbol History
 
-    func fetchSymbolHistory(symbol: String, before: String? = nil) async throws -> SymbolHistoryResponse {
+    func fetchSymbolHistory(symbol: String, before: String? = nil, until: String? = nil) async throws -> SymbolHistoryResponse {
         let url = baseURL.appendingPathComponent("api/symbol-history/\(symbol)")
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        if let before {
-            components.queryItems = [URLQueryItem(name: "before", value: before)]
-        }
+        var items: [URLQueryItem] = []
+        if let before { items.append(URLQueryItem(name: "before", value: before)) }
+        if let until { items.append(URLQueryItem(name: "until", value: until)) }
+        if !items.isEmpty { components.queryItems = items }
         let (data, response) = try await longSession.data(from: components.url!)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw APIError.requestFailed

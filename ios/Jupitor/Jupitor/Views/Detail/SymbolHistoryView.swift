@@ -3,6 +3,7 @@ import SwiftUI
 struct SymbolHistoryView: View {
     @Environment(DashboardViewModel.self) private var vm
     let symbol: String
+    let date: String
 
     @State private var dates: [SymbolDateStats] = []
     @State private var isLoading = true
@@ -141,7 +142,7 @@ struct SymbolHistoryView: View {
     // MARK: - Data Loading
 
     private func loadInitial() async {
-        guard let resp = await vm.fetchSymbolHistory(symbol: symbol) else {
+        guard let resp = await vm.fetchSymbolHistory(symbol: symbol, until: date) else {
             isLoading = false
             return
         }
@@ -154,7 +155,7 @@ struct SymbolHistoryView: View {
         guard hasMore, !isLoadingMore, let oldest = dates.first else { return }
         isLoadingMore = true
         Task {
-            if let resp = await vm.fetchSymbolHistory(symbol: symbol, before: oldest.date) {
+            if let resp = await vm.fetchSymbolHistory(symbol: symbol, before: oldest.date, until: date) {
                 if !resp.dates.isEmpty {
                     dates = resp.dates + dates
                 }

@@ -209,9 +209,9 @@ final class DashboardViewModel {
 
     // MARK: - Symbol History
 
-    func fetchSymbolHistory(symbol: String, before: String? = nil) async -> SymbolHistoryResponse? {
+    func fetchSymbolHistory(symbol: String, before: String? = nil, until: String? = nil) async -> SymbolHistoryResponse? {
         do {
-            return try await api.fetchSymbolHistory(symbol: symbol, before: before)
+            return try await api.fetchSymbolHistory(symbol: symbol, before: before, until: until)
         } catch {
             return nil
         }

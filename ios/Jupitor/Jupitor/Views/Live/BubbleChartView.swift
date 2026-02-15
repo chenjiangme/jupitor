@@ -153,7 +153,7 @@ struct BubbleChartView: View {
             }
         }
         .navigationDestination(isPresented: $showHistory) {
-            SymbolHistoryView(symbol: historySymbol)
+            SymbolHistoryView(symbol: historySymbol, date: date)
         }
     }
 
