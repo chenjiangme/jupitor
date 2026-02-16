@@ -158,11 +158,11 @@ struct BubbleChartView: View {
         .frame(width: diameter, height: diameter)
         .position(bubble.position)
         .onTapGesture(count: 2) {
-            Task { await vm.toggleWatchlist(symbol: bubble.id) }
-        }
-        .onTapGesture(count: 1) {
             historySymbol = bubble.id
             showHistory = true
+        }
+        .onTapGesture(count: 1) {
+            Task { await vm.toggleWatchlist(symbol: bubble.id) }
         }
         .onLongPressGesture {
             detailCombined = bubble.combined
