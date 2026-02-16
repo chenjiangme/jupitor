@@ -168,20 +168,8 @@ struct RootTabView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 12) {
-                        Button { navigate(by: -1) } label: {
-                            Image(systemName: "chevron.left")
-                        }
-                        .disabled(!canGoBack)
-
-                        Button { navigate(by: 1) } label: {
-                            Image(systemName: "chevron.right")
-                        }
-                        .disabled(!canGoForward)
-
-                        Button { showingSettings = true } label: {
-                            Image(systemName: "gear")
-                        }
+                    Button { showingSettings = true } label: {
+                        Image(systemName: "gear")
                     }
                 }
             }
