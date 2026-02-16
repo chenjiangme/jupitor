@@ -46,52 +46,57 @@ private struct TwoFingerSwipeHelper: UIViewRepresentable {
 private class GestureHostView: UIView {
     var onLeft: (() -> Void)?
     var onRight: (() -> Void)?
-    private var gestures: [UIGestureRecognizer] = []
+    private var panGesture: UIPanGestureRecognizer?
+    private var fired = false
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if let window {
-            attachGestures(to: window)
+            attachGesture(to: window)
         } else {
-            detachGestures()
+            detachGesture()
         }
     }
 
-    private func attachGestures(to window: UIWindow) {
-        guard gestures.isEmpty else { return }
+    private func attachGesture(to window: UIWindow) {
+        guard panGesture == nil else { return }
 
-        // Remove any stale two-finger nav gestures from other instances.
+        // Remove stale gesture from other instances.
         window.gestureRecognizers?
-            .filter { $0.name?.hasPrefix("twoFingerNav") == true }
+            .filter { $0.name == "twoFingerNav" }
             .forEach { window.removeGestureRecognizer($0) }
 
-        let left = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipe(_:)))
-        left.direction = .left
-        left.numberOfTouchesRequired = 2
-        left.cancelsTouchesInView = false
-        left.name = "twoFingerNavLeft"
-        window.addGestureRecognizer(left)
-        gestures.append(left)
-
-        let right = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipe(_:)))
-        right.direction = .right
-        right.numberOfTouchesRequired = 2
-        right.cancelsTouchesInView = false
-        right.name = "twoFingerNavRight"
-        window.addGestureRecognizer(right)
-        gestures.append(right)
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        pan.minimumNumberOfTouches = 2
+        pan.maximumNumberOfTouches = 2
+        pan.cancelsTouchesInView = false
+        pan.delaysTouchesBegan = false
+        pan.name = "twoFingerNav"
+        window.addGestureRecognizer(pan)
+        panGesture = pan
     }
 
-    private func detachGestures() {
-        for g in gestures {
+    private func detachGesture() {
+        if let g = panGesture {
             g.view?.removeGestureRecognizer(g)
+            panGesture = nil
         }
-        gestures.removeAll()
     }
 
-    @objc private func handleSwipe(_ gesture: UISwipeGestureRecognizer) {
-        if gesture.direction == .left { onLeft?() }
-        else if gesture.direction == .right { onRight?() }
+    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            fired = false
+        case .changed:
+            guard !fired else { return }
+            let t = gesture.translation(in: gesture.view)
+            guard abs(t.x) > 80, abs(t.x) > abs(t.y) * 1.5 else { return }
+            fired = true
+            if t.x < 0 { onLeft?() }
+            else { onRight?() }
+        default:
+            break
+        }
     }
 }
 
