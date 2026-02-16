@@ -23,9 +23,9 @@ struct BubbleChartView: View {
             .flatMap { tier in tier.symbols.map { (combined: $0, tier: tier.name) } }
             .filter { item in
                 switch sessionMode {
-                case .pre: return item.combined.pre != nil
+                case .pre, .next: return item.combined.pre != nil
                 case .reg: return item.combined.reg != nil
-                case .day, .next: return true
+                case .day: return true
                 }
             }
         let watchlist = all.filter { vm.watchlistSymbols.contains($0.combined.symbol) }
@@ -136,14 +136,14 @@ struct BubbleChartView: View {
             // Subtle background.
             if isWatchlist {
                 RoundedRectangle(cornerRadius: diameter * 0.15)
-                    .fill(Color.white.opacity(sessionMode == .day || sessionMode == .next ? 0.08 : 0.04))
+                    .fill(Color.white.opacity(sessionMode == .day ? 0.08 : 0.04))
             } else {
                 Circle()
-                    .fill(Color.white.opacity(sessionMode == .day || sessionMode == .next ? 0.08 : 0.04))
+                    .fill(Color.white.opacity(sessionMode == .day ? 0.08 : 0.04))
             }
 
             switch sessionMode {
-            case .pre:
+            case .pre, .next:
                 // Single ring: pre arcs at full diameter.
                 SessionRingView(
                     gain: bubble.combined.pre?.maxGain ?? 0,
@@ -165,7 +165,7 @@ struct BubbleChartView: View {
                     isSquare: isWatchlist
                 )
 
-            case .day, .next:
+            case .day:
                 // Outer ring (regular session).
                 SessionRingView(
                     gain: bubble.combined.reg?.maxGain ?? 0,
@@ -291,9 +291,9 @@ struct BubbleChartView: View {
         let items: [(CombinedStatsJSON, String, Double)] = symbolData.compactMap { combined, tier in
             let turnover: Double
             switch sessionMode {
-            case .pre: turnover = combined.pre?.turnover ?? 0
+            case .pre, .next: turnover = combined.pre?.turnover ?? 0
             case .reg: turnover = combined.reg?.turnover ?? 0
-            case .day, .next: turnover = (combined.pre?.turnover ?? 0) + (combined.reg?.turnover ?? 0)
+            case .day: turnover = (combined.pre?.turnover ?? 0) + (combined.reg?.turnover ?? 0)
             }
             guard turnover > 0 else { return nil }
             return (combined, tier, turnover)
