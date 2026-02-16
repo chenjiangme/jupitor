@@ -9,7 +9,8 @@ extension Color {
     // Data colors.
     static let gainColor = Color.green
     static let lossColor = Color.red
-    static let watchlistColor = Color.orange
+    static let watchlistColor = Color.purple
+    static let watchlistPriceColor = Color.pink
 
     static func tierColor(for name: String) -> Color {
         switch name {
