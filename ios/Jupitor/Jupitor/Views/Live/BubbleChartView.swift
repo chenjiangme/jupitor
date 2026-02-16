@@ -17,6 +17,7 @@ struct BubbleChartView: View {
     @State private var showHistory = false
     @State private var historySymbol: String = ""
     @State private var isSettled = false
+    @State private var simFrame = 0
     @State private var showWatchlistOnly = false
 
     private let minInnerRatio: CGFloat = 0.15
@@ -269,8 +270,11 @@ struct BubbleChartView: View {
     // MARK: - Physics Simulation
 
     private func simulationStep() {
+        simFrame += 1
         let pad: CGFloat = 2
         var maxVel: CGFloat = 0
+        // Ramp up damping over time so bubbles converge quickly.
+        let damping: CGFloat = simFrame < 60 ? 0.8 : 0.6
 
         for i in bubbles.indices {
             var fx: CGFloat = 0
@@ -309,12 +313,14 @@ struct BubbleChartView: View {
             bubbles[i].velocity.y += fy
 
             // Damping.
-            bubbles[i].velocity.x *= 0.85
-            bubbles[i].velocity.y *= 0.85
+            bubbles[i].velocity.x *= damping
+            bubbles[i].velocity.y *= damping
 
-            // Clamp velocity.
+            // Kill tiny velocities to prevent drift.
             let vel = hypot(bubbles[i].velocity.x, bubbles[i].velocity.y)
-            if vel > 4 {
+            if vel < 0.1 {
+                bubbles[i].velocity = .zero
+            } else if vel > 4 {
                 bubbles[i].velocity.x *= 4 / vel
                 bubbles[i].velocity.y *= 4 / vel
             }
@@ -329,8 +335,8 @@ struct BubbleChartView: View {
             bubbles[i].position.y = max(r, min(viewSize.height - r, bubbles[i].position.y))
         }
 
-        // Stop simulation once settled.
-        if maxVel < 0.05 {
+        // Stop simulation once settled or after max frames.
+        if maxVel < 0.15 || simFrame > 300 {
             isSettled = true
         }
     }
@@ -404,6 +410,7 @@ struct BubbleChartView: View {
             }
         }
         bubbles = newBubbles
+        simFrame = 0
         isSettled = false
     }
 
