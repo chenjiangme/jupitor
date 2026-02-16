@@ -25,53 +25,78 @@ extension Color {
 
 extension View {
     func onTwoFingerSwipe(left: @escaping () -> Void, right: @escaping () -> Void) -> some View {
-        overlay(TwoFingerSwipeView(onLeft: left, onRight: right))
+        background(TwoFingerSwipeHelper(onLeft: left, onRight: right))
     }
 }
 
-private struct TwoFingerSwipeView: UIViewRepresentable {
+private struct TwoFingerSwipeHelper: UIViewRepresentable {
     let onLeft: () -> Void
     let onRight: () -> Void
 
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .clear
-
-        let leftSwipe = UISwipeGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleSwipe(_:)))
-        leftSwipe.direction = .left
-        leftSwipe.numberOfTouchesRequired = 2
-        view.addGestureRecognizer(leftSwipe)
-
-        let rightSwipe = UISwipeGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleSwipe(_:)))
-        rightSwipe.direction = .right
-        rightSwipe.numberOfTouchesRequired = 2
-        view.addGestureRecognizer(rightSwipe)
-
-        return view
+    func makeUIView(context: Context) -> GestureHostView {
+        GestureHostView()
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
-        context.coordinator.onLeft = onLeft
-        context.coordinator.onRight = onRight
+    func updateUIView(_ uiView: GestureHostView, context: Context) {
+        uiView.onLeft = onLeft
+        uiView.onRight = onRight
     }
+}
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onLeft: onLeft, onRight: onRight)
-    }
+private class GestureHostView: UIView {
+    var onLeft: (() -> Void)?
+    var onRight: (() -> Void)?
+    private var gestures: [UIGestureRecognizer] = []
 
-    class Coordinator: NSObject {
-        var onLeft: () -> Void
-        var onRight: () -> Void
-
-        init(onLeft: @escaping () -> Void, onRight: @escaping () -> Void) {
-            self.onLeft = onLeft
-            self.onRight = onRight
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            attachGestures()
+        } else {
+            detachGestures()
         }
+    }
 
-        @objc func handleSwipe(_ gesture: UISwipeGestureRecognizer) {
-            if gesture.direction == .left { onLeft() }
-            else if gesture.direction == .right { onRight() }
+    private func attachGestures() {
+        guard gestures.isEmpty else { return }
+
+        // Walk up responder chain to find the VC's view (ancestor of all content).
+        var responder: UIResponder? = self
+        var targetView: UIView?
+        while let next = responder?.next {
+            if let vc = next as? UIViewController {
+                targetView = vc.view
+                break
+            }
+            responder = next
         }
+        guard let targetView else { return }
+
+        let left = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipe(_:)))
+        left.direction = .left
+        left.numberOfTouchesRequired = 2
+        left.cancelsTouchesInView = false
+        targetView.addGestureRecognizer(left)
+        gestures.append(left)
+
+        let right = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipe(_:)))
+        right.direction = .right
+        right.numberOfTouchesRequired = 2
+        right.cancelsTouchesInView = false
+        targetView.addGestureRecognizer(right)
+        gestures.append(right)
+    }
+
+    private func detachGestures() {
+        for g in gestures {
+            g.view?.removeGestureRecognizer(g)
+        }
+        gestures.removeAll()
+    }
+
+    @objc private func handleSwipe(_ gesture: UISwipeGestureRecognizer) {
+        if gesture.direction == .left { onLeft?() }
+        else if gesture.direction == .right { onRight?() }
     }
 }
 
