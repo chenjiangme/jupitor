@@ -45,7 +45,8 @@ type DashboardServer struct {
 
 	// Alpaca client for watchlist (nil if not configured).
 	alpacaClient *alpacaapi.Client
-	watchlistID  string
+	watchlistMu  sync.RWMutex
+	watchlistIDs map[string]string // date -> Alpaca watchlist ID
 
 	// Cache for per-symbol per-date history stats. Key: "SYMBOL:DATE".
 	symbolHistoryCache sync.Map
@@ -69,37 +70,86 @@ func NewDashboardServer(
 		tierMap:      tierMap,
 		historyDates: historyDates,
 		alpacaClient: alpacaClient,
-	}
-
-	// Discover watchlist ID.
-	if alpacaClient != nil {
-		go s.initWatchlist()
+		watchlistIDs: make(map[string]string),
 	}
 
 	return s
 }
 
-func (s *DashboardServer) initWatchlist() {
+// resolveWatchlistID returns the Alpaca watchlist ID for the given date,
+// creating the watchlist on demand. Watchlists are named "jupitor-YYYY-MM-DD".
+func (s *DashboardServer) resolveWatchlistID(date string) (string, error) {
+	name := "jupitor-" + date
+
+	// Fast path: check cache.
+	s.watchlistMu.RLock()
+	if id, ok := s.watchlistIDs[date]; ok {
+		s.watchlistMu.RUnlock()
+		return id, nil
+	}
+	s.watchlistMu.RUnlock()
+
+	// Slow path: write lock, double-check, then fetch from API.
+	s.watchlistMu.Lock()
+	defer s.watchlistMu.Unlock()
+
+	if id, ok := s.watchlistIDs[date]; ok {
+		return id, nil
+	}
+
+	// Fetch all watchlists and cache jupitor-* entries.
 	lists, err := s.alpacaClient.GetWatchlists()
 	if err != nil {
-		s.log.Warn("listing watchlists", "error", err)
-		return
+		return "", fmt.Errorf("listing watchlists: %w", err)
 	}
 	for _, w := range lists {
-		if w.Name == "jupitor" {
-			s.watchlistID = w.ID
-			s.log.Info("watchlist found", "id", w.ID)
-			return
+		if strings.HasPrefix(w.Name, "jupitor-") {
+			d := strings.TrimPrefix(w.Name, "jupitor-")
+			s.watchlistIDs[d] = w.ID
 		}
 	}
-	// Create it.
-	w, err := s.alpacaClient.CreateWatchlist(alpacaapi.CreateWatchlistRequest{Name: "jupitor"})
-	if err != nil {
-		s.log.Warn("creating watchlist", "error", err)
-		return
+	if id, ok := s.watchlistIDs[date]; ok {
+		return id, nil
 	}
-	s.watchlistID = w.ID
-	s.log.Info("watchlist created", "id", w.ID)
+
+	// Not found — create it.
+	w, err := s.alpacaClient.CreateWatchlist(alpacaapi.CreateWatchlistRequest{Name: name})
+	if err != nil {
+		// Possibly hit 200 watchlist limit — prune 5 oldest jupitor-* and retry.
+		s.pruneOldestWatchlists(lists, 5)
+		w, err = s.alpacaClient.CreateWatchlist(alpacaapi.CreateWatchlistRequest{Name: name})
+		if err != nil {
+			return "", fmt.Errorf("creating watchlist %s: %w", name, err)
+		}
+	}
+	s.watchlistIDs[date] = w.ID
+	s.log.Info("watchlist created", "name", name, "id", w.ID)
+	return w.ID, nil
+}
+
+// pruneOldestWatchlists deletes the N oldest jupitor-* watchlists by date.
+func (s *DashboardServer) pruneOldestWatchlists(lists []alpacaapi.Watchlist, n int) {
+	var dated []alpacaapi.Watchlist
+	for _, w := range lists {
+		if strings.HasPrefix(w.Name, "jupitor-") {
+			dated = append(dated, w)
+		}
+	}
+	sort.Slice(dated, func(i, j int) bool {
+		return dated[i].Name < dated[j].Name
+	})
+	if len(dated) < n {
+		n = len(dated)
+	}
+	for i := 0; i < n; i++ {
+		if err := s.alpacaClient.DeleteWatchlist(dated[i].ID); err != nil {
+			s.log.Warn("pruning watchlist", "name", dated[i].Name, "error", err)
+		} else {
+			d := strings.TrimPrefix(dated[i].Name, "jupitor-")
+			delete(s.watchlistIDs, d)
+			s.log.Info("pruned watchlist", "name", dated[i].Name)
+		}
+	}
 }
 
 // RegisterRoutes registers all API routes on the given mux.
@@ -320,12 +370,23 @@ func (s *DashboardServer) handleDates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *DashboardServer) handleGetWatchlist(w http.ResponseWriter, r *http.Request) {
-	if s.alpacaClient == nil || s.watchlistID == "" {
+	if s.alpacaClient == nil {
 		writeJSON(w, WatchlistResponse{Symbols: []string{}})
 		return
 	}
 
-	wl, err := s.alpacaClient.GetWatchlist(s.watchlistID)
+	date := r.URL.Query().Get("date")
+	if date == "" {
+		date = time.Now().In(s.loc).Format("2006-01-02")
+	}
+
+	wlID, err := s.resolveWatchlistID(date)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve watchlist")
+		return
+	}
+
+	wl, err := s.alpacaClient.GetWatchlist(wlID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get watchlist")
 		return
@@ -340,13 +401,24 @@ func (s *DashboardServer) handleGetWatchlist(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *DashboardServer) handleAddWatchlist(w http.ResponseWriter, r *http.Request) {
-	if s.alpacaClient == nil || s.watchlistID == "" {
+	if s.alpacaClient == nil {
 		writeError(w, http.StatusServiceUnavailable, "watchlist not configured")
 		return
 	}
 
+	date := r.URL.Query().Get("date")
+	if date == "" {
+		date = time.Now().In(s.loc).Format("2006-01-02")
+	}
+
+	wlID, err := s.resolveWatchlistID(date)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve watchlist")
+		return
+	}
+
 	symbol := strings.ToUpper(r.PathValue("symbol"))
-	_, err := s.alpacaClient.AddSymbolToWatchlist(s.watchlistID, alpacaapi.AddSymbolToWatchlistRequest{Symbol: symbol})
+	_, err = s.alpacaClient.AddSymbolToWatchlist(wlID, alpacaapi.AddSymbolToWatchlistRequest{Symbol: symbol})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to add %s: %v", symbol, err))
 		return
@@ -356,13 +428,24 @@ func (s *DashboardServer) handleAddWatchlist(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *DashboardServer) handleRemoveWatchlist(w http.ResponseWriter, r *http.Request) {
-	if s.alpacaClient == nil || s.watchlistID == "" {
+	if s.alpacaClient == nil {
 		writeError(w, http.StatusServiceUnavailable, "watchlist not configured")
 		return
 	}
 
+	date := r.URL.Query().Get("date")
+	if date == "" {
+		date = time.Now().In(s.loc).Format("2006-01-02")
+	}
+
+	wlID, err := s.resolveWatchlistID(date)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve watchlist")
+		return
+	}
+
 	symbol := strings.ToUpper(r.PathValue("symbol"))
-	err := s.alpacaClient.RemoveSymbolFromWatchlist(s.watchlistID, alpacaapi.RemoveSymbolFromWatchlistRequest{Symbol: symbol})
+	err = s.alpacaClient.RemoveSymbolFromWatchlist(wlID, alpacaapi.RemoveSymbolFromWatchlistRequest{Symbol: symbol})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to remove %s: %v", symbol, err))
 		return

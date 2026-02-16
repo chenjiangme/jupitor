@@ -29,7 +29,7 @@ struct SymbolDetailView: View {
                     }
                     Spacer()
                     Button {
-                        Task { await vm.toggleWatchlist(symbol: combined.symbol) }
+                        Task { await vm.toggleWatchlist(symbol: combined.symbol, date: date) }
                     } label: {
                         Image(systemName: vm.watchlistSymbols.contains(combined.symbol) ? "star.fill" : "star")
                             .font(.title3)

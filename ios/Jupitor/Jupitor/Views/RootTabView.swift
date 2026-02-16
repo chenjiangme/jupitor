@@ -266,6 +266,9 @@ struct RootTabView: View {
                 if !currentDate.isEmpty && !isLive {
                     await vm.loadHistory(date: currentDate)
                 }
+                if !currentDate.isEmpty {
+                    await vm.updateDisplayDate(currentDate)
+                }
             }
         }
     }

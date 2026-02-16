@@ -218,6 +218,7 @@ struct HistoryDayView: View {
         }
         .task(id: currentDate) {
             await vm.loadHistory(date: currentDate)
+            await vm.updateDisplayDate(currentDate)
         }
     }
 }

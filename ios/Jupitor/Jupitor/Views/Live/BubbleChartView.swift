@@ -111,7 +111,7 @@ struct BubbleChartView: View {
             let onScreen = Set(symbolData.map(\.combined.symbol))
             let toRemove = onScreen.intersection(vm.watchlistSymbols)
             guard !toRemove.isEmpty else { return }
-            Task { await vm.removeWatchlistSymbols(toRemove) }
+            Task { await vm.removeWatchlistSymbols(toRemove, date: date) }
         }
     }
 
@@ -216,7 +216,7 @@ struct BubbleChartView: View {
             showHistory = true
         }
         .onTapGesture(count: 1) {
-            Task { await vm.toggleWatchlist(symbol: bubble.id) }
+            Task { await vm.toggleWatchlist(symbol: bubble.id, date: date) }
         }
         .onLongPressGesture {
             detailCombined = bubble.combined

@@ -26,6 +26,8 @@ final class DashboardViewModel {
     // MARK: - Watchlist
 
     var watchlistSymbols: Set<String> = []
+    var watchlistDate: String = "" // date the current watchlist is for
+    private var watchlistCache: [String: Set<String>] = [:] // date -> symbols
 
     // MARK: - Status
 
@@ -81,9 +83,11 @@ final class DashboardViewModel {
 
         async let dashTask: () = refreshLive()
         async let datesTask: () = loadDates()
-        async let watchlistTask: () = loadWatchlist()
 
-        _ = await (dashTask, datesTask, watchlistTask)
+        _ = await (dashTask, datesTask)
+
+        // Load watchlist for the live date (now known after refreshLive).
+        await loadWatchlist(for: date)
 
         startPreloadingHistory()
     }
@@ -110,13 +114,31 @@ final class DashboardViewModel {
         }
     }
 
-    func loadWatchlist() async {
+    func loadWatchlist(for date: String) async {
+        guard !date.isEmpty else { return }
+
+        // Check in-memory cache.
+        if let cached = watchlistCache[date] {
+            watchlistDate = date
+            watchlistSymbols = cached
+            return
+        }
+
         do {
-            let resp = try await api.fetchWatchlist()
-            self.watchlistSymbols = Set(resp.symbols)
+            let resp = try await api.fetchWatchlist(date: date)
+            let symbols = Set(resp.symbols)
+            watchlistCache[date] = symbols
+            watchlistDate = date
+            watchlistSymbols = symbols
         } catch {
             // Non-fatal.
         }
+    }
+
+    /// Called by views when the display date changes; reloads watchlist if needed.
+    func updateDisplayDate(_ date: String) async {
+        guard !date.isEmpty, date != watchlistDate else { return }
+        await loadWatchlist(for: date)
     }
 
     // MARK: - History
@@ -181,7 +203,7 @@ final class DashboardViewModel {
 
     // MARK: - Watchlist
 
-    func toggleWatchlist(symbol: String) async {
+    func toggleWatchlist(symbol: String, date: String) async {
         let wasInWatchlist = watchlistSymbols.contains(symbol)
 
         // Optimistic update.
@@ -190,12 +212,13 @@ final class DashboardViewModel {
         } else {
             watchlistSymbols.insert(symbol)
         }
+        watchlistCache[date] = watchlistSymbols
 
         do {
             if wasInWatchlist {
-                try await api.removeFromWatchlist(symbol: symbol)
+                try await api.removeFromWatchlist(symbol: symbol, date: date)
             } else {
-                try await api.addToWatchlist(symbol: symbol)
+                try await api.addToWatchlist(symbol: symbol, date: date)
             }
         } catch {
             // Revert on error.
@@ -204,23 +227,26 @@ final class DashboardViewModel {
             } else {
                 watchlistSymbols.remove(symbol)
             }
+            watchlistCache[date] = watchlistSymbols
         }
     }
 
-    func removeWatchlistSymbols(_ symbols: Set<String>) async {
+    func removeWatchlistSymbols(_ symbols: Set<String>, date: String) async {
         let toRemove = symbols.intersection(watchlistSymbols)
         guard !toRemove.isEmpty else { return }
 
         // Optimistic update.
         watchlistSymbols.subtract(toRemove)
+        watchlistCache[date] = watchlistSymbols
 
         for symbol in toRemove {
             do {
-                try await api.removeFromWatchlist(symbol: symbol)
+                try await api.removeFromWatchlist(symbol: symbol, date: date)
             } catch {
                 watchlistSymbols.insert(symbol)
             }
         }
+        watchlistCache[date] = watchlistSymbols
     }
 
     // MARK: - Symbol History

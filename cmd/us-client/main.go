@@ -69,13 +69,16 @@ func tierStyle(name string) lipgloss.Style {
 	}
 }
 
-const watchlistName = "jupitor"
+func watchlistName(date string) string {
+	return "jupitor-" + date
+}
 
 // Messages.
 type tickMsg time.Time
 type syncErrMsg struct{ err error }
 
 type watchlistLoadedMsg struct {
+	date    string
 	id      string
 	symbols map[string]bool
 	err     error
@@ -185,6 +188,7 @@ type model struct {
 
 	// Watchlist.
 	alpacaClient     *alpacaapi.Client // nil if no API keys
+	watchlistDate    string            // date the current watchlist is for
 	watchlistID      string
 	watchlistSymbols map[string]bool
 	watchlistOnly    bool // w key toggle: only show watchlist symbols
@@ -241,42 +245,36 @@ func initialModel(lm *live.LiveModel, tierMap map[string]string, loc *time.Locat
 type preloadStartMsg struct{}
 
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{tickCmd(), func() tea.Msg { return preloadStartMsg{} }}
-	if m.alpacaClient != nil {
-		ac := m.alpacaClient
-		cmds = append(cmds, func() tea.Msg {
-			return loadWatchlist(ac)
-		})
-	}
-	return tea.Batch(cmds...)
+	return tea.Batch(tickCmd(), func() tea.Msg { return preloadStartMsg{} })
 }
 
-// loadWatchlist gets or creates the "jupitor" watchlist and returns its symbols.
-func loadWatchlist(ac *alpacaapi.Client) watchlistLoadedMsg {
+// loadWatchlist gets or creates the per-date watchlist and returns its symbols.
+func loadWatchlist(ac *alpacaapi.Client, date string) watchlistLoadedMsg {
+	name := watchlistName(date)
 	lists, err := ac.GetWatchlists()
 	if err != nil {
-		return watchlistLoadedMsg{err: err}
+		return watchlistLoadedMsg{date: date, err: err}
 	}
 	for _, w := range lists {
-		if w.Name == watchlistName {
+		if w.Name == name {
 			// GetWatchlists doesn't include assets; fetch the full watchlist.
 			full, err := ac.GetWatchlist(w.ID)
 			if err != nil {
-				return watchlistLoadedMsg{err: err}
+				return watchlistLoadedMsg{date: date, err: err}
 			}
 			syms := make(map[string]bool, len(full.Assets))
 			for _, a := range full.Assets {
 				syms[a.Symbol] = true
 			}
-			return watchlistLoadedMsg{id: w.ID, symbols: syms}
+			return watchlistLoadedMsg{date: date, id: w.ID, symbols: syms}
 		}
 	}
 	// Create it.
-	w, err := ac.CreateWatchlist(alpacaapi.CreateWatchlistRequest{Name: watchlistName})
+	w, err := ac.CreateWatchlist(alpacaapi.CreateWatchlistRequest{Name: name})
 	if err != nil {
-		return watchlistLoadedMsg{err: err}
+		return watchlistLoadedMsg{date: date, err: err}
 	}
-	return watchlistLoadedMsg{id: w.ID, symbols: make(map[string]bool)}
+	return watchlistLoadedMsg{date: date, id: w.ID, symbols: make(map[string]bool)}
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -363,7 +361,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.SetContent(m.renderContent())
 				m.viewport.GotoTop()
 			}
-			return m, tea.Batch(m.maybeLoadNews(), m.loadNewsCounts())
+			return m, tea.Batch(m.maybeLoadNews(), m.loadNewsCounts(), m.reloadWatchlistIfNeeded())
 		case "w":
 			m.watchlistOnly = !m.watchlistOnly
 			// Validate selection: current symbol may be filtered out.
@@ -425,7 +423,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ready = true
 			m.refreshLive()
 			m.viewport.SetContent(m.renderContent())
-			return m, m.loadNewsCounts()
+			return m, tea.Batch(m.loadNewsCounts(), m.reloadWatchlistIfNeeded())
 		}
 		m.viewport.Width = m.width
 		m.viewport.Height = vpHeight
@@ -462,7 +460,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoTop()
 		}
 		// Ensure 5-date buffer around current position.
-		return m, tea.Batch(m.ensureBuffer(m.historyIdx), m.maybeLoadNews(), m.loadNewsCounts())
+		return m, tea.Batch(m.ensureBuffer(m.historyIdx), m.maybeLoadNews(), m.loadNewsCounts(), m.reloadWatchlistIfNeeded())
 
 	case preloadedMsg:
 		m.preloadRunning = false
@@ -481,11 +479,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case watchlistLoadedMsg:
 		if msg.err != nil {
-			m.logger.Warn("loading watchlist", "error", msg.err)
+			m.logger.Warn("loading watchlist", "date", msg.date, "error", msg.err)
 		} else {
+			m.watchlistDate = msg.date
 			m.watchlistID = msg.id
 			m.watchlistSymbols = msg.symbols
-			m.logger.Info("watchlist loaded", "id", msg.id, "symbols", len(msg.symbols))
+			m.logger.Info("watchlist loaded", "date", msg.date, "id", msg.id, "symbols", len(msg.symbols))
 			if m.ready {
 				m.viewport.SetContent(m.renderContent())
 			}
@@ -607,6 +606,22 @@ func (m *model) resetSelection() {
 		m.selectedSymbol = defaultSelection(m.historyData)
 	} else {
 		m.selectedSymbol = defaultSelection(m.todayData)
+	}
+}
+
+// reloadWatchlistIfNeeded returns a tea.Cmd to reload the watchlist if the
+// viewed date has changed since the last load.
+func (m *model) reloadWatchlistIfNeeded() tea.Cmd {
+	if m.alpacaClient == nil {
+		return nil
+	}
+	date := m.viewedDate()
+	if date == "" || date == m.watchlistDate {
+		return nil
+	}
+	ac := m.alpacaClient
+	return func() tea.Msg {
+		return loadWatchlist(ac, date)
 	}
 }
 
@@ -1139,7 +1154,7 @@ func (m *model) navigateHistory(delta int) tea.Cmd {
 			m.refreshLive()
 			m.viewport.SetContent(m.renderContent())
 			m.viewport.GotoTop()
-			return tea.Batch(m.maybeLoadNews(), m.loadNewsCounts())
+			return tea.Batch(m.maybeLoadNews(), m.loadNewsCounts(), m.reloadWatchlistIfNeeded())
 		}
 		if newIdx < 0 {
 			return nil // at oldest date
@@ -1167,7 +1182,7 @@ func (m *model) navigateHistory(delta int) tea.Cmd {
 			m.viewport.GotoTop()
 		}
 		// Ensure 5-date buffer around current position.
-		return tea.Batch(m.ensureBuffer(m.historyIdx), m.maybeLoadNews(), m.loadNewsCounts())
+		return tea.Batch(m.ensureBuffer(m.historyIdx), m.maybeLoadNews(), m.loadNewsCounts(), m.reloadWatchlistIfNeeded())
 	}
 
 	// Not cached — load asynchronously.

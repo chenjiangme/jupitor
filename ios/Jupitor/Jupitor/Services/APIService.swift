@@ -41,14 +41,18 @@ actor APIService {
 
     // MARK: - Watchlist
 
-    func fetchWatchlist() async throws -> WatchlistResponse {
+    func fetchWatchlist(date: String) async throws -> WatchlistResponse {
         let url = baseURL.appendingPathComponent("api/watchlist")
-        return try await fetch(url)
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "date", value: date)]
+        return try await fetch(components.url!)
     }
 
-    func addToWatchlist(symbol: String) async throws {
+    func addToWatchlist(symbol: String, date: String) async throws {
         let url = baseURL.appendingPathComponent("api/watchlist/\(symbol)")
-        var request = URLRequest(url: url)
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "date", value: date)]
+        var request = URLRequest(url: components.url!)
         request.httpMethod = "PUT"
         let (_, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -56,9 +60,11 @@ actor APIService {
         }
     }
 
-    func removeFromWatchlist(symbol: String) async throws {
+    func removeFromWatchlist(symbol: String, date: String) async throws {
         let url = baseURL.appendingPathComponent("api/watchlist/\(symbol)")
-        var request = URLRequest(url: url)
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "date", value: date)]
+        var request = URLRequest(url: components.url!)
         request.httpMethod = "DELETE"
         let (_, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
