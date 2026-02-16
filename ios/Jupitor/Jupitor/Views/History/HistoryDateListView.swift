@@ -49,6 +49,12 @@ struct HistoryDayView: View {
     }
     private var canGoBack: Bool { currentIndex > 0 }
     private var canGoForward: Bool { currentIndex < vm.historyDates.count - 1 }
+    private var displayDate: String {
+        if selectedDay == .next, currentIndex + 1 < vm.historyDates.count {
+            return vm.historyDates[currentIndex + 1]
+        }
+        return currentDate
+    }
 
     private func navigate(by delta: Int) {
         let newIndex = currentIndex + delta
@@ -113,7 +119,7 @@ struct HistoryDayView: View {
                         }
 
                         let displayDay = selectedDay == .next ? (vm.historyNext ?? day) : day
-                        BubbleChartView(day: displayDay, date: currentDate)
+                        BubbleChartView(day: displayDay, date: displayDate)
                     }
                 } else {
                     Text("Failed to load data")

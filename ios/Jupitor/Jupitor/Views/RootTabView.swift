@@ -40,6 +40,12 @@ struct RootTabView: View {
     private var isDataLoading: Bool {
         isLive ? (vm.isLoading && vm.today == nil) : vm.isLoadingHistory
     }
+    private var displayDate: String {
+        if selectedDay == .next, currentIndex + 1 < allDates.count {
+            return allDates[currentIndex + 1]
+        }
+        return currentDate
+    }
 
     private func navigate(by delta: Int) {
         let newIndex = currentIndex + delta
@@ -100,7 +106,7 @@ struct RootTabView: View {
                             .foregroundStyle(.secondary)
                     } else if let day = dayData {
                         let displayDay = selectedDay == .next ? (nextData ?? day) : day
-                        BubbleChartView(day: displayDay, date: currentDate)
+                        BubbleChartView(day: displayDay, date: displayDate)
                     } else if isLive, let error = vm.error {
                         VStack(spacing: 12) {
                             Image(systemName: "wifi.slash")
