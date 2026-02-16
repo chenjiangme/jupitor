@@ -127,7 +127,10 @@ struct BubbleChartView: View {
         let regTurnover = bubble.combined.reg?.turnover ?? 0
         let total = preTurnover + regTurnover
         let preRatio = total > 0 ? sqrt(CGFloat(preTurnover / total)) : 0
-        let innerDia = outerDia * max(minInnerRatio, preRatio)
+        // Cap innerDia so inner ring stroke doesn't overlap outer ring stroke.
+        let innerDia = min(outerDia - 3 * ringWidth, outerDia * max(minInnerRatio, preRatio))
+        // Black fill covers inner ring stroke fully (center to outer stroke edge).
+        let blackFillDia = innerDia + ringWidth
 
         ZStack {
             // Subtle background.
@@ -173,15 +176,15 @@ struct BubbleChartView: View {
                     isSquare: isWatchlist
                 )
 
-                // Inner black fill for visual separation.
+                // Black fill covers inner ring area for clean separation.
                 if isWatchlist {
-                    RoundedRectangle(cornerRadius: innerDia * 0.15)
+                    RoundedRectangle(cornerRadius: blackFillDia * 0.15)
                         .fill(Color.black)
-                        .frame(width: innerDia, height: innerDia)
+                        .frame(width: blackFillDia, height: blackFillDia)
                 } else {
                     Circle()
                         .fill(Color.black)
-                        .frame(width: innerDia, height: innerDia)
+                        .frame(width: blackFillDia, height: blackFillDia)
                 }
 
                 // Inner ring (pre-market session).
