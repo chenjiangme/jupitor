@@ -7,16 +7,12 @@ struct BubbleChartView: View {
 
     @State private var bubbles: [BubbleState] = []
     @State private var viewSize: CGSize = .zero
-    @State private var draggedId: String?
-    @State private var wasDragged = false
     @State private var showDetail = false
     @State private var detailCombined: CombinedStatsJSON?
     @State private var showHistory = false
     @State private var historySymbol: String = ""
     @State private var isSettled = false
     @State private var showWatchlistOnly = false
-    @State private var isPinching = false
-    @State private var preDragPosition: CGPoint?
 
     private let minInnerRatio: CGFloat = 0.15
 
@@ -51,55 +47,12 @@ struct BubbleChartView: View {
                     .coordinateSpace(name: "canvas")
                     .frame(width: geo.size.width, height: geo.size.height)
                     .gesture(
-                        SimultaneousGesture(
-                            DragGesture(minimumDistance: 6, coordinateSpace: .named("canvas")),
-                            MagnifyGesture()
-                        )
-                        .onChanged { value in
-                            // If pinch detected, cancel any drag and block further dragging.
-                            if value.second != nil {
-                                if !isPinching {
-                                    isPinching = true
-                                    if let id = draggedId, let pos = preDragPosition,
-                                       let idx = bubbles.firstIndex(where: { $0.id == id }) {
-                                        bubbles[idx].position = pos
-                                        bubbles[idx].velocity = .zero
-                                    }
-                                    draggedId = nil
-                                    preDragPosition = nil
-                                }
-                                return
-                            }
-
-                            // Single-finger drag.
-                            guard !isPinching, let drag = value.first else { return }
-
-                            if draggedId == nil {
-                                // Hit-test: find bubble under start location.
-                                if let idx = bubbles.firstIndex(where: {
-                                    hypot($0.position.x - drag.startLocation.x,
-                                          $0.position.y - drag.startLocation.y) <= $0.radius
-                                }) {
-                                    draggedId = bubbles[idx].id
-                                    preDragPosition = bubbles[idx].position
-                                }
-                            }
-
-                            if let id = draggedId, let idx = bubbles.firstIndex(where: { $0.id == id }) {
-                                wasDragged = true
-                                isSettled = false
-                                bubbles[idx].position = drag.location
-                                bubbles[idx].velocity = .zero
-                            }
-                        }
-                        .onEnded { value in
-                            // Handle pinch end.
-                            if let magnify = value.second {
-                                isPinching = false
+                        MagnifyGesture()
+                            .onEnded { value in
                                 let newValue: Bool
-                                if magnify.magnification < 0.7 {
+                                if value.magnification < 0.7 {
                                     newValue = true
-                                } else if magnify.magnification > 1.3 {
+                                } else if value.magnification > 1.3 {
                                     newValue = false
                                 } else {
                                     return
@@ -107,19 +60,7 @@ struct BubbleChartView: View {
                                 guard newValue != showWatchlistOnly else { return }
                                 showWatchlistOnly = newValue
                                 if viewSize.width > 0 { syncBubbles(in: viewSize) }
-                                return
                             }
-
-                            // Handle drag end.
-                            if let id = draggedId, let idx = bubbles.firstIndex(where: { $0.id == id }) {
-                                bubbles[idx].velocity = .zero
-                            }
-                            draggedId = nil
-                            preDragPosition = nil
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                                wasDragged = false
-                            }
-                        }
                     )
                     .onAppear {
                         viewSize = geo.size
@@ -162,7 +103,6 @@ struct BubbleChartView: View {
     @ViewBuilder
     private func bubbleView(_ bubble: BubbleState) -> some View {
         let isWatchlist = vm.watchlistSymbols.contains(bubble.id)
-        let isDragged = draggedId == bubble.id
         let diameter = bubble.radius * 2
         let ringWidth = max(4, bubble.radius * 0.18)
         let outerDia = diameter - ringWidth
@@ -203,16 +143,11 @@ struct BubbleChartView: View {
                 .padding(3)
         }
         .frame(width: diameter, height: diameter)
-        .scaleEffect(isDragged ? 1.1 : 1.0)
-        .shadow(color: isDragged ? .white.opacity(0.3) : .clear, radius: 8)
-        .zIndex(isDragged ? 100 : 0)
         .position(bubble.position)
         .onTapGesture(count: 2) {
-            guard !wasDragged else { return }
             Task { await vm.toggleWatchlist(symbol: bubble.id) }
         }
         .onTapGesture(count: 1) {
-            guard !wasDragged else { return }
             historySymbol = bubble.id
             showHistory = true
         }
@@ -229,8 +164,6 @@ struct BubbleChartView: View {
         var maxVel: CGFloat = 0
 
         for i in bubbles.indices {
-            guard bubbles[i].id != draggedId else { continue }
-
             var fx: CGFloat = 0
             var fy: CGFloat = 0
 
@@ -242,7 +175,7 @@ struct BubbleChartView: View {
                 let minDist = bubbles[i].radius + bubbles[j].radius + pad
                 if dist < minDist && dist > 0.01 {
                     let overlap = minDist - dist
-                    let strength: CGFloat = bubbles[j].id == draggedId ? 0.8 : 0.4
+                    let strength: CGFloat = 0.4
                     fx += (dx / dist) * overlap * strength
                     fy += (dy / dist) * overlap * strength
                 }
