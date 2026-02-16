@@ -118,7 +118,7 @@ struct SymbolHistoryView: View {
         let innerDia = outerDia * max(minInnerRatio, preRatio)
 
         ZStack {
-            Circle().fill(Color.white.opacity(0.04))
+            Circle().fill(Color.white.opacity(0.08))
 
             SessionRingView(
                 gain: entry.reg?.maxGain ?? 0,
@@ -127,6 +127,11 @@ struct SymbolHistoryView: View {
                 diameter: outerDia,
                 lineWidth: lineWidth
             )
+
+            // Inner black fill for visual separation.
+            Circle()
+                .fill(Color.black)
+                .frame(width: innerDia, height: innerDia)
 
             SessionRingView(
                 gain: entry.pre?.maxGain ?? 0,

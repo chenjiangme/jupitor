@@ -126,3 +126,18 @@ enum SessionView: String, CaseIterable {
     case pre = "PRE"
     case reg = "REG"
 }
+
+// MARK: - Session Mode (bubble chart)
+
+enum SessionMode: CaseIterable {
+    case pre, reg, day, next
+
+    var label: String {
+        switch self {
+        case .pre: return "PRE"
+        case .reg: return "REG"
+        case .day: return "DAY"
+        case .next: return "NEXT"
+        }
+    }
+}

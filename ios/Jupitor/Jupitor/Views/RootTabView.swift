@@ -3,16 +3,13 @@ import SwiftUI
 struct RootTabView: View {
     @Environment(DashboardViewModel.self) private var vm
     @State private var currentDate: String = ""
-    @State private var selectedDay: DaySelection = .today
+    @State private var sessionMode: SessionMode = .day
     @State private var showingSettings = false
     @State private var panOffset: CGFloat = 0
     @State private var isTransitioning = false
     @State private var dragLocked: Bool? // nil=undetermined, true=horizontal, false=vertical
-
-    enum DaySelection: String, CaseIterable {
-        case today = "TODAY"
-        case next = "NEXT DAY"
-    }
+    @State private var verticalOffset: CGFloat = 0
+    @State private var isVerticalTransitioning = false
 
     // All navigable dates: history + live (ascending).
     private var allDates: [String] {
@@ -41,17 +38,33 @@ struct RootTabView: View {
         isLive ? (vm.isLoading && vm.today == nil) : vm.isLoadingHistory
     }
     private var displayDate: String {
-        if selectedDay == .next, currentIndex + 1 < allDates.count {
+        if sessionMode == .next, currentIndex + 1 < allDates.count {
             return allDates[currentIndex + 1]
         }
         return currentDate
+    }
+
+    /// Available session modes for current state (excludes .next when no next data).
+    private var availableModes: [SessionMode] {
+        nextData != nil ? SessionMode.allCases : [.pre, .reg, .day]
     }
 
     private func navigate(by delta: Int) {
         let newIndex = currentIndex + delta
         guard newIndex >= 0, newIndex < allDates.count else { return }
         currentDate = allDates[newIndex]
-        selectedDay = .today
+        sessionMode = .day
+    }
+
+    private func cycleSessionMode(direction: Int) {
+        let modes = availableModes
+        guard let idx = modes.firstIndex(of: sessionMode) else {
+            sessionMode = .day
+            return
+        }
+        let newIdx = idx + direction
+        guard newIdx >= 0, newIdx < modes.count else { return }
+        sessionMode = modes[newIdx]
     }
 
     private func commitSwipe(offset: CGFloat) {
@@ -60,11 +73,10 @@ struct RootTabView: View {
 
         if offset < -threshold && canGoForward {
             isTransitioning = true
-            // Slide current content off-screen left.
             withAnimation(.easeOut(duration: 0.15)) { panOffset = -w }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
                 navigate(by: 1)
-                panOffset = w // Place new content off-screen right (instant).
+                panOffset = w
                 DispatchQueue.main.async {
                     withAnimation(.easeOut(duration: 0.2)) { panOffset = 0 }
                 }
@@ -74,11 +86,10 @@ struct RootTabView: View {
             }
         } else if offset > threshold && canGoBack {
             isTransitioning = true
-            // Slide current content off-screen right.
             withAnimation(.easeOut(duration: 0.15)) { panOffset = w }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
                 navigate(by: -1)
-                panOffset = -w // Place new content off-screen left (instant).
+                panOffset = -w
                 DispatchQueue.main.async {
                     withAnimation(.easeOut(duration: 0.2)) { panOffset = 0 }
                 }
@@ -87,8 +98,48 @@ struct RootTabView: View {
                 isTransitioning = false
             }
         } else {
-            // Below threshold — snap back.
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { panOffset = 0 }
+        }
+    }
+
+    private func commitVerticalSwipe(offset: CGFloat) {
+        let threshold: CGFloat = 60
+        let h = UIScreen.main.bounds.height
+        let modes = availableModes
+        guard let idx = modes.firstIndex(of: sessionMode) else {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { verticalOffset = 0 }
+            return
+        }
+
+        // Swipe up (negative offset) → next mode, swipe down → previous mode.
+        if offset < -threshold && idx + 1 < modes.count {
+            isVerticalTransitioning = true
+            withAnimation(.easeOut(duration: 0.15)) { verticalOffset = -h }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                sessionMode = modes[idx + 1]
+                verticalOffset = h
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.2)) { verticalOffset = 0 }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                isVerticalTransitioning = false
+            }
+        } else if offset > threshold && idx > 0 {
+            isVerticalTransitioning = true
+            withAnimation(.easeOut(duration: 0.15)) { verticalOffset = h }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                sessionMode = modes[idx - 1]
+                verticalOffset = -h
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.2)) { verticalOffset = 0 }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                isVerticalTransitioning = false
+            }
+        } else {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { verticalOffset = 0 }
         }
     }
 
@@ -105,8 +156,8 @@ struct RootTabView: View {
                         ProgressView()
                             .foregroundStyle(.secondary)
                     } else if let day = dayData {
-                        let displayDay = selectedDay == .next ? (nextData ?? day) : day
-                        BubbleChartView(day: displayDay, date: displayDate)
+                        let displayDay = sessionMode == .next ? (nextData ?? day) : day
+                        BubbleChartView(day: displayDay, date: displayDate, sessionMode: sessionMode)
                     } else if isLive, let error = vm.error {
                         VStack(spacing: 12) {
                             Image(systemName: "wifi.slash")
@@ -124,7 +175,7 @@ struct RootTabView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .offset(x: panOffset)
+                .offset(x: panOffset, y: verticalOffset)
             }
             .navigationTitle(currentDate)
             .navigationBarTitleDisplayMode(.inline)
@@ -144,7 +195,7 @@ struct RootTabView: View {
                         } else {
                             Button {
                                 currentDate = vm.date
-                                selectedDay = .today
+                                sessionMode = .day
                             } label: {
                                 Text("LIVE")
                                     .font(.caption2.bold())
@@ -152,24 +203,9 @@ struct RootTabView: View {
                             }
                         }
 
-                        if nextData != nil {
-                            HStack(spacing: 4) {
-                                Button {
-                                    selectedDay = .today
-                                } label: {
-                                    Text("T")
-                                        .font(.caption2.bold())
-                                        .foregroundStyle(selectedDay == .today ? .white : .secondary)
-                                }
-                                Button {
-                                    selectedDay = .next
-                                } label: {
-                                    Text("N")
-                                        .font(.caption2.bold())
-                                        .foregroundStyle(selectedDay == .next ? .white : .secondary)
-                                }
-                            }
-                        }
+                        Text(sessionMode.label)
+                            .font(.caption2.bold())
+                            .foregroundStyle(sessionMode == .day ? .secondary : .white)
                     }
                     .fixedSize()
                 }
@@ -183,26 +219,34 @@ struct RootTabView: View {
             .simultaneousGesture(
                 DragGesture(minimumDistance: 30)
                     .onChanged { value in
-                        guard !isTransitioning else { return }
+                        guard !isTransitioning, !isVerticalTransitioning else { return }
                         let t = value.translation
                         if dragLocked == nil {
                             dragLocked = abs(t.width) > abs(t.height)
                         }
-                        guard dragLocked == true else { return }
-                        if (t.width < 0 && canGoForward) || (t.width > 0 && canGoBack) {
-                            panOffset = t.width
+                        if dragLocked == true {
+                            if (t.width < 0 && canGoForward) || (t.width > 0 && canGoBack) {
+                                panOffset = t.width
+                            } else {
+                                panOffset = 0
+                            }
                         } else {
-                            panOffset = 0
+                            verticalOffset = t.height
                         }
                     }
                     .onEnded { value in
-                        let wasHorizontal = dragLocked == true
+                        let locked = dragLocked
                         dragLocked = nil
-                        guard !isTransitioning, wasHorizontal else {
+                        guard !isTransitioning, !isVerticalTransitioning else {
                             panOffset = 0
+                            verticalOffset = 0
                             return
                         }
-                        commitSwipe(offset: value.translation.width)
+                        if locked == true {
+                            commitSwipe(offset: value.translation.width)
+                        } else {
+                            commitVerticalSwipe(offset: value.translation.height)
+                        }
                     }
             )
             .sheet(isPresented: $showingSettings) {
@@ -212,6 +256,9 @@ struct RootTabView: View {
                 if !newDate.isEmpty && (currentDate.isEmpty || currentDate == oldDate) {
                     currentDate = newDate
                 }
+            }
+            .onChange(of: nextData == nil) { _, noNext in
+                if noNext && sessionMode == .next { sessionMode = .day }
             }
             .task(id: currentDate) {
                 if !currentDate.isEmpty && !isLive {

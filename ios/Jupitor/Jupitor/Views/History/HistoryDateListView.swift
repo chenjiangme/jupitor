@@ -30,18 +30,15 @@ struct HistoryDateListView: View {
 struct HistoryDayView: View {
     @Environment(DashboardViewModel.self) private var vm
     @State private var currentDate: String
-    @State private var selectedDay: DaySelection = .today
+    @State private var sessionMode: SessionMode = .day
     @State private var panOffset: CGFloat = 0
+    @State private var verticalOffset: CGFloat = 0
     @State private var isTransitioning = false
+    @State private var isVerticalTransitioning = false
     @State private var dragLocked: Bool?
 
     init(date: String) {
         _currentDate = State(initialValue: date)
-    }
-
-    enum DaySelection: String, CaseIterable {
-        case today = "TODAY"
-        case next = "NEXT DAY"
     }
 
     private var currentIndex: Int {
@@ -50,17 +47,21 @@ struct HistoryDayView: View {
     private var canGoBack: Bool { currentIndex > 0 }
     private var canGoForward: Bool { currentIndex < vm.historyDates.count - 1 }
     private var displayDate: String {
-        if selectedDay == .next, currentIndex + 1 < vm.historyDates.count {
+        if sessionMode == .next, currentIndex + 1 < vm.historyDates.count {
             return vm.historyDates[currentIndex + 1]
         }
         return currentDate
+    }
+
+    private var availableModes: [SessionMode] {
+        vm.historyNext != nil ? SessionMode.allCases : [.pre, .reg, .day]
     }
 
     private func navigate(by delta: Int) {
         let newIndex = currentIndex + delta
         guard newIndex >= 0, newIndex < vm.historyDates.count else { return }
         currentDate = vm.historyDates[newIndex]
-        selectedDay = .today
+        sessionMode = .day
     }
 
     private func commitSwipe(offset: CGFloat) {
@@ -98,6 +99,46 @@ struct HistoryDayView: View {
         }
     }
 
+    private func commitVerticalSwipe(offset: CGFloat) {
+        let threshold: CGFloat = 60
+        let h = UIScreen.main.bounds.height
+        let modes = availableModes
+        guard let idx = modes.firstIndex(of: sessionMode) else {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { verticalOffset = 0 }
+            return
+        }
+
+        if offset < -threshold && idx + 1 < modes.count {
+            isVerticalTransitioning = true
+            withAnimation(.easeOut(duration: 0.15)) { verticalOffset = -h }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                sessionMode = modes[idx + 1]
+                verticalOffset = h
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.2)) { verticalOffset = 0 }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                isVerticalTransitioning = false
+            }
+        } else if offset > threshold && idx > 0 {
+            isVerticalTransitioning = true
+            withAnimation(.easeOut(duration: 0.15)) { verticalOffset = h }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                sessionMode = modes[idx - 1]
+                verticalOffset = -h
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.2)) { verticalOffset = 0 }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                isVerticalTransitioning = false
+            }
+        } else {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { verticalOffset = 0 }
+        }
+    }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -106,31 +147,23 @@ struct HistoryDayView: View {
                 if vm.isLoadingHistory {
                     ProgressView()
                 } else if let day = vm.historyDay {
-                    VStack(spacing: 0) {
-                        if vm.historyNext != nil {
-                            Picker("Day", selection: $selectedDay) {
-                                ForEach(DaySelection.allCases, id: \.self) { d in
-                                    Text(d.rawValue).tag(d)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .padding(.horizontal)
-                            .padding(.top, 8)
-                        }
-
-                        let displayDay = selectedDay == .next ? (vm.historyNext ?? day) : day
-                        BubbleChartView(day: displayDay, date: displayDate)
-                    }
+                    let displayDay = sessionMode == .next ? (vm.historyNext ?? day) : day
+                    BubbleChartView(day: displayDay, date: displayDate, sessionMode: sessionMode)
                 } else {
                     Text("Failed to load data")
                         .foregroundStyle(.secondary)
                 }
             }
-            .offset(x: panOffset)
+            .offset(x: panOffset, y: verticalOffset)
         }
         .navigationTitle(currentDate)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Text(sessionMode.label)
+                    .font(.caption2.bold())
+                    .foregroundStyle(sessionMode == .day ? .secondary : .white)
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 16) {
                     Button { navigate(by: -1) } label: {
@@ -148,28 +181,39 @@ struct HistoryDayView: View {
         .simultaneousGesture(
             DragGesture(minimumDistance: 30)
                 .onChanged { value in
-                    guard !isTransitioning else { return }
+                    guard !isTransitioning, !isVerticalTransitioning else { return }
                     let t = value.translation
                     if dragLocked == nil {
                         dragLocked = abs(t.width) > abs(t.height)
                     }
-                    guard dragLocked == true else { return }
-                    if (t.width < 0 && canGoForward) || (t.width > 0 && canGoBack) {
-                        panOffset = t.width
+                    if dragLocked == true {
+                        if (t.width < 0 && canGoForward) || (t.width > 0 && canGoBack) {
+                            panOffset = t.width
+                        } else {
+                            panOffset = 0
+                        }
                     } else {
-                        panOffset = 0
+                        verticalOffset = t.height
                     }
                 }
                 .onEnded { value in
-                    let wasHorizontal = dragLocked == true
+                    let locked = dragLocked
                     dragLocked = nil
-                    guard !isTransitioning, wasHorizontal else {
+                    guard !isTransitioning, !isVerticalTransitioning else {
                         panOffset = 0
+                        verticalOffset = 0
                         return
                     }
-                    commitSwipe(offset: value.translation.width)
+                    if locked == true {
+                        commitSwipe(offset: value.translation.width)
+                    } else {
+                        commitVerticalSwipe(offset: value.translation.height)
+                    }
                 }
         )
+        .onChange(of: vm.historyNext == nil) { _, noNext in
+            if noNext && sessionMode == .next { sessionMode = .day }
+        }
         .task(id: currentDate) {
             await vm.loadHistory(date: currentDate)
         }

@@ -4,6 +4,7 @@ struct BubbleChartView: View {
     @Environment(DashboardViewModel.self) private var vm
     let day: DayDataJSON
     let date: String
+    var sessionMode: SessionMode = .day
 
     @State private var bubbles: [BubbleState] = []
     @State private var viewSize: CGSize = .zero
@@ -20,6 +21,13 @@ struct BubbleChartView: View {
         let all = day.tiers
             .filter { $0.name == "MODERATE" || $0.name == "SPORADIC" }
             .flatMap { tier in tier.symbols.map { (combined: $0, tier: tier.name) } }
+            .filter { item in
+                switch sessionMode {
+                case .pre: return item.combined.pre != nil
+                case .reg: return item.combined.reg != nil
+                case .day, .next: return true
+                }
+            }
         let watchlist = all.filter { vm.watchlistSymbols.contains($0.combined.symbol) }
         if showWatchlistOnly { return watchlist }
         let rest = all.filter { !vm.watchlistSymbols.contains($0.combined.symbol) }
@@ -83,6 +91,9 @@ struct BubbleChartView: View {
         .onChange(of: day) { _, _ in
             if viewSize.width > 0 { syncBubbles(in: viewSize) }
         }
+        .onChange(of: sessionMode) { _, _ in
+            if viewSize.width > 0 { syncBubbles(in: viewSize) }
+        }
         .onChange(of: vm.watchlistSymbols) { old, new in
             if viewSize.width > 0 {
                 onWatchlistChanged(added: new.subtracting(old), removed: old.subtracting(new))
@@ -122,31 +133,67 @@ struct BubbleChartView: View {
             // Subtle background.
             if isWatchlist {
                 RoundedRectangle(cornerRadius: diameter * 0.15)
-                    .fill(Color.white.opacity(0.04))
+                    .fill(Color.white.opacity(sessionMode == .day || sessionMode == .next ? 0.08 : 0.04))
             } else {
                 Circle()
-                    .fill(Color.white.opacity(0.04))
+                    .fill(Color.white.opacity(sessionMode == .day || sessionMode == .next ? 0.08 : 0.04))
             }
 
-            // Outer ring (regular session).
-            SessionRingView(
-                gain: bubble.combined.reg?.maxGain ?? 0,
-                loss: bubble.combined.reg?.maxLoss ?? 0,
-                hasData: bubble.combined.reg != nil,
-                diameter: outerDia,
-                lineWidth: ringWidth,
-                isSquare: isWatchlist
-            )
+            switch sessionMode {
+            case .pre:
+                // Single ring: pre arcs at full diameter.
+                SessionRingView(
+                    gain: bubble.combined.pre?.maxGain ?? 0,
+                    loss: bubble.combined.pre?.maxLoss ?? 0,
+                    hasData: bubble.combined.pre != nil,
+                    diameter: outerDia,
+                    lineWidth: ringWidth,
+                    isSquare: isWatchlist
+                )
 
-            // Inner ring (pre-market session).
-            SessionRingView(
-                gain: bubble.combined.pre?.maxGain ?? 0,
-                loss: bubble.combined.pre?.maxLoss ?? 0,
-                hasData: bubble.combined.pre != nil,
-                diameter: innerDia,
-                lineWidth: ringWidth,
-                isSquare: isWatchlist
-            )
+            case .reg:
+                // Single ring: reg arcs at full diameter.
+                SessionRingView(
+                    gain: bubble.combined.reg?.maxGain ?? 0,
+                    loss: bubble.combined.reg?.maxLoss ?? 0,
+                    hasData: bubble.combined.reg != nil,
+                    diameter: outerDia,
+                    lineWidth: ringWidth,
+                    isSquare: isWatchlist
+                )
+
+            case .day, .next:
+                // Outer ring (regular session).
+                SessionRingView(
+                    gain: bubble.combined.reg?.maxGain ?? 0,
+                    loss: bubble.combined.reg?.maxLoss ?? 0,
+                    hasData: bubble.combined.reg != nil,
+                    diameter: outerDia,
+                    lineWidth: ringWidth,
+                    isSquare: isWatchlist
+                )
+
+                // Inner black fill for visual separation.
+                if isWatchlist {
+                    RoundedRectangle(cornerRadius: innerDia * 0.15)
+                        .fill(Color.black)
+                        .frame(width: innerDia, height: innerDia)
+                } else {
+                    Circle()
+                        .fill(Color.black)
+                        .frame(width: innerDia, height: innerDia)
+                }
+
+                // Inner ring (pre-market session).
+                SessionRingView(
+                    gain: bubble.combined.pre?.maxGain ?? 0,
+                    loss: bubble.combined.pre?.maxLoss ?? 0,
+                    hasData: bubble.combined.pre != nil,
+                    diameter: innerDia,
+                    lineWidth: ringWidth,
+                    isSquare: isWatchlist
+                )
+            }
 
             // Symbol label.
             Text(bubble.id)
@@ -239,11 +286,14 @@ struct BubbleChartView: View {
 
     private func syncBubbles(in size: CGSize) {
         let items: [(CombinedStatsJSON, String, Double)] = symbolData.compactMap { combined, tier in
-            let preTurnover = combined.pre?.turnover ?? 0
-            let regTurnover = combined.reg?.turnover ?? 0
-            let total = preTurnover + regTurnover
-            guard total > 0 else { return nil }
-            return (combined, tier, total)
+            let turnover: Double
+            switch sessionMode {
+            case .pre: turnover = combined.pre?.turnover ?? 0
+            case .reg: turnover = combined.reg?.turnover ?? 0
+            case .day, .next: turnover = (combined.pre?.turnover ?? 0) + (combined.reg?.turnover ?? 0)
+            }
+            guard turnover > 0 else { return nil }
+            return (combined, tier, turnover)
         }
         guard !items.isEmpty else { bubbles = []; return }
 
