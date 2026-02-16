@@ -141,15 +141,9 @@ struct RootTabView: View {
                     }
                 }
             }
-            .gesture(
-                DragGesture(minimumDistance: 60)
-                    .onEnded { value in
-                        let dx = value.translation.width
-                        let dy = value.translation.height
-                        guard abs(dx) > abs(dy) * 1.5 else { return }
-                        if dx > 60 { navigate(by: -1) }
-                        else if dx < -60 { navigate(by: 1) }
-                    }
+            .onTwoFingerSwipe(
+                left: { navigate(by: 1) },
+                right: { navigate(by: -1) }
             )
             .sheet(isPresented: $showingSettings) {
                 SettingsView()
