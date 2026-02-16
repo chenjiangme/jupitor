@@ -134,43 +134,27 @@ struct BubbleChartView: View {
 
         ZStack {
             // Subtle background.
+            let hasPre_ = bubble.combined.pre != nil
+            let hasReg_ = bubble.combined.reg != nil
+            let bgOpacity = (sessionMode == .day && hasPre_ && hasReg_) ? 0.08 : 0.04
             if isWatchlist {
                 RoundedRectangle(cornerRadius: diameter * 0.15)
-                    .fill(Color.white.opacity(sessionMode == .day ? 0.08 : 0.04))
+                    .fill(Color.white.opacity(bgOpacity))
             } else {
                 Circle()
-                    .fill(Color.white.opacity(sessionMode == .day ? 0.08 : 0.04))
+                    .fill(Color.white.opacity(bgOpacity))
             }
 
-            switch sessionMode {
-            case .pre, .next:
-                // Single ring: pre arcs at full diameter.
-                SessionRingView(
-                    gain: bubble.combined.pre?.maxGain ?? 0,
-                    loss: bubble.combined.pre?.maxLoss ?? 0,
-                    hasData: bubble.combined.pre != nil,
-                    diameter: outerDia,
-                    lineWidth: ringWidth,
-                    isSquare: isWatchlist
-                )
+            let hasPre = bubble.combined.pre != nil
+            let hasReg = bubble.combined.reg != nil
+            let dualRing = sessionMode == .day && hasPre && hasReg
 
-            case .reg:
-                // Single ring: reg arcs at full diameter.
-                SessionRingView(
-                    gain: bubble.combined.reg?.maxGain ?? 0,
-                    loss: bubble.combined.reg?.maxLoss ?? 0,
-                    hasData: bubble.combined.reg != nil,
-                    diameter: outerDia,
-                    lineWidth: ringWidth,
-                    isSquare: isWatchlist
-                )
-
-            case .day:
+            if dualRing {
                 // Outer ring (regular session).
                 SessionRingView(
                     gain: bubble.combined.reg?.maxGain ?? 0,
                     loss: bubble.combined.reg?.maxLoss ?? 0,
-                    hasData: bubble.combined.reg != nil,
+                    hasData: true,
                     diameter: outerDia,
                     lineWidth: ringWidth,
                     isSquare: isWatchlist
@@ -191,8 +175,41 @@ struct BubbleChartView: View {
                 SessionRingView(
                     gain: bubble.combined.pre?.maxGain ?? 0,
                     loss: bubble.combined.pre?.maxLoss ?? 0,
-                    hasData: bubble.combined.pre != nil,
+                    hasData: true,
                     diameter: innerDia,
+                    lineWidth: ringWidth,
+                    isSquare: isWatchlist
+                )
+            } else {
+                // Single ring for the relevant session.
+                let gain: Double
+                let loss: Double
+                let hasData: Bool
+                switch sessionMode {
+                case .pre, .next:
+                    gain = bubble.combined.pre?.maxGain ?? 0
+                    loss = bubble.combined.pre?.maxLoss ?? 0
+                    hasData = hasPre
+                case .reg:
+                    gain = bubble.combined.reg?.maxGain ?? 0
+                    loss = bubble.combined.reg?.maxLoss ?? 0
+                    hasData = hasReg
+                case .day:
+                    // Only one session — show whichever exists.
+                    if hasPre {
+                        gain = bubble.combined.pre?.maxGain ?? 0
+                        loss = bubble.combined.pre?.maxLoss ?? 0
+                    } else {
+                        gain = bubble.combined.reg?.maxGain ?? 0
+                        loss = bubble.combined.reg?.maxLoss ?? 0
+                    }
+                    hasData = hasPre || hasReg
+                }
+                SessionRingView(
+                    gain: gain,
+                    loss: loss,
+                    hasData: hasData,
+                    diameter: outerDia,
                     lineWidth: ringWidth,
                     isSquare: isWatchlist
                 )
