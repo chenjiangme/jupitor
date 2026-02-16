@@ -176,37 +176,40 @@ struct RootTabView: View {
                 }
                 .offset(x: panOffset, y: verticalOffset)
             }
-            .navigationTitle(currentDate)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    HStack(spacing: 8) {
-                        if isLive {
-                            HStack(spacing: 4) {
-                                Circle()
-                                    .fill(.green)
-                                    .frame(width: 8, height: 8)
-                                    .pulseAnimation()
-                                Text("LIVE")
-                                    .font(.caption2.bold())
-                                    .foregroundStyle(.green)
-                            }
-                        } else {
-                            Button {
-                                currentDate = vm.date
-                                sessionMode = .day
-                            } label: {
-                                Text("LIVE")
-                                    .font(.caption2.bold())
-                                    .foregroundStyle(.secondary)
-                            }
+                    if isLive {
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(.green)
+                                .frame(width: 8, height: 8)
+                                .pulseAnimation()
+                            Text("LIVE")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.green)
                         }
+                        .fixedSize()
+                    } else {
+                        Button {
+                            currentDate = vm.date
+                            sessionMode = .day
+                        } label: {
+                            Text("LIVE")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
 
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 6) {
+                        Text(currentDate)
+                            .font(.headline)
                         Text(sessionMode.label)
                             .font(.caption2.bold())
                             .foregroundStyle(sessionMode == .day ? Color.secondary : Color.white)
                     }
-                    .fixedSize()
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {

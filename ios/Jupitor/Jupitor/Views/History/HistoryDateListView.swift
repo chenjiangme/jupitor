@@ -155,13 +155,16 @@ struct HistoryDayView: View {
             }
             .offset(x: panOffset, y: verticalOffset)
         }
-        .navigationTitle(currentDate)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Text(sessionMode.label)
-                    .font(.caption2.bold())
-                    .foregroundStyle(sessionMode == .day ? Color.secondary : Color.white)
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 6) {
+                    Text(currentDate)
+                        .font(.headline)
+                    Text(sessionMode.label)
+                        .font(.caption2.bold())
+                        .foregroundStyle(sessionMode == .day ? Color.secondary : Color.white)
+                }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 16) {
