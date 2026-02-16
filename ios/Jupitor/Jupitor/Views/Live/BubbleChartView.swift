@@ -199,9 +199,9 @@ struct BubbleChartView: View {
                     .foregroundStyle((isWatchlist ? Color.watchlistColor : .white).opacity(0.5))
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
-                if isWatchlist, let price = latestPrice(bubble.combined) {
-                    Text(Fmt.price(price))
-                        .font(.system(size: max(6, bubble.radius * 0.2)))
+                if isWatchlist, let stats = sessionStats(bubble.combined) {
+                    Text("\(Fmt.compactPrice(stats.open))/\(Fmt.compactPrice(stats.high))/\(Fmt.compactPrice(stats.close))")
+                        .font(.system(size: max(5, bubble.radius * 0.16)))
                         .foregroundStyle(Color.watchlistColor.opacity(0.4))
                         .lineLimit(1)
                         .minimumScaleFactor(0.5)
@@ -226,11 +226,11 @@ struct BubbleChartView: View {
 
     // MARK: - Helpers
 
-    private func latestPrice(_ c: CombinedStatsJSON) -> Double? {
+    private func sessionStats(_ c: CombinedStatsJSON) -> SymbolStatsJSON? {
         switch sessionMode {
-        case .pre, .next: return c.pre?.close
-        case .reg: return c.reg?.close
-        case .day: return c.reg?.close ?? c.pre?.close
+        case .pre, .next: return c.pre
+        case .reg: return c.reg
+        case .day: return c.reg ?? c.pre
         }
     }
 

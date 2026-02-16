@@ -22,6 +22,14 @@ enum Fmt {
         return String(format: "%.2f", p)
     }
 
+    /// Compact price: no leading zero for < $1 (e.g. ".45").
+    static func compactPrice(_ p: Double) -> String {
+        if p == 0 { return "-" }
+        let s = String(format: "%.2f", p)
+        if p > 0 && p < 1 { return String(s.dropFirst()) }  // "0.45" → ".45"
+        return s
+    }
+
     static func gain(_ g: Double) -> String {
         if g <= 0 { return "" }
         return String(format: "+%.0f%%", g * 100)
