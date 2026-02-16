@@ -28,6 +28,16 @@ A unified financial data platform for US equities and China A-shares. Go handles
               └──── gRPC / HTTP API (us-stream) ────┘
 ```
 
+## Demo
+
+| Bubble Chart | Session Modes | Date Navigation |
+|:---:|:---:|:---:|
+| ![Bubbles](docs/demo/01-bubbles.gif) | ![Sessions](docs/demo/02-sessions.gif) | ![Dates](docs/demo/03-dates.gif) |
+
+| Watchlist | Detail View |
+|:---:|:---:|
+| ![Watchlist](docs/demo/04-watchlist.gif) | ![Detail](docs/demo/05-detail.gif) |
+
 ## Components
 
 ### Production Daemons
