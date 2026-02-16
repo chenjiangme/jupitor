@@ -2,8 +2,9 @@ import SwiftUI
 
 struct RootTabView: View {
     @Environment(DashboardViewModel.self) private var vm
+    @AppStorage("showDayMode") private var showDayMode = false
     @State private var currentDate: String = ""
-    @State private var sessionMode: SessionMode = .day
+    @State private var sessionMode: SessionMode = .pre
     @State private var showingSettings = false
     @State private var panOffset: CGFloat = 0
     @State private var isTransitioning = false
@@ -44,9 +45,12 @@ struct RootTabView: View {
         return currentDate
     }
 
-    /// Available session modes for current state (excludes .next when no next data).
+    /// Available session modes for current state.
     private var availableModes: [SessionMode] {
-        nextData != nil ? SessionMode.allCases : [.pre, .reg, .day]
+        var modes: [SessionMode] = [.pre, .reg]
+        if showDayMode { modes.append(.day) }
+        if nextData != nil { modes.append(.next) }
+        return modes
     }
 
     private func navigate(by delta: Int) {
@@ -260,7 +264,10 @@ struct RootTabView: View {
                 }
             }
             .onChange(of: nextData == nil) { _, noNext in
-                if noNext && sessionMode == .next { sessionMode = .day }
+                if noNext && sessionMode == .next { sessionMode = .reg }
+            }
+            .onChange(of: showDayMode) { _, show in
+                if !show && sessionMode == .day { sessionMode = .reg }
             }
             .task(id: currentDate) {
                 if !currentDate.isEmpty && !isLive {

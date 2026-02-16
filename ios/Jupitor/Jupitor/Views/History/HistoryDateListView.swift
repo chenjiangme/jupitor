@@ -29,8 +29,9 @@ struct HistoryDateListView: View {
 
 struct HistoryDayView: View {
     @Environment(DashboardViewModel.self) private var vm
+    @AppStorage("showDayMode") private var showDayMode = false
     @State private var currentDate: String
-    @State private var sessionMode: SessionMode = .day
+    @State private var sessionMode: SessionMode = .pre
     @State private var panOffset: CGFloat = 0
     @State private var verticalOffset: CGFloat = 0
     @State private var isTransitioning = false
@@ -54,7 +55,10 @@ struct HistoryDayView: View {
     }
 
     private var availableModes: [SessionMode] {
-        vm.historyNext != nil ? SessionMode.allCases : [.pre, .reg, .day]
+        var modes: [SessionMode] = [.pre, .reg]
+        if showDayMode { modes.append(.day) }
+        if vm.historyNext != nil { modes.append(.next) }
+        return modes
     }
 
     private func navigate(by delta: Int) {
@@ -214,7 +218,10 @@ struct HistoryDayView: View {
                 }
         )
         .onChange(of: vm.historyNext == nil) { _, noNext in
-            if noNext && sessionMode == .next { sessionMode = .day }
+            if noNext && sessionMode == .next { sessionMode = .reg }
+        }
+        .onChange(of: showDayMode) { _, show in
+            if !show && sessionMode == .day { sessionMode = .reg }
         }
         .task(id: currentDate) {
             await vm.loadHistory(date: currentDate)

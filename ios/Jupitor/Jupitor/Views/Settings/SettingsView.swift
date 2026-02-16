@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage("serverURL") private var serverURL = "http://mbpro:8080"
+    @AppStorage("showDayMode") private var showDayMode = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -12,6 +13,10 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
+                }
+
+                Section("Display") {
+                    Toggle("Show Day Mode", isOn: $showDayMode)
                 }
 
                 Section {
