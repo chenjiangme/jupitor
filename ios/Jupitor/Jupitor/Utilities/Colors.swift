@@ -50,40 +50,35 @@ private class GestureHostView: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window != nil {
-            attachGestures()
+        if let window {
+            attachGestures(to: window)
         } else {
             detachGestures()
         }
     }
 
-    private func attachGestures() {
+    private func attachGestures(to window: UIWindow) {
         guard gestures.isEmpty else { return }
 
-        // Walk up responder chain to find the VC's view (ancestor of all content).
-        var responder: UIResponder? = self
-        var targetView: UIView?
-        while let next = responder?.next {
-            if let vc = next as? UIViewController {
-                targetView = vc.view
-                break
-            }
-            responder = next
-        }
-        guard let targetView else { return }
+        // Remove any stale two-finger nav gestures from other instances.
+        window.gestureRecognizers?
+            .filter { $0.name?.hasPrefix("twoFingerNav") == true }
+            .forEach { window.removeGestureRecognizer($0) }
 
         let left = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipe(_:)))
         left.direction = .left
         left.numberOfTouchesRequired = 2
         left.cancelsTouchesInView = false
-        targetView.addGestureRecognizer(left)
+        left.name = "twoFingerNavLeft"
+        window.addGestureRecognizer(left)
         gestures.append(left)
 
         let right = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipe(_:)))
         right.direction = .right
         right.numberOfTouchesRequired = 2
         right.cancelsTouchesInView = false
-        targetView.addGestureRecognizer(right)
+        right.name = "twoFingerNavRight"
+        window.addGestureRecognizer(right)
         gestures.append(right)
     }
 
