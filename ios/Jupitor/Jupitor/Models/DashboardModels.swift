@@ -140,4 +140,13 @@ enum SessionMode: CaseIterable {
         case .next: return "NEXT"
         }
     }
+
+    var backgroundColor: Color {
+        switch self {
+        case .pre: return .sessionPreBG
+        case .reg: return .sessionRegBG
+        case .day: return .sessionDayBG
+        case .next: return .sessionNextBG
+        }
+    }
 }

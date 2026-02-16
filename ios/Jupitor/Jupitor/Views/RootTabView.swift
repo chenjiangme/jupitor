@@ -149,7 +149,7 @@ struct RootTabView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
+                sessionMode.backgroundColor.ignoresSafeArea()
 
                 Group {
                     if currentDate.isEmpty {

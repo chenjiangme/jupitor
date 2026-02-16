@@ -144,7 +144,7 @@ struct HistoryDayView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            sessionMode.backgroundColor.ignoresSafeArea()
 
             Group {
                 if vm.isLoadingHistory {

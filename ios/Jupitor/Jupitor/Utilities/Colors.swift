@@ -12,6 +12,12 @@ extension Color {
     static let watchlistColor = Color.purple
     static let watchlistPriceColor = Color.pink
 
+    // Session background colors (dark, high contrast with white text).
+    static let sessionPreBG = Color(red: 0.06, green: 0.04, blue: 0.12)   // deep indigo
+    static let sessionRegBG = Color(red: 0.04, green: 0.08, blue: 0.06)   // deep forest
+    static let sessionDayBG = Color(red: 0.05, green: 0.05, blue: 0.05)   // near black
+    static let sessionNextBG = Color(red: 0.10, green: 0.04, blue: 0.04)  // deep maroon
+
     static func tierColor(for name: String) -> Color {
         switch name {
         case "ACTIVE": return .tierActive
