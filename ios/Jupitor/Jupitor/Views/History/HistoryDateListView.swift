@@ -151,7 +151,7 @@ struct HistoryDayView: View {
                     ProgressView()
                 } else if let day = vm.historyDay {
                     let displayDay = sessionMode == .next ? (vm.historyNext ?? day) : day
-                    BubbleChartView(day: displayDay, date: displayDate, sessionMode: sessionMode)
+                    BubbleChartView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
                 } else {
                     Text("Failed to load data")
                         .foregroundStyle(.secondary)

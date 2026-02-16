@@ -160,7 +160,7 @@ struct RootTabView: View {
                             .foregroundStyle(.secondary)
                     } else if let day = dayData {
                         let displayDay = sessionMode == .next ? (nextData ?? day) : day
-                        BubbleChartView(day: displayDay, date: displayDate, sessionMode: sessionMode)
+                        BubbleChartView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
                     } else if isLive, let error = vm.error {
                         VStack(spacing: 12) {
                             Image(systemName: "wifi.slash")

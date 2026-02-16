@@ -4,7 +4,11 @@ struct BubbleChartView: View {
     @Environment(DashboardViewModel.self) private var vm
     let day: DayDataJSON
     let date: String
+    var watchlistDate: String = ""
     var sessionMode: SessionMode = .day
+
+    /// Date used for watchlist operations (falls back to date if not set).
+    private var wlDate: String { watchlistDate.isEmpty ? date : watchlistDate }
 
     @State private var bubbles: [BubbleState] = []
     @State private var viewSize: CGSize = .zero
@@ -112,7 +116,7 @@ struct BubbleChartView: View {
             let onScreen = Set(symbolData.map(\.combined.symbol))
             let toRemove = onScreen.intersection(vm.watchlistSymbols)
             guard !toRemove.isEmpty else { return }
-            Task { await vm.removeWatchlistSymbols(toRemove, date: date) }
+            Task { await vm.removeWatchlistSymbols(toRemove, date: wlDate) }
         }
     }
 
@@ -217,7 +221,7 @@ struct BubbleChartView: View {
             showHistory = true
         }
         .onTapGesture(count: 1) {
-            Task { await vm.toggleWatchlist(symbol: bubble.id, date: date) }
+            Task { await vm.toggleWatchlist(symbol: bubble.id, date: wlDate) }
         }
         .onLongPressGesture {
             detailCombined = bubble.combined
