@@ -182,33 +182,10 @@ struct BubbleChartView: View {
                 )
             } else {
                 // Single ring for the relevant session.
-                let gain: Double
-                let loss: Double
-                let hasData: Bool
-                switch sessionMode {
-                case .pre, .next:
-                    gain = bubble.combined.pre?.maxGain ?? 0
-                    loss = bubble.combined.pre?.maxLoss ?? 0
-                    hasData = hasPre
-                case .reg:
-                    gain = bubble.combined.reg?.maxGain ?? 0
-                    loss = bubble.combined.reg?.maxLoss ?? 0
-                    hasData = hasReg
-                case .day:
-                    // Only one session — show whichever exists.
-                    if hasPre {
-                        gain = bubble.combined.pre?.maxGain ?? 0
-                        loss = bubble.combined.pre?.maxLoss ?? 0
-                    } else {
-                        gain = bubble.combined.reg?.maxGain ?? 0
-                        loss = bubble.combined.reg?.maxLoss ?? 0
-                    }
-                    hasData = hasPre || hasReg
-                }
                 SessionRingView(
-                    gain: gain,
-                    loss: loss,
-                    hasData: hasData,
+                    gain: singleRingGain(bubble.combined),
+                    loss: singleRingLoss(bubble.combined),
+                    hasData: hasPre || hasReg,
                     diameter: outerDia,
                     lineWidth: ringWidth,
                     isSquare: isWatchlist
@@ -235,6 +212,24 @@ struct BubbleChartView: View {
         .onLongPressGesture {
             detailCombined = bubble.combined
             showDetail = true
+        }
+    }
+
+    // MARK: - Single Ring Helpers
+
+    private func singleRingGain(_ c: CombinedStatsJSON) -> Double {
+        switch sessionMode {
+        case .pre, .next: return c.pre?.maxGain ?? 0
+        case .reg: return c.reg?.maxGain ?? 0
+        case .day: return c.pre?.maxGain ?? c.reg?.maxGain ?? 0
+        }
+    }
+
+    private func singleRingLoss(_ c: CombinedStatsJSON) -> Double {
+        switch sessionMode {
+        case .pre, .next: return c.pre?.maxLoss ?? 0
+        case .reg: return c.reg?.maxLoss ?? 0
+        case .day: return c.pre?.maxLoss ?? c.reg?.maxLoss ?? 0
         }
     }
 
