@@ -205,7 +205,7 @@ struct RootTabView: View {
 
                         Text(sessionMode.label)
                             .font(.caption2.bold())
-                            .foregroundStyle(sessionMode == .day ? .secondary : .white)
+                            .foregroundStyle(sessionMode == .day ? Color.secondary : Color.white)
                     }
                     .fixedSize()
                 }

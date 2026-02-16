@@ -162,7 +162,7 @@ struct HistoryDayView: View {
             ToolbarItem(placement: .topBarLeading) {
                 Text(sessionMode.label)
                     .font(.caption2.bold())
-                    .foregroundStyle(sessionMode == .day ? .secondary : .white)
+                    .foregroundStyle(sessionMode == .day ? Color.secondary : Color.white)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 16) {
