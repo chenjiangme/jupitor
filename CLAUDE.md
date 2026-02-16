@@ -6,9 +6,9 @@ Unified financial platform for US equities and China A-shares. Go handles all co
 
 - `cmd/` — Go binaries (each runs as a separate process)
 - `bin/` — Compiled Go binaries (all `go build` output goes here, e.g. `go build -o bin/us-stream ./cmd/us-stream/`)
-- `internal/` — Private Go packages (domain, config, store, gather, engine, strategy, api, broker, util)
+- `internal/` — Private Go packages (gather, live, dashboard, httpapi, api, store, config, domain, broker, engine, strategy, util)
 - `pkg/jupitor/` — Public Go client SDK
-- `proto/` — Protobuf definitions
+- `proto/` — Protobuf definitions (marketdata, trading, strategy)
 - `config/` — YAML config templates
 - `python/` — Python subsystem (analysis, notebooks, CLI)
 - `migrations/` — SQL migrations
@@ -22,13 +22,17 @@ Unified financial platform for US equities and China A-shares. Go handles all co
 make build       # go build ./...
 make test        # go test ./... -v
 make vet         # go vet ./...
-make python-test # pytest
+make lint        # golangci-lint run ./...
+make proto       # regenerate protobuf code
+make python-test # cd python && pytest tests/ -v
+make python-lint # cd python && ruff check src/ tests/
+make clean       # go clean ./... && rm -rf bin/
 ```
 
 ## Key Conventions
 
 - Go module: `module jupitor`
-- Config: YAML files in `config/` with env var overrides (secrets via env vars)
+- Config: YAML files in `config/` with env var overrides (secrets via env vars, never hardcoded)
 - Storage: Parquet files for time-series, SQLite for transactional data
 - Data path: `$DATA_1/us/daily/AAPL/2024.parquet`
 - Streaming: gRPC between services
@@ -119,6 +123,28 @@ Run(ctx):
 - Per-symbol cache files in `/tmp/us-stream/<YYYY-MM-DD>/backfill/<SYMBOL>.parquet`
 - Rescans every 5 min (stream fills the gap)
 
+### HTTP API
+
+REST API on port 8080:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/dashboard` | Live dashboard data (today + next day, all tiers) |
+| GET | `/api/dashboard/history/{date}` | Historical dashboard for a specific date |
+| GET | `/api/dates` | List available history dates |
+| GET | `/api/watchlist?date=YYYY-MM-DD` | Get watchlist symbols for a date |
+| PUT | `/api/watchlist/{symbol}?date=YYYY-MM-DD` | Add symbol to date-scoped watchlist |
+| DELETE | `/api/watchlist/{symbol}?date=YYYY-MM-DD` | Remove symbol from date-scoped watchlist |
+| GET | `/api/news/{symbol}?date=YYYY-MM-DD` | News articles for a symbol on a date |
+| GET | `/api/symbol-history/{symbol}` | Historical stats across dates |
+
+### Per-Date Watchlists
+
+Watchlists are scoped per trading date as `jupitor-YYYY-MM-DD` on Alpaca:
+- `resolveWatchlistID(date)` lazily creates watchlists on demand, caches ID mapping
+- `pruneOldestWatchlists()` removes oldest when 200-watchlist Alpaca limit is hit
+- All handlers default to today ET if no `?date=` param
+
 ### Key Functions
 
 - `loadSymbolsFromAPI()` — fetches active US equities, filters to ex-index stocks
@@ -154,9 +180,9 @@ The `cmd/us-client/` is a bubbletea TUI that connects to the us-stream gRPC serv
 
 ### Watchlist (Alpaca)
 
-- **Toggle**: Space key adds/removes selected symbol from the Alpaca "jupitor" watchlist
+- **Toggle**: Space key adds/removes selected symbol from per-date `jupitor-YYYY-MM-DD` watchlist
 - **Visual**: Watchlist symbols shown in orange (`208`/`214`), with `*` marker before row number
-- **Async**: Optimistic UI update with revert on API error; watchlist loaded at startup via `GetWatchlist(id)`
+- **Async**: Optimistic UI update with revert on API error; reloads when navigating dates
 - **Optional**: Requires `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` env vars; gracefully disabled if not set
 
 ### Sort Modes
@@ -179,54 +205,84 @@ For the latest history date, next-day data comes from the live model's `TodaySna
 
 The `ios/Jupitor/` directory contains a native SwiftUI iPhone app that connects to the us-stream HTTP REST API. Requires iOS 17+.
 
-### Navigation Structure
+### Navigation
 
-```
-TabView (3 bottom tabs):
-  Live        → SymbolListView → SymbolDetailView
-  History     → DateListView   → SymbolListView → SymbolDetailView
-  Watchlist   → filtered list  → SymbolDetailView
-```
+- **RootTabView**: Single NavigationStack with BubbleChartView as main content
+- **Swipe left/right**: Navigate between dates (history + live)
+- **Swipe up/down**: Cycle session modes (PRE → REG → DAY → NEXT)
+- **Toolbar**: Date + session label (principal), LIVE indicator (leading), settings gear (trailing)
+- **History tab**: `HistoryDateListView` → pick date → `HistoryDayView` with same swipe navigation
 
-### Architecture
+### Bubble Chart (BubbleChartView)
 
-- **RootTabView**: Bottom tab bar with Live/History/Watchlist tabs, each wrapped in NavigationStack
-- **DashboardViewModel**: Shared `@Observable` injected via `.environment()` at app level. Manages live data (auto-refresh 5s), history loading, watchlist, sort mode, session toggle
-- **SymbolCardView**: Two-line card (symbol+gain+trades / turnover+loss+news+star) replacing old fixed-width column rows
-- **SymbolListView**: Reusable tier-sectioned list used by all 3 tabs
-- **SymbolDetailView**: Push navigation on tap. Shows SessionCards (OHLC grid + metrics), inline news, star toggle
-- **Sort**: Menu dropdown grouped by session (Pre-Market / Regular / News) with checkmark on current selection
+Physics-based bubble visualization:
+- **Sizing**: Area-proportional to turnover (sqrt-weighted). Min 14pt, max bounded by canvas.
+- **Rings**: Tier-colored (green=ACTIVE, yellow=MODERATE, red=SPORADIC). Dual rings in DAY mode (outer=REG, inner=PRE, scaled by turnover ratio).
+- **Watchlist bubbles**: Rounded squares instead of circles, purple color, price labels (open/high/close).
+- **Close dial**: Needle from center to outer ring edge showing close position in [low, high]. Full 360° sweep, 12 o'clock = both 0% and 100%. Red (hue 0) at low, green (hue 0.33) at high.
+- **Vertical sorting**: Bubbles with close near high float to top, close near low sink to bottom (spring force on target Y).
+- **Physics**: Collision avoidance + boundary forces + vertical bias + progressive damping. Force-settles after 300 frames.
+- **Interactions**: Tap to toggle watchlist, double-tap for symbol history, long-press for detail view, shake to clear watchlist, pinch to filter watchlist-only.
+
+### Session Modes
+
+- **PRE**: Pre-market (4AM–9:30AM ET) — deep indigo background
+- **REG**: Regular session (9:30AM–4PM ET) — deep forest background
+- **DAY**: Combined pre+reg (togglable in Settings, default off) — near black background
+- **NEXT**: Next trading day's post-market data — deep maroon background
+
+### Per-Date Watchlists
+
+- Watchlists scoped per date (`jupitor-YYYY-MM-DD`), created on demand
+- `watchlistCache: [String: Set<String>]` — in-memory cache by date
+- `updateDisplayDate(_ date:)` reloads watchlist when navigating dates
+- `toggleWatchlist(symbol:date:)` and `removeWatchlistSymbols(_:date:)` update both cache and optimistic UI
 
 ### Key Files
 
 - `ios/Jupitor/Jupitor/JupitorApp.swift` — App entry, creates ViewModel, injects environment
-- `ios/Jupitor/Jupitor/ViewModels/DashboardViewModel.swift` — Shared state: live refresh, history, watchlist, sort, news
-- `ios/Jupitor/Jupitor/Views/RootTabView.swift` — TabView with 3 tabs
-- `ios/Jupitor/Jupitor/Views/Live/LiveDashboardView.swift` — Live tab: day picker, session toggle, sort menu, pulse indicator
+- `ios/Jupitor/Jupitor/ViewModels/DashboardViewModel.swift` — Shared state: live refresh, history, watchlist (per-date), sort, news
+- `ios/Jupitor/Jupitor/Views/RootTabView.swift` — Main view: NavigationStack + BubbleChartView + swipe gestures
+- `ios/Jupitor/Jupitor/Views/Live/BubbleChartView.swift` — Physics-based bubble chart with rings, dial, vertical sorting
 - `ios/Jupitor/Jupitor/Views/Live/SymbolCardView.swift` — Two-line symbol card
 - `ios/Jupitor/Jupitor/Views/Live/SymbolListView.swift` — Reusable tier-sectioned list
-- `ios/Jupitor/Jupitor/Views/History/HistoryDateListView.swift` — Date list + HistoryDayView
+- `ios/Jupitor/Jupitor/Views/History/HistoryDateListView.swift` — Date list + HistoryDayView with swipe navigation
 - `ios/Jupitor/Jupitor/Views/Watchlist/WatchlistView.swift` — Filtered watchlist symbols
-- `ios/Jupitor/Jupitor/Views/Detail/SymbolDetailView.swift` — Full detail with SessionCards + news
+- `ios/Jupitor/Jupitor/Views/Detail/SymbolDetailView.swift` — Full detail with SessionCards + news + star toggle
 - `ios/Jupitor/Jupitor/Views/Detail/SessionCard.swift` — OHLC grid + trades/turnover/gain/loss
-- `ios/Jupitor/Jupitor/Views/Detail/MetricCell.swift` — Label + value cell
+- `ios/Jupitor/Jupitor/Views/Detail/SymbolHistoryView.swift` — Historical stats chart for a symbol
 - `ios/Jupitor/Jupitor/Views/TierSectionView.swift` — Tier header + SymbolCardView list with NavigationLinks
-- `ios/Jupitor/Jupitor/Views/Settings/SettingsView.swift` — Server URL configuration
-- `ios/Jupitor/Jupitor/Models/DashboardModels.swift` — API response types, SortMode, SessionView enums
+- `ios/Jupitor/Jupitor/Views/Settings/SettingsView.swift` — Server URL configuration + Day Mode toggle
+- `ios/Jupitor/Jupitor/Models/DashboardModels.swift` — API response types, SortMode, SessionView, SessionMode enums
 - `ios/Jupitor/Jupitor/Services/APIService.swift` — REST API client (actor-based)
 - `ios/Jupitor/Jupitor/Utilities/Formatters.swift` — Fmt enum for count/turnover/price/gain/loss
-- `ios/Jupitor/Jupitor/Utilities/Colors.swift` — Tier/gain/loss/watchlist colors + PulseModifier
+- `ios/Jupitor/Jupitor/Utilities/Colors.swift` — Tier/gain/loss/watchlist/session colors + PulseModifier + shake detection
 
-## Consolidated Trade Files
+## One-Shot Tools
+
+### us-stock-trades
 
 `cmd/us-stock-trades/main.go` generates per-date consolidated parquet files from per-symbol trade files.
 
 - **stock-trades-ex-index**: `$DATA_1/us/stock-trades-ex-index/<YYYY-MM-DD>.parquet` — all ex-index stock trades for (P 4PM, D 4PM] window
 - **stock-trades-index**: `$DATA_1/us/stock-trades-index/<YYYY-MM-DD>.parquet` — same for index stocks
+- **stock-trades-ex-index-rolling**: Rolling 5m bars from ex-index trades
 - **Filter**: exchange != "D", conditions in {" ", "@", "T", "F"}
 - **Requires**: consecutive trade-universe CSV pairs (P, D) + per-symbol trade files
 
+### us-trade-universe
+
+`cmd/us-trade-universe/main.go` generates trade-universe CSVs with tier classification (ACTIVE/MODERATE/SPORADIC) from daily bar VWAP x Volume.
+
+### us-news-history
+
+`cmd/us-news-history/main.go` fetches historical news from Alpaca, Google News RSS, GlobeNewswire, and StockTwits for top symbols per tier. Deep pagination for top 20 MODERATE+SPORADIC on StockTwits.
+
+### us-daily-summary
+
+`cmd/us-daily-summary/main.go` backfills daily summary parquets from existing stock-trades files.
+
 ## Dependencies
 
-Go: alpaca-trade-api-go, parquet-go, grpc, protobuf, yaml.v3, modernc.org/sqlite
-Python: pandas, pyarrow, numpy, matplotlib, typer, grpcio, requests, jupyterlab
+Go: alpaca-trade-api-go, parquet-go, grpc, protobuf, bubbletea, lipgloss, yaml.v3, modernc.org/sqlite
+Python: pandas, pyarrow, numpy, matplotlib, typer, grpcio, requests, jupyterlab, baostock
