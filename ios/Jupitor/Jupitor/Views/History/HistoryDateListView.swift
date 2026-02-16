@@ -61,7 +61,6 @@ struct HistoryDayView: View {
         let newIndex = currentIndex + delta
         guard newIndex >= 0, newIndex < vm.historyDates.count else { return }
         currentDate = vm.historyDates[newIndex]
-        sessionMode = .day
     }
 
     private func commitSwipe(offset: CGFloat) {

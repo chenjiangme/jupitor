@@ -53,7 +53,6 @@ struct RootTabView: View {
         let newIndex = currentIndex + delta
         guard newIndex >= 0, newIndex < allDates.count else { return }
         currentDate = allDates[newIndex]
-        sessionMode = .day
     }
 
     private func cycleSessionMode(direction: Int) {
