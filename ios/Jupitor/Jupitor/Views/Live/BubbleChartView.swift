@@ -202,7 +202,6 @@ struct BubbleChartView: View {
                 CloseDialView(
                     fraction: (stats.close - stats.low) / (stats.high - stats.low),
                     needleRadius: outerDia / 2,
-                    isGain: stats.close >= stats.open,
                     lineWidth: max(1.5, ringWidth * 0.4)
                 )
                 .frame(width: diameter, height: diameter)
@@ -416,21 +415,18 @@ struct BubbleChartView: View {
 // MARK: - Close Dial
 
 /// Needle from center to the outer ring edge showing close position in [low, high].
-/// Angle sweeps from 7 o'clock (low) to 5 o'clock (high) through 12 o'clock.
+/// 6 o'clock = low (red), 12 o'clock = high (green). Sweeps clockwise through left.
 private struct CloseDialView: View {
-    let fraction: Double    // 0 = at low, 1 = at high
-    let needleRadius: CGFloat // distance from center to ring inner edge
-    let isGain: Bool        // close >= open → green, else red
+    let fraction: Double      // 0 = at low, 1 = at high
+    let needleRadius: CGFloat // distance from center to ring edge
     var lineWidth: CGFloat = 2
-
-    // Sweep 240° from 210° (7 o'clock) to 90° (5 o'clock) through top.
-    private let startAngle: Double = 210
-    private let sweep: Double = 240
 
     var body: some View {
         let clamped = min(max(fraction, 0), 1)
-        let angle = Angle(degrees: startAngle + sweep * clamped)
-        let color: Color = isGain ? .green : .red
+        // 90° = 6 o'clock (low), sweep 180° clockwise to 270° = 12 o'clock (high).
+        let angle = Angle(degrees: 90 + 180 * clamped)
+        // Red at 0%, green at 100%, interpolated by hue.
+        let color = Color(hue: 0.33 * clamped, saturation: 0.9, brightness: 0.9)
 
         Canvas { context, size in
             let center = CGPoint(x: size.width / 2, y: size.height / 2)
