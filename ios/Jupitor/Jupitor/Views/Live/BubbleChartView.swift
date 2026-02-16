@@ -54,22 +54,6 @@ struct BubbleChartView: View {
                     }
                     .coordinateSpace(name: "canvas")
                     .frame(width: geo.size.width, height: geo.size.height)
-                    .gesture(
-                        MagnifyGesture()
-                            .onEnded { value in
-                                let newValue: Bool
-                                if value.magnification < 0.7 {
-                                    newValue = true
-                                } else if value.magnification > 1.3 {
-                                    newValue = false
-                                } else {
-                                    return
-                                }
-                                guard newValue != showWatchlistOnly else { return }
-                                showWatchlistOnly = newValue
-                                if viewSize.width > 0 { syncBubbles(in: viewSize) }
-                            }
-                    )
                     .onAppear {
                         viewSize = geo.size
                         if bubbles.isEmpty { syncBubbles(in: geo.size) }
@@ -88,6 +72,23 @@ struct BubbleChartView: View {
 
             }
         }
+        .contentShape(Rectangle())
+        .gesture(
+            MagnifyGesture()
+                .onEnded { value in
+                    let newValue: Bool
+                    if value.magnification < 0.7 {
+                        newValue = true
+                    } else if value.magnification > 1.3 {
+                        newValue = false
+                    } else {
+                        return
+                    }
+                    guard newValue != showWatchlistOnly else { return }
+                    showWatchlistOnly = newValue
+                    if viewSize.width > 0 { syncBubbles(in: viewSize) }
+                }
+        )
         .onChange(of: day) { _, _ in
             if viewSize.width > 0 { syncBubbles(in: viewSize) }
         }
