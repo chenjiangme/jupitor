@@ -434,18 +434,11 @@ private struct CloseDialView: View {
             let tip = CGPoint(x: center.x + cos(rad) * needleRadius,
                               y: center.y + sin(rad) * needleRadius)
 
-            // Needle line.
             var needle = Path()
             needle.move(to: center)
             needle.addLine(to: tip)
             context.stroke(needle, with: .color(color.opacity(0.5)),
                           style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-
-            // Dot at tip.
-            let dotR = lineWidth * 1.2
-            context.fill(Circle().path(in: CGRect(x: tip.x - dotR, y: tip.y - dotR,
-                                                   width: dotR * 2, height: dotR * 2)),
-                         with: .color(color.opacity(0.7)))
         }
     }
 }
