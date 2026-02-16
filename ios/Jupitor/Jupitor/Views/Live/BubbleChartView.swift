@@ -414,8 +414,8 @@ struct BubbleChartView: View {
 
 // MARK: - Close Dial
 
-/// Needle from center to the outer ring edge showing close position in [low, high].
-/// 6 o'clock = low (red), 12 o'clock = high (green). Sweeps clockwise through left.
+/// Needle from center to outer ring edge showing close position in [low, high].
+/// Full 360°: 12 o'clock = both 0% (red) and 100% (green). Sweeps clockwise.
 private struct CloseDialView: View {
     let fraction: Double      // 0 = at low, 1 = at high
     let needleRadius: CGFloat // distance from center to ring edge
@@ -423,8 +423,8 @@ private struct CloseDialView: View {
 
     var body: some View {
         let clamped = min(max(fraction, 0), 1)
-        // 90° = 6 o'clock (low), sweep 180° clockwise to 270° = 12 o'clock (high).
-        let angle = Angle(degrees: 90 + 180 * clamped)
+        // 12 o'clock = 270° in screen coords. Sweep 360° clockwise.
+        let angle = Angle(degrees: 270 + 360 * clamped)
         // Red at 0%, green at 100%, interpolated by hue.
         let color = Color(hue: 0.33 * clamped, saturation: 0.9, brightness: 0.9)
 
