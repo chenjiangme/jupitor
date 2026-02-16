@@ -30,6 +30,10 @@ A unified financial data platform for US equities and China A-shares. Go handles
 
 ## Demo
 
+<p align="center">
+  <img src="docs/demo/ios-demo.gif" alt="Jupitor iOS Demo" width="300">
+</p>
+
 | Bubble Chart | Session Modes | Date Navigation |
 |:---:|:---:|:---:|
 | ![Bubbles](docs/demo/01-bubbles.gif) | ![Sessions](docs/demo/02-sessions.gif) | ![Dates](docs/demo/03-dates.gif) |
