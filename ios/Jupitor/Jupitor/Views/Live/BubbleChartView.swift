@@ -290,6 +290,10 @@ struct BubbleChartView: View {
                 }
             }
 
+            // Vertical bias: high close fraction → top, low → bottom.
+            let targetY = viewSize.height * (1 - bubbles[i].closeFraction)
+            fy += (targetY - bubbles[i].position.y) * 0.03
+
             // Boundary forces.
             let r = bubbles[i].radius
             let margin: CGFloat = 2
@@ -370,10 +374,16 @@ struct BubbleChartView: View {
         for (idx, item) in items.enumerated() {
             let radius = radii[idx]
 
+            let cf: CGFloat = {
+                guard let s = sessionStats(item.0), s.high > s.low else { return 0.5 }
+                return CGFloat((s.close - s.low) / (s.high - s.low))
+            }()
+
             if var old = existing[item.0.symbol] {
                 old.combined = item.0
                 old.tier = item.1
                 old.radius = radius
+                old.closeFraction = cf
                 newBubbles.append(old)
             } else {
                 let col = idx % cols
@@ -388,7 +398,8 @@ struct BubbleChartView: View {
                     tier: item.1,
                     radius: radius,
                     position: pos,
-                    velocity: .zero
+                    velocity: .zero,
+                    closeFraction: cf
                 ))
             }
         }
@@ -452,4 +463,5 @@ private struct BubbleState: Identifiable {
     var radius: CGFloat
     var position: CGPoint
     var velocity: CGPoint
+    var closeFraction: CGFloat  // 0 = at low, 1 = at high
 }
