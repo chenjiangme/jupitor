@@ -200,10 +200,11 @@ struct BubbleChartView: View {
 
             // Symbol label.
             Text(bubble.id)
-                .font(.system(size: max(9, bubble.radius * 0.38), weight: .heavy))
+                .font(.system(size: max(7, bubble.radius * 0.3), weight: .heavy))
                 .foregroundStyle((isWatchlist ? Color.watchlistColor : .white).opacity(0.5))
+                .lineLimit(1)
                 .minimumScaleFactor(0.5)
-                .padding(3)
+                .padding(2)
         }
         .frame(width: diameter, height: diameter)
         .position(bubble.position)
