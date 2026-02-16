@@ -207,6 +207,22 @@ final class DashboardViewModel {
         }
     }
 
+    func removeWatchlistSymbols(_ symbols: Set<String>) async {
+        let toRemove = symbols.intersection(watchlistSymbols)
+        guard !toRemove.isEmpty else { return }
+
+        // Optimistic update.
+        watchlistSymbols.subtract(toRemove)
+
+        for symbol in toRemove {
+            do {
+                try await api.removeFromWatchlist(symbol: symbol)
+            } catch {
+                watchlistSymbols.insert(symbol)
+            }
+        }
+    }
+
     // MARK: - Symbol History
 
     func fetchSymbolHistory(symbol: String, before: String? = nil, until: String? = nil) async -> SymbolHistoryResponse? {

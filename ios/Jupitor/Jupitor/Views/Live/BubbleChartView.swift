@@ -96,6 +96,12 @@ struct BubbleChartView: View {
         .navigationDestination(isPresented: $showHistory) {
             SymbolHistoryView(symbol: historySymbol, date: date)
         }
+        .onShake {
+            let onScreen = Set(symbolData.map(\.combined.symbol))
+            let toRemove = onScreen.intersection(vm.watchlistSymbols)
+            guard !toRemove.isEmpty else { return }
+            Task { await vm.removeWatchlistSymbols(toRemove) }
+        }
     }
 
     // MARK: - Bubble View
