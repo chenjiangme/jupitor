@@ -197,13 +197,20 @@ struct BubbleChartView: View {
                 )
             }
 
-            // Symbol label + price for watchlist.
+            // Symbol label + dial + price.
             VStack(spacing: 0) {
                 Text(bubble.id)
                     .font(.system(size: max(7, bubble.radius * 0.3), weight: .heavy))
                     .foregroundStyle((isWatchlist ? Color.watchlistColor : .white).opacity(0.5))
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
+                if let stats = sessionStats(bubble.combined), stats.high > stats.low {
+                    CloseDialView(
+                        fraction: (stats.close - stats.low) / (stats.high - stats.low),
+                        size: max(8, bubble.radius * 0.45),
+                        isGain: stats.close >= stats.open
+                    )
+                }
                 if isWatchlist, let stats = sessionStats(bubble.combined) {
                     Text("\(Fmt.compactPrice(stats.open)) \(Fmt.compactPrice(stats.high)) \(Fmt.compactPrice(stats.close))")
                         .font(.system(size: max(5, bubble.radius * 0.16)))
@@ -400,6 +407,58 @@ struct BubbleChartView: View {
         isSettled = false
     }
 
+}
+
+// MARK: - Close Dial
+
+/// A small semicircular gauge showing where close sits between low and high.
+/// Arc sweeps from 7 o'clock (low) to 5 o'clock (high) through 12 o'clock.
+private struct CloseDialView: View {
+    let fraction: Double  // 0 = at low, 1 = at high
+    let size: CGFloat
+    let isGain: Bool      // close >= open → green needle, else red
+
+    // Arc from 210° to 330° (sweeping 240° through top).
+    private let startAngle: Double = 210
+    private let sweep: Double = 240
+
+    var body: some View {
+        let clamped = min(max(fraction, 0), 1)
+        let needleAngle = Angle(degrees: startAngle + sweep * clamped)
+        let trackWidth = max(1, size * 0.08)
+        let needleLen = size * 0.38
+
+        Canvas { context, canvasSize in
+            let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
+            let radius = size / 2 - trackWidth
+
+            // Track arc.
+            var track = Path()
+            track.addArc(center: center, radius: radius,
+                         startAngle: .degrees(startAngle), endAngle: .degrees(startAngle + sweep),
+                         clockwise: false)
+            context.stroke(track, with: .color(.white.opacity(0.15)),
+                          style: StrokeStyle(lineWidth: trackWidth, lineCap: .round))
+
+            // Needle.
+            let rad = needleAngle.radians
+            let tip = CGPoint(x: center.x + cos(rad) * needleLen,
+                              y: center.y + sin(rad) * needleLen)
+            var needle = Path()
+            needle.move(to: center)
+            needle.addLine(to: tip)
+            let needleColor: Color = isGain ? .green : .red
+            context.stroke(needle, with: .color(needleColor.opacity(0.6)),
+                          style: StrokeStyle(lineWidth: max(1, trackWidth * 0.8), lineCap: .round))
+
+            // Dot at tip.
+            let dotR = max(1.5, trackWidth)
+            context.fill(Circle().path(in: CGRect(x: tip.x - dotR, y: tip.y - dotR,
+                                                   width: dotR * 2, height: dotR * 2)),
+                         with: .color(needleColor.opacity(0.8)))
+        }
+        .frame(width: size, height: size)
+    }
 }
 
 // MARK: - Bubble State
