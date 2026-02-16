@@ -192,13 +192,22 @@ struct BubbleChartView: View {
                 )
             }
 
-            // Symbol label.
-            Text(bubble.id)
-                .font(.system(size: max(7, bubble.radius * 0.3), weight: .heavy))
-                .foregroundStyle((isWatchlist ? Color.watchlistColor : .white).opacity(0.5))
-                .lineLimit(1)
-                .minimumScaleFactor(0.5)
-                .padding(2)
+            // Symbol label + price for watchlist.
+            VStack(spacing: 0) {
+                Text(bubble.id)
+                    .font(.system(size: max(7, bubble.radius * 0.3), weight: .heavy))
+                    .foregroundStyle((isWatchlist ? Color.watchlistColor : .white).opacity(0.5))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                if isWatchlist, let price = latestPrice(bubble.combined) {
+                    Text(Fmt.price(price))
+                        .font(.system(size: max(6, bubble.radius * 0.2)))
+                        .foregroundStyle(Color.watchlistColor.opacity(0.4))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                }
+            }
+            .padding(2)
         }
         .frame(width: diameter, height: diameter)
         .position(bubble.position)
@@ -215,7 +224,16 @@ struct BubbleChartView: View {
         }
     }
 
-    // MARK: - Single Ring Helpers
+    // MARK: - Helpers
+
+    private func latestPrice(_ c: CombinedStatsJSON) -> Double? {
+        switch sessionMode {
+        case .pre, .next: return c.pre?.close
+        case .reg: return c.reg?.close
+        case .day: return c.reg?.close ?? c.pre?.close
+        }
+    }
+
 
     private func singleRingGain(_ c: CombinedStatsJSON) -> Double {
         switch sessionMode {
