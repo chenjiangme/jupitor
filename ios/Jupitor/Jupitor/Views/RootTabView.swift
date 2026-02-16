@@ -165,6 +165,7 @@ struct RootTabView: View {
                             }
                         }
                     }
+                    .fixedSize()
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
