@@ -114,8 +114,13 @@ struct BubbleChartView: View {
 
         ZStack {
             // Subtle background.
-            Circle()
-                .fill(Color.white.opacity(0.04))
+            if isWatchlist {
+                RoundedRectangle(cornerRadius: diameter * 0.15)
+                    .fill(Color.white.opacity(0.04))
+            } else {
+                Circle()
+                    .fill(Color.white.opacity(0.04))
+            }
 
             // Outer ring (regular session).
             SessionRingView(
@@ -123,7 +128,8 @@ struct BubbleChartView: View {
                 loss: bubble.combined.reg?.maxLoss ?? 0,
                 hasData: bubble.combined.reg != nil,
                 diameter: outerDia,
-                lineWidth: ringWidth
+                lineWidth: ringWidth,
+                isSquare: isWatchlist
             )
 
             // Inner ring (pre-market session).
@@ -132,7 +138,8 @@ struct BubbleChartView: View {
                 loss: bubble.combined.pre?.maxLoss ?? 0,
                 hasData: bubble.combined.pre != nil,
                 diameter: innerDia,
-                lineWidth: ringWidth
+                lineWidth: ringWidth,
+                isSquare: isWatchlist
             )
 
             // Symbol label.
