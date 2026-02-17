@@ -933,8 +933,11 @@ func (s *DashboardServer) handleTargetStream(w http.ResponseWriter, r *http.Requ
 		flusher.Flush()
 	}
 
-	// Stream incremental events.
+	// Stream incremental events with heartbeat.
 	ctx := r.Context()
+	heartbeat := time.NewTicker(30 * time.Second)
+	defer heartbeat.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -947,6 +950,9 @@ func (s *DashboardServer) handleTargetStream(w http.ResponseWriter, r *http.Requ
 				fmt.Fprintf(w, "data: %s\n\n", data)
 				flusher.Flush()
 			}
+		case <-heartbeat.C:
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
 		}
 	}
 }
