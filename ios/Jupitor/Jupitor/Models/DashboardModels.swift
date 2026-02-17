@@ -48,6 +48,7 @@ struct DashboardResponse: Codable {
     let next: DayDataJSON?
     let sortMode: Int
     let sortLabel: String
+    let targets: [String: Double]?
 }
 
 struct DatesResponse: Codable {
@@ -75,12 +76,6 @@ struct NewsResponse: Codable {
     let symbol: String
     let date: String
     let articles: [NewsArticleJSON]
-}
-
-// MARK: - Targets
-
-struct TargetsResponse: Decodable {
-    let targets: [String: Double]
 }
 
 // MARK: - Symbol History

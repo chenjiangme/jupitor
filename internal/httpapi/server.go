@@ -468,11 +468,16 @@ func (s *DashboardServer) handleDashboard(w http.ResponseWriter, r *http.Request
 	todayJSON := convertDayData(todayData, newsCounts)
 	todayJSON.Date = date
 
+	s.targetMu.RLock()
+	targets := s.targets[date]
+	s.targetMu.RUnlock()
+
 	resp := DashboardResponse{
 		Date:      date,
 		Today:     todayJSON,
 		SortMode:  sortMode,
 		SortLabel: dashboard.SortModeLabel(sortMode),
+		Targets:   targets,
 	}
 
 	if len(nextExIdx) > 0 {
@@ -512,11 +517,16 @@ func (s *DashboardServer) handleHistory(w http.ResponseWriter, r *http.Request) 
 	todayJSON := convertDayData(data, newsCounts)
 	todayJSON.Date = date
 
+	s.targetMu.RLock()
+	histTargets := s.targets[date]
+	s.targetMu.RUnlock()
+
 	resp := DashboardResponse{
 		Date:      date,
 		Today:     todayJSON,
 		SortMode:  sortMode,
 		SortLabel: dashboard.SortModeLabel(sortMode),
+		Targets:   histTargets,
 	}
 
 	// Load next day data.

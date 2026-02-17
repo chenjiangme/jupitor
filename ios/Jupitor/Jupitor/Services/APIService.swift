@@ -99,13 +99,6 @@ actor APIService {
 
     // MARK: - Targets
 
-    func fetchTargets(date: String) async throws -> TargetsResponse {
-        let url = baseURL.appendingPathComponent("api/targets")
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "date", value: date)]
-        return try await fetch(components.url!)
-    }
-
     func setTarget(date: String, key: String, value: Double) async throws {
         let url = baseURL.appendingPathComponent("api/targets")
         var request = URLRequest(url: url)

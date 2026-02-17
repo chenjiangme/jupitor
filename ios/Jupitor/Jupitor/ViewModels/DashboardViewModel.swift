@@ -90,10 +90,8 @@ final class DashboardViewModel {
 
         _ = await (dashTask, datesTask)
 
-        // Load watchlist and targets for the live date (now known after refreshLive).
-        async let wl: () = loadWatchlist(for: date)
-        async let tg: () = loadTargets(for: date)
-        _ = await (wl, tg)
+        // Load watchlist for the live date (targets already arrived with dashboard response).
+        await loadWatchlist(for: date)
 
         startPreloadingHistory()
     }
@@ -106,13 +104,11 @@ final class DashboardViewModel {
             self.next = resp.next
             self.sortLabel = resp.sortLabel
             self.error = nil
+            if let targets = resp.targets {
+                targetCache[resp.date] = targets
+            }
         } catch {
             self.error = error.localizedDescription
-        }
-
-        // Refresh targets for the current date (enables cross-device sync).
-        if !watchlistDate.isEmpty {
-            await loadTargets(for: watchlistDate)
         }
     }
 
@@ -146,12 +142,11 @@ final class DashboardViewModel {
         }
     }
 
-    /// Called by views when the display date changes; reloads watchlist and targets if needed.
+    /// Called by views when the display date changes; reloads watchlist if needed.
+    /// Targets arrive with dashboard/history responses automatically.
     func updateDisplayDate(_ date: String) async {
         guard !date.isEmpty, date != watchlistDate else { return }
-        async let wl: () = loadWatchlist(for: date)
-        async let tg: () = loadTargets(for: date)
-        _ = await (wl, tg)
+        await loadWatchlist(for: date)
     }
 
     // MARK: - History
@@ -174,6 +169,9 @@ final class DashboardViewModel {
             self.historyDay = resp.today
             self.historyNext = resp.next
             historyCache[cacheKey] = (resp.today, resp.next)
+            if let targets = resp.targets {
+                targetCache[date] = targets
+            }
         } catch {
             self.historyDay = nil
             self.historyNext = nil
@@ -263,17 +261,6 @@ final class DashboardViewModel {
     }
 
     // MARK: - Targets
-
-    func loadTargets(for date: String) async {
-        guard !date.isEmpty else { return }
-
-        do {
-            let resp = try await api.fetchTargets(date: date)
-            targetCache[date] = resp.targets
-        } catch {
-            // Non-fatal — keep stale cache if present.
-        }
-    }
 
     func setTarget(key: String, value: Double, date: String) async {
         // Optimistic update.

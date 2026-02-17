@@ -47,11 +47,12 @@ type DayDataJSON struct {
 
 // DashboardResponse is the top-level JSON response for dashboard endpoints.
 type DashboardResponse struct {
-	Date      string       `json:"date"`
-	Today     DayDataJSON  `json:"today"`
-	Next      *DayDataJSON `json:"next,omitempty"`
-	SortMode  int          `json:"sortMode"`
-	SortLabel string       `json:"sortLabel"`
+	Date      string             `json:"date"`
+	Today     DayDataJSON        `json:"today"`
+	Next      *DayDataJSON       `json:"next,omitempty"`
+	SortMode  int                `json:"sortMode"`
+	SortLabel string             `json:"sortLabel"`
+	Targets   map[string]float64 `json:"targets,omitempty"`
 }
 
 // DatesResponse lists available history dates.
