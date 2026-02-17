@@ -261,13 +261,12 @@ final class DashboardViewModel {
 
     func loadTargets(for date: String) async {
         guard !date.isEmpty else { return }
-        if targetCache[date] != nil { return }
 
         do {
             let resp = try await api.fetchTargets(date: date)
             targetCache[date] = resp.targets
         } catch {
-            // Non-fatal.
+            // Non-fatal — keep stale cache if present.
         }
     }
 
