@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	alpacaapi "github.com/alpacahq/alpaca-trade-api-go/v3/alpaca"
@@ -175,10 +176,18 @@ func (s *DashboardServer) refreshNewsCache() {
 		return
 	}
 
-	// Time window: today 4AM ET → 8PM ET.
+	// Time window: prev trading day 4PM ET → today 8PM ET.
 	t, _ := time.ParseInLocation("2006-01-02", date, s.loc)
-	start := time.Date(t.Year(), t.Month(), t.Day(), 4, 0, 0, 0, s.loc)
 	end := time.Date(t.Year(), t.Month(), t.Day(), 20, 0, 0, 0, s.loc)
+	// Find previous trading day from history dates.
+	start := time.Date(t.Year(), t.Month(), t.Day(), 4, 0, 0, 0, s.loc) // fallback
+	for i := len(s.historyDates) - 1; i >= 0; i-- {
+		if s.historyDates[i] < date {
+			p, _ := time.ParseInLocation("2006-01-02", s.historyDates[i], s.loc)
+			start = time.Date(p.Year(), p.Month(), p.Day(), 16, 0, 0, 0, s.loc)
+			break
+		}
+	}
 
 	s.log.Info("news refresh starting", "date", date, "symbols", len(symbols))
 
@@ -186,6 +195,7 @@ func (s *DashboardServer) refreshNewsCache() {
 	sem := make(chan struct{}, 4)
 	var wg sync.WaitGroup
 
+	var totalArticles int64
 	for _, sym := range symbols {
 		wg.Add(1)
 		go func(sym string) {
@@ -194,9 +204,7 @@ func (s *DashboardServer) refreshNewsCache() {
 			defer func() { <-sem }()
 
 			var articles []NewsArticleJSON
-
-			// Alpaca news.
-			if aa, err := news.FetchAlpacaNews(s.mdClient, sym, start, end); err == nil {
+			appendAll := func(aa []news.Article) {
 				for _, a := range aa {
 					articles = append(articles, NewsArticleJSON{
 						Time:     a.Time.UnixMilli(),
@@ -205,42 +213,34 @@ func (s *DashboardServer) refreshNewsCache() {
 						Content:  a.Content,
 					})
 				}
+			}
+
+			// Alpaca news.
+			if aa, err := news.FetchAlpacaNews(s.mdClient, sym, start, end); err == nil {
+				appendAll(aa)
+			} else {
+				s.log.Debug("news fetch error", "source", "alpaca", "symbol", sym, "error", err)
 			}
 
 			// Google News RSS.
 			if aa, err := news.FetchGoogleNews(sym, start, end); err == nil {
-				for _, a := range aa {
-					articles = append(articles, NewsArticleJSON{
-						Time:     a.Time.UnixMilli(),
-						Source:   a.Source,
-						Headline: a.Headline,
-						Content:  a.Content,
-					})
-				}
+				appendAll(aa)
+			} else {
+				s.log.Debug("news fetch error", "source", "google", "symbol", sym, "error", err)
 			}
 
 			// GlobeNewswire RSS.
 			if aa, err := news.FetchGlobeNewswire(sym, start, end); err == nil {
-				for _, a := range aa {
-					articles = append(articles, NewsArticleJSON{
-						Time:     a.Time.UnixMilli(),
-						Source:   a.Source,
-						Headline: a.Headline,
-						Content:  a.Content,
-					})
-				}
+				appendAll(aa)
+			} else {
+				s.log.Debug("news fetch error", "source", "globenewswire", "symbol", sym, "error", err)
 			}
 
 			// StockTwits (single page, no deep pagination for live).
 			if aa, err := news.FetchStockTwits(sym, start, end, false, s.stLimiter); err == nil {
-				for _, a := range aa {
-					articles = append(articles, NewsArticleJSON{
-						Time:     a.Time.UnixMilli(),
-						Source:   a.Source,
-						Headline: a.Headline,
-						Content:  a.Content,
-					})
-				}
+				appendAll(aa)
+			} else {
+				s.log.Debug("news fetch error", "source", "stocktwits", "symbol", sym, "error", err)
 			}
 
 			// Sort by time.
@@ -250,11 +250,12 @@ func (s *DashboardServer) refreshNewsCache() {
 
 			key := sym + ":" + date
 			s.newsCache.Store(key, articles)
+			atomic.AddInt64(&totalArticles, int64(len(articles)))
 		}(sym)
 	}
 	wg.Wait()
 
-	s.log.Info("news refresh complete", "date", date, "symbols", len(symbols))
+	s.log.Info("news refresh complete", "date", date, "symbols", len(symbols), "articles", totalArticles)
 }
 
 // resolveWatchlistID returns the Alpaca watchlist ID for the given date,
