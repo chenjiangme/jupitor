@@ -7,6 +7,7 @@ struct SymbolDetailView: View {
     let initialSymbol: String
     let date: String
     var newsDate: String = ""
+    var isNextMode: Bool = false
 
     /// The date used to fetch news. Falls back to `date` if not set.
     private var effectiveNewsDate: String { newsDate.isEmpty ? date : newsDate }
@@ -32,7 +33,6 @@ struct SymbolDetailView: View {
     }
 
     private var news: [NewsArticleJSON] {
-        let isNextMode = !newsDate.isEmpty && newsDate != date
         let cal = Calendar.current
         return newsArticles.filter { a in
             guard a.source != "stocktwits" else { return false }
@@ -48,10 +48,9 @@ struct SymbolDetailView: View {
     private static let et = TimeZone(identifier: "America/New_York")!
 
     /// StockTwits messages split by ET time of day.
-    /// In NEXT mode (newsDate != date), counts only after-4PM messages from newsDate.
+    /// In NEXT mode, counts only after-4PM messages.
     /// Otherwise counts only messages from the display date.
     private var stocktwitsBuckets: (overnight: Int, pre: Int, regular: Int, after: Int) {
-        let isNextMode = !newsDate.isEmpty && newsDate != date
         var overnight = 0, pre = 0, regular = 0, after = 0
         let cal = Calendar.current
         for a in newsArticles where a.source == "stocktwits" {
@@ -60,7 +59,7 @@ struct SymbolDetailView: View {
             let minutes = (c.hour ?? 0) * 60 + (c.minute ?? 0)
             if isNextMode {
                 // NEXT mode: only after-4PM messages from the news date.
-                guard msgDate == newsDate, minutes >= 960 else { continue }
+                guard msgDate == effectiveNewsDate, minutes >= 960 else { continue }
                 after += 1
             } else {
                 guard msgDate == date else { continue }
