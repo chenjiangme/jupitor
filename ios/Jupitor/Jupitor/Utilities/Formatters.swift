@@ -2,10 +2,13 @@ import Foundation
 
 enum Fmt {
     static func count(_ n: Int) -> String {
-        if n >= 100_000 {
-            return String(format: "%.0fK", Double(n) / 1000)
+        let v = Double(n)
+        switch v {
+        case 1e9...: return String(format: "%.1fB", v / 1e9)
+        case 1e6...: return String(format: "%.1fM", v / 1e6)
+        case 100_000...: return String(format: "%.0fK", v / 1e3)
+        default: return intWithCommas(n)
         }
-        return intWithCommas(n)
     }
 
     static func turnover(_ v: Double) -> String {

@@ -450,7 +450,7 @@ struct BubbleChartView: View {
 
 /// Needle from center to outer ring edge showing close position in [low, high].
 /// Full 360°: 12 o'clock = both 0% (red) and 100% (green). Sweeps clockwise.
-private struct CloseDialView: View {
+struct CloseDialView: View {
     let fraction: Double      // 0 = at low, 1 = at high
     let needleRadius: CGFloat // distance from center to ring edge
     var lineWidth: CGFloat = 2

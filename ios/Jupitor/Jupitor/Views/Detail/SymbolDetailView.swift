@@ -40,6 +40,11 @@ struct SymbolDetailView: View {
                 }
                 .padding(.horizontal)
 
+                // Ring visualization.
+                DetailRingView(combined: combined)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+
                 // Session cards.
                 if let pre = combined.pre {
                     SessionCard(label: "Pre-Market", stats: pre)
@@ -109,5 +114,90 @@ struct SymbolDetailView: View {
             newsArticles = await vm.fetchNewsArticles(symbol: combined.symbol, date: date)
             isLoadingNews = false
         }
+    }
+}
+
+// MARK: - Detail Ring
+
+private struct DetailRingView: View {
+    let combined: CombinedStatsJSON
+
+    private let diameter: CGFloat = 160
+    private let ringWidth: CGFloat = 14
+    private let minInnerRatio: CGFloat = 0.15
+
+    private var hasPre: Bool { combined.pre != nil }
+    private var hasReg: Bool { combined.reg != nil }
+    private var dualRing: Bool { hasPre && hasReg }
+
+    private var preTurnover: Double { combined.pre?.turnover ?? 0 }
+    private var regTurnover: Double { combined.reg?.turnover ?? 0 }
+    private var total: Double { preTurnover + regTurnover }
+    private var preRatio: CGFloat { total > 0 ? sqrt(CGFloat(preTurnover / total)) : 0 }
+
+    private var outerDia: CGFloat { diameter - ringWidth }
+    private var innerDia: CGFloat {
+        min(outerDia - 3 * ringWidth, outerDia * max(minInnerRatio, preRatio))
+    }
+    private var blackFillDia: CGFloat { innerDia + ringWidth }
+
+    /// Combined stats for close dial.
+    private var dialStats: (close: Double, low: Double, high: Double)? {
+        if let reg = combined.reg, reg.high > reg.low {
+            return (reg.close, min(combined.pre?.low ?? reg.low, reg.low), max(combined.pre?.high ?? reg.high, reg.high))
+        }
+        if let pre = combined.pre, pre.high > pre.low {
+            return (pre.close, pre.low, pre.high)
+        }
+        return nil
+    }
+
+    var body: some View {
+        ZStack {
+            if dualRing {
+                // Outer ring (regular session).
+                SessionRingView(
+                    gain: combined.reg?.maxGain ?? 0,
+                    loss: combined.reg?.maxLoss ?? 0,
+                    hasData: true,
+                    diameter: outerDia,
+                    lineWidth: ringWidth
+                )
+
+                // Black fill for clean separation.
+                Circle()
+                    .fill(Color.black)
+                    .frame(width: blackFillDia, height: blackFillDia)
+
+                // Inner ring (pre-market).
+                SessionRingView(
+                    gain: combined.pre?.maxGain ?? 0,
+                    loss: combined.pre?.maxLoss ?? 0,
+                    hasData: true,
+                    diameter: innerDia,
+                    lineWidth: ringWidth
+                )
+            } else {
+                // Single ring for whichever session exists.
+                SessionRingView(
+                    gain: combined.pre?.maxGain ?? combined.reg?.maxGain ?? 0,
+                    loss: combined.pre?.maxLoss ?? combined.reg?.maxLoss ?? 0,
+                    hasData: hasPre || hasReg,
+                    diameter: outerDia,
+                    lineWidth: ringWidth
+                )
+            }
+
+            // Close dial needle.
+            if let s = dialStats {
+                CloseDialView(
+                    fraction: (s.close - s.low) / (s.high - s.low),
+                    needleRadius: outerDia / 2,
+                    lineWidth: max(1.5, ringWidth * 0.4)
+                )
+                .frame(width: diameter, height: diameter)
+            }
+        }
+        .frame(width: diameter, height: diameter)
     }
 }

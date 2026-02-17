@@ -236,8 +236,8 @@ func (s *DashboardServer) refreshNewsCache() {
 				s.log.Debug("news fetch error", "source", "globenewswire", "symbol", sym, "error", err)
 			}
 
-			// StockTwits (single page, no deep pagination for live).
-			if aa, err := news.FetchStockTwits(sym, start, end, false, s.stLimiter); err == nil {
+			// StockTwits (paginate to get all messages in the window).
+			if aa, err := news.FetchStockTwits(sym, start, end, true, s.stLimiter); err == nil {
 				appendAll(aa)
 			} else {
 				s.log.Debug("news fetch error", "source", "stocktwits", "symbol", sym, "error", err)
