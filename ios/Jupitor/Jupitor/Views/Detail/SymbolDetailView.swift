@@ -27,8 +27,29 @@ struct SymbolDetailView: View {
     private var news: [NewsArticleJSON] {
         newsArticles.filter { $0.source != "stocktwits" }
     }
-    private var stocktwitsCount: Int {
-        newsArticles.filter { $0.source == "stocktwits" }.count
+    private static let et = TimeZone(identifier: "America/New_York")!
+
+    /// StockTwits messages split by ET time of day: before 4AM, 4AM–9:30AM, after 9:30AM.
+    private var stocktwitsBuckets: (overnight: Int, pre: Int, regular: Int) {
+        var overnight = 0, pre = 0, regular = 0
+        let cal = Calendar.current
+        for a in newsArticles where a.source == "stocktwits" {
+            var c = cal.dateComponents(in: Self.et, from: a.date)
+            let minutes = (c.hour ?? 0) * 60 + (c.minute ?? 0)
+            if minutes < 240 {         // before 4:00 AM
+                overnight += 1
+            } else if minutes < 570 {  // 4:00 AM – 9:30 AM
+                pre += 1
+            } else {                   // 9:30 AM+
+                regular += 1
+            }
+        }
+        return (overnight, pre, regular)
+    }
+
+    private var stocktwitsTotal: Int {
+        let b = stocktwitsBuckets
+        return b.overnight + b.pre + b.regular
     }
 
     private var canGoBack: Bool { currentIndex > 0 }
@@ -107,13 +128,31 @@ struct SymbolDetailView: View {
                     SessionCard(label: "Regular", stats: reg)
                 }
 
-                // StockTwits count.
-                if !isLoadingNews, stocktwitsCount > 0 {
+                // StockTwits counts by session.
+                if !isLoadingNews, stocktwitsTotal > 0 {
+                    let b = stocktwitsBuckets
                     HStack {
                         Text("StockTwits")
                             .font(.headline)
                         Spacer()
-                        Text("\(stocktwitsCount)")
+                        HStack(spacing: 12) {
+                            if b.overnight > 0 {
+                                Label("\(b.overnight)", systemImage: "moon.fill")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                            if b.pre > 0 {
+                                Label("\(b.pre)", systemImage: "sunrise.fill")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.indigo)
+                            }
+                            if b.regular > 0 {
+                                Label("\(b.regular)", systemImage: "sun.max.fill")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.green.opacity(0.7))
+                            }
+                        }
+                        Text("\(stocktwitsTotal)")
                             .font(.headline.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
