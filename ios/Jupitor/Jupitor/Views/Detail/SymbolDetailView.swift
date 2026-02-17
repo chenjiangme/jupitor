@@ -11,6 +11,7 @@ struct SymbolDetailView: View {
     @State private var isLoadingNews = false
     @State private var panOffset: CGFloat = 0
     @State private var isTransitioning = false
+    @State private var isAdjustingTarget = false
 
     private var currentSymbol: String { symbols[currentIndex].symbol }
 
@@ -116,7 +117,7 @@ struct SymbolDetailView: View {
                 .padding(.horizontal)
 
                 // Ring visualization.
-                DetailRingView(combined: combined, date: date)
+                DetailRingView(combined: combined, date: date, isAdjustingTarget: $isAdjustingTarget)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
 
@@ -203,7 +204,7 @@ struct SymbolDetailView: View {
         .simultaneousGesture(
             DragGesture(minimumDistance: 30)
                 .onChanged { value in
-                    guard !isTransitioning else { return }
+                    guard !isTransitioning, !isAdjustingTarget else { return }
                     let t = value.translation
                     guard abs(t.width) > abs(t.height) else { return }
                     if (t.width < 0 && canGoForward) || (t.width > 0 && canGoBack) {
@@ -211,7 +212,7 @@ struct SymbolDetailView: View {
                     }
                 }
                 .onEnded { value in
-                    guard !isTransitioning else {
+                    guard !isTransitioning, !isAdjustingTarget else {
                         panOffset = 0
                         return
                     }
@@ -241,6 +242,7 @@ struct SymbolDetailView: View {
 private struct DetailRingView: View {
     let combined: CombinedStatsJSON
     let date: String
+    @Binding var isAdjustingTarget: Bool
 
     private let maxDiameter: CGFloat = 140
     private let minDiameter: CGFloat = 50
@@ -267,7 +269,8 @@ private struct DetailRingView: View {
                     stats: pre,
                     dia: preDia,
                     ringWidth: ringWidth,
-                    targetKey: "\(combined.symbol):\(date):PRE"
+                    targetKey: "\(combined.symbol):\(date):PRE",
+                    isAdjusting: $isAdjustingTarget
                 )
             }
             if let reg = combined.reg {
@@ -276,7 +279,8 @@ private struct DetailRingView: View {
                     stats: reg,
                     dia: regDia,
                     ringWidth: ringWidth,
-                    targetKey: "\(combined.symbol):\(date):REG"
+                    targetKey: "\(combined.symbol):\(date):REG",
+                    isAdjusting: $isAdjustingTarget
                 )
             }
         }
@@ -291,6 +295,7 @@ private struct TargetRingView: View {
     let dia: CGFloat
     let ringWidth: CGFloat
     let targetKey: String
+    @Binding var isAdjusting: Bool
 
     @State private var target: Double? = nil
     @State private var prevAngle: Double = 0
@@ -343,6 +348,7 @@ private struct TargetRingView: View {
 
                         if !isDragging {
                             isDragging = true
+                            isAdjusting = true
                             prevAngle = angle
                             if target == nil {
                                 // First touch: place arrow at finger angle.
@@ -362,6 +368,7 @@ private struct TargetRingView: View {
                     }
                     .onEnded { _ in
                         isDragging = false
+                        isAdjusting = false
                         // Clear if dragged below 2%.
                         if let t = target, t < 0.02 {
                             target = nil
@@ -386,6 +393,9 @@ private struct TargetRingView: View {
         }
         .onAppear {
             target = TargetStore.load(targetKey)
+        }
+        .onChange(of: targetKey) { _, newKey in
+            target = TargetStore.load(newKey)
         }
     }
 }
