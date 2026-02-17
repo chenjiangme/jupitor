@@ -320,6 +320,64 @@ func (s *DashboardServer) refreshNewsCache() {
 	s.saveNewsToDisk(date)
 }
 
+// fetchNewsOnDemand fetches news for a single symbol on demand (cache miss).
+// Uses single-page StockTwits (no deep pagination) for fast response.
+func (s *DashboardServer) fetchNewsOnDemand(symbol, date string) []NewsArticleJSON {
+	// Compute time window: prev trading day 4PM ET → date 8PM ET.
+	t, _ := time.ParseInLocation("2006-01-02", date, s.loc)
+	end := time.Date(t.Year(), t.Month(), t.Day(), 20, 0, 0, 0, s.loc)
+	start := time.Date(t.Year(), t.Month(), t.Day(), 4, 0, 0, 0, s.loc)
+	for i := len(s.historyDates) - 1; i >= 0; i-- {
+		if s.historyDates[i] < date {
+			p, _ := time.ParseInLocation("2006-01-02", s.historyDates[i], s.loc)
+			start = time.Date(p.Year(), p.Month(), p.Day(), 16, 0, 0, 0, s.loc)
+			break
+		}
+	}
+
+	var articles []NewsArticleJSON
+	appendAll := func(aa []news.Article) {
+		for _, a := range aa {
+			articles = append(articles, NewsArticleJSON{
+				Time:     a.Time.UnixMilli(),
+				Source:   a.Source,
+				Headline: a.Headline,
+				Content:  a.Content,
+			})
+		}
+	}
+
+	if s.mdClient != nil {
+		if aa, err := news.FetchAlpacaNews(s.mdClient, symbol, start, end); err == nil {
+			appendAll(aa)
+		}
+	}
+	if aa, err := news.FetchGoogleNews(symbol, start, end); err == nil {
+		appendAll(aa)
+	}
+	if aa, err := news.FetchGlobeNewswire(symbol, start, end); err == nil {
+		appendAll(aa)
+	}
+	// Single-page StockTwits fetch (no deep pagination for fast response).
+	limiter := time.NewTicker(time.Millisecond)
+	if aa, err := news.FetchStockTwits(symbol, start, end, false, limiter); err == nil {
+		appendAll(aa)
+	}
+	limiter.Stop()
+
+	sort.Slice(articles, func(i, j int) bool {
+		return articles[i].Time < articles[j].Time
+	})
+	if articles == nil {
+		articles = []NewsArticleJSON{}
+	}
+
+	key := symbol + ":" + date
+	s.newsCache.Store(key, articles)
+	s.log.Info("news on-demand fetch", "symbol", symbol, "date", date, "articles", len(articles))
+	return articles
+}
+
 // resolveWatchlistID returns the Alpaca watchlist ID for the given date,
 // creating the watchlist on demand. Watchlists are named "jupitor-YYYY-MM-DD".
 func (s *DashboardServer) resolveWatchlistID(date string) (string, error) {
@@ -716,7 +774,7 @@ func (s *DashboardServer) handleNews(w http.ResponseWriter, r *http.Request) {
 	today := now.Format("2006-01-02")
 	tomorrow := now.AddDate(0, 0, 1).Format("2006-01-02")
 
-	// For today/tomorrow, serve from background news cache.
+	// For today/tomorrow, serve from background news cache or fetch on demand.
 	if date == today || date == tomorrow {
 		key := symbol + ":" + date
 		if v, ok := s.newsCache.Load(key); ok {
@@ -724,8 +782,9 @@ func (s *DashboardServer) handleNews(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, NewsResponse{Symbol: symbol, Date: date, Articles: articles})
 			return
 		}
-		// Not in cache — return empty (background refresh will populate it).
-		writeJSON(w, NewsResponse{Symbol: symbol, Date: date, Articles: []NewsArticleJSON{}})
+		// Not in cache — fetch on demand for this symbol.
+		articles := s.fetchNewsOnDemand(symbol, date)
+		writeJSON(w, NewsResponse{Symbol: symbol, Date: date, Articles: articles})
 		return
 	}
 
