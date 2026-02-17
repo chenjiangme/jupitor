@@ -152,9 +152,6 @@ struct SymbolDetailView: View {
                                     .foregroundStyle(.green.opacity(0.7))
                             }
                         }
-                        Text("\(stocktwitsTotal)")
-                            .font(.headline.monospacedDigit())
-                            .foregroundStyle(.secondary)
                     }
                     .padding(.horizontal)
                 }
