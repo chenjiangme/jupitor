@@ -107,7 +107,11 @@ struct BubbleChartView: View {
         }
         .navigationDestination(isPresented: $showDetail) {
             if let combined = detailCombined {
-                SymbolDetailView(combined: combined, date: date)
+                let sorted = symbolData.map(\.combined).sorted {
+                    ($0.pre?.turnover ?? 0) + ($0.reg?.turnover ?? 0) >
+                    ($1.pre?.turnover ?? 0) + ($1.reg?.turnover ?? 0)
+                }
+                SymbolDetailView(symbols: sorted, initialSymbol: combined.symbol, date: date)
             }
         }
         .navigationDestination(isPresented: $showHistory) {

@@ -2,17 +2,61 @@ import SwiftUI
 
 struct SymbolDetailView: View {
     @Environment(DashboardViewModel.self) private var vm
-    let combined: CombinedStatsJSON
+    let symbols: [CombinedStatsJSON]
+    let initialSymbol: String
     let date: String
 
+    @State private var currentIndex: Int = 0
     @State private var newsArticles: [NewsArticleJSON] = []
     @State private var isLoadingNews = false
+    @State private var panOffset: CGFloat = 0
+    @State private var isTransitioning = false
+
+    private var combined: CombinedStatsJSON { symbols[currentIndex] }
 
     private var news: [NewsArticleJSON] {
         newsArticles.filter { $0.source != "stocktwits" }
     }
     private var stocktwitsCount: Int {
         newsArticles.filter { $0.source == "stocktwits" }.count
+    }
+
+    private var canGoBack: Bool { currentIndex > 0 }
+    private var canGoForward: Bool { currentIndex < symbols.count - 1 }
+
+    private func commitSwipe(offset: CGFloat) {
+        let threshold: CGFloat = 80
+        let w = UIScreen.main.bounds.width
+
+        if offset < -threshold && canGoForward {
+            isTransitioning = true
+            withAnimation(.easeOut(duration: 0.15)) { panOffset = -w }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                currentIndex += 1
+                panOffset = w
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.2)) { panOffset = 0 }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                isTransitioning = false
+            }
+        } else if offset > threshold && canGoBack {
+            isTransitioning = true
+            withAnimation(.easeOut(duration: 0.15)) { panOffset = w }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                currentIndex -= 1
+                panOffset = -w
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.2)) { panOffset = 0 }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                isTransitioning = false
+            }
+        } else {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { panOffset = 0 }
+        }
     }
 
     var body: some View {
@@ -106,10 +150,39 @@ struct SymbolDetailView: View {
             }
             .padding(.vertical)
         }
+        .offset(x: panOffset)
         .background(Color.black)
         .navigationTitle(combined.symbol)
         .navigationBarTitleDisplayMode(.inline)
-        .task {
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 30)
+                .onChanged { value in
+                    guard !isTransitioning else { return }
+                    let t = value.translation
+                    guard abs(t.width) > abs(t.height) else { return }
+                    if (t.width < 0 && canGoForward) || (t.width > 0 && canGoBack) {
+                        panOffset = t.width
+                    }
+                }
+                .onEnded { value in
+                    guard !isTransitioning else {
+                        panOffset = 0
+                        return
+                    }
+                    let t = value.translation
+                    guard abs(t.width) > abs(t.height) else {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { panOffset = 0 }
+                        return
+                    }
+                    commitSwipe(offset: t.width)
+                }
+        )
+        .onAppear {
+            if let idx = symbols.firstIndex(where: { $0.symbol == initialSymbol }) {
+                currentIndex = idx
+            }
+        }
+        .task(id: combined.symbol) {
             isLoadingNews = true
             newsArticles = await vm.fetchNewsArticles(symbol: combined.symbol, date: date)
             isLoadingNews = false

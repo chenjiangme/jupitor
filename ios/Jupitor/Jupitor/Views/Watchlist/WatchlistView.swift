@@ -21,7 +21,11 @@ struct WatchlistView: View {
                 LazyVStack(spacing: 4) {
                     ForEach(watchlistSymbols) { combined in
                         NavigationLink {
-                            SymbolDetailView(combined: combined, date: vm.date)
+                            let sorted = watchlistSymbols.sorted {
+                                ($0.pre?.turnover ?? 0) + ($0.reg?.turnover ?? 0) >
+                                ($1.pre?.turnover ?? 0) + ($1.reg?.turnover ?? 0)
+                            }
+                            SymbolDetailView(symbols: sorted, initialSymbol: combined.symbol, date: vm.date)
                         } label: {
                             SymbolCardView(
                                 combined: combined,
