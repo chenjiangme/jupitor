@@ -28,6 +28,7 @@
 		A10031 /* RingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10031; };
 		A10032 /* SymbolHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10032; };
 		A10033 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10033; };
+		A10034 /* TradeParamsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10034; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -53,6 +54,7 @@
 		B10031 /* RingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingView.swift; sourceTree = "<group>"; };
 		B10032 /* SymbolHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SymbolHistoryView.swift; sourceTree = "<group>"; };
 		B10033 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		B10034 /* TradeParamsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeParamsModel.swift; sourceTree = "<group>"; };
 		C10001 /* Jupitor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jupitor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -110,6 +112,7 @@
 			isa = PBXGroup;
 			children = (
 				B10004 /* DashboardViewModel.swift */,
+				B10034 /* TradeParamsModel.swift */,
 			);
 			path = ViewModels;
 			sourceTree = "<group>";
@@ -289,6 +292,7 @@
 				A10030 /* BubbleChartView.swift in Sources */,
 				A10031 /* RingView.swift in Sources */,
 				A10032 /* SymbolHistoryView.swift in Sources */,
+				A10034 /* TradeParamsModel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
