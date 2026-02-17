@@ -60,6 +60,10 @@ type DashboardServer struct {
 	newsCache sync.Map
 	// StockTwits rate limiter for background news refresh.
 	stLimiter *time.Ticker
+	// Accumulated set of symbols that ever appeared on the dashboard for today.
+	newsSeenMu      sync.Mutex
+	newsSeenDate    string
+	newsSeenSymbols map[string]bool
 
 	// Cache for per-symbol per-date history stats. Key: "SYMBOL:DATE".
 	symbolHistoryCache sync.Map
@@ -176,7 +180,11 @@ func (s *DashboardServer) startNewsRefresh(ctx context.Context) {
 	}
 }
 
-// refreshNewsCache fetches news for today's top symbols from all 4 sources.
+// refreshNewsCache fetches news for all dashboard symbols from all 4 sources.
+// Uses the same ComputeDayData logic as the dashboard endpoint so the symbol
+// set matches what the bubble chart shows (session-aware filterTopN).
+// Symbols are accumulated across refresh cycles: once a stock appears on the
+// dashboard it stays in the refresh set for the rest of the day.
 func (s *DashboardServer) refreshNewsCache() {
 	if s.mdClient == nil {
 		return
@@ -185,48 +193,55 @@ func (s *DashboardServer) refreshNewsCache() {
 	now := time.Now().In(s.loc)
 	date := now.Format("2006-01-02")
 
-	// Get today's trades and pick top symbols per tier.
 	_, todayExIdx := s.model.TodaySnapshot()
 	if len(todayExIdx) == 0 {
 		s.log.Debug("news refresh: no trades yet")
 		return
 	}
 
-	stats := dashboard.AggregateTrades(todayExIdx)
+	// Compute dashboard the same way as handleDashboard to get exact bubble chart symbols.
+	todayOpen930 := time.Date(now.Year(), now.Month(), now.Day(), 9, 30, 0, 0, s.loc).UnixMilli()
+	_, off := now.Zone()
+	todayOpen930ET := todayOpen930 + int64(off)*1000
+	todayData := dashboard.ComputeDayData("TODAY", todayExIdx, s.tierMap, todayOpen930ET, dashboard.SortPreTrades)
 
-	type symCount struct {
-		sym    string
-		trades int
-	}
-	tierSyms := map[string][]symCount{}
-	for sym, st := range stats {
-		tier, ok := s.tierMap[sym]
-		if !ok {
-			continue
-		}
-		tierSyms[tier] = append(tierSyms[tier], symCount{sym, st.Trades})
-	}
-	for tier := range tierSyms {
-		ss := tierSyms[tier]
-		sort.Slice(ss, func(i, j int) bool { return ss[i].trades > ss[j].trades })
-		tierSyms[tier] = ss
-	}
-
-	// Top 20 per tier.
 	symbolSet := make(map[string]bool)
-	for _, tier := range []string{"ACTIVE", "MODERATE", "SPORADIC"} {
-		ss := tierSyms[tier]
-		limit := 20
-		if len(ss) < limit {
-			limit = len(ss)
-		}
-		for _, sc := range ss[:limit] {
-			symbolSet[sc.sym] = true
+	for _, tier := range todayData.Tiers {
+		for _, cs := range tier.Symbols {
+			symbolSet[cs.Symbol] = true
 		}
 	}
 
-	symbols := make([]string, 0, len(symbolSet))
+	// Include NEXT session symbols.
+	_, nextExIdx := s.model.NextSnapshot()
+	if len(nextExIdx) > 0 {
+		nextOpen930ET := todayOpen930ET + 24*60*60*1000
+		nextData := dashboard.ComputeDayData("NEXT", nextExIdx, s.tierMap, nextOpen930ET, dashboard.SortPreTrades)
+		for _, tier := range nextData.Tiers {
+			for _, cs := range tier.Symbols {
+				symbolSet[cs.Symbol] = true
+			}
+		}
+	}
+
+	// Accumulate "ever seen" symbols for this date.
+	s.newsSeenMu.Lock()
+	if s.newsSeenDate != date {
+		s.newsSeenSymbols = make(map[string]bool)
+		s.newsSeenDate = date
+	}
 	for sym := range symbolSet {
+		s.newsSeenSymbols[sym] = true
+	}
+	// Copy the full accumulated set.
+	allSymbols := make(map[string]bool, len(s.newsSeenSymbols))
+	for sym := range s.newsSeenSymbols {
+		allSymbols[sym] = true
+	}
+	s.newsSeenMu.Unlock()
+
+	symbols := make([]string, 0, len(allSymbols))
+	for sym := range allSymbols {
 		symbols = append(symbols, sym)
 	}
 	sort.Strings(symbols)
