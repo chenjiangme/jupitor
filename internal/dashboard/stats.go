@@ -61,19 +61,11 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 			return records[indices[a]].Timestamp < records[indices[b]].Timestamp
 		})
 
+		// --- Pass 1: basic stats + VWAP ---
 		s := &SymbolStats{
 			Symbol: sym,
 			Low:    math.MaxFloat64,
 		}
-		minPrice := math.MaxFloat64
-		maxPrice := 0.0
-
-		// Track the indices where max gain/loss are realized.
-		gainIdx := -1
-		lossIdx := -1
-		bestGain := 0.0
-		bestLoss := 0.0
-
 		for j, idx := range indices {
 			r := &records[idx]
 			s.Trades++
@@ -89,8 +81,68 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 				s.Open = r.Price
 			}
 			s.Close = r.Price
+		}
 
-			// Max gain: buy at lowest seen so far, sell now (absolute $).
+		if s.TotalSize == 0 {
+			m[sym] = s
+			continue
+		}
+		vwap := s.Turnover / float64(s.TotalSize)
+
+		// --- Outlier detection: trim top/bottom 1% if 3x away from VWAP ---
+		outlier := make([]bool, len(indices))
+		if len(indices) >= 100 {
+			sorted := make([]int, len(indices))
+			copy(sorted, indices)
+			sort.Slice(sorted, func(a, b int) bool {
+				return records[sorted[a]].Price < records[sorted[b]].Price
+			})
+			trimN := len(sorted) / 100 // 1%
+			lowCut := vwap / 3
+			highCut := vwap * 3
+			// Build a set of outlier record indices.
+			outlierIdx := make(map[int]bool)
+			for i := 0; i < trimN; i++ {
+				if records[sorted[i]].Price < lowCut {
+					outlierIdx[sorted[i]] = true
+				}
+			}
+			for i := len(sorted) - trimN; i < len(sorted); i++ {
+				if records[sorted[i]].Price > highCut {
+					outlierIdx[sorted[i]] = true
+				}
+			}
+			// Map back to timestamp-order positions.
+			for j, idx := range indices {
+				if outlierIdx[idx] {
+					outlier[j] = true
+				}
+			}
+		}
+
+		// --- Pass 2: recompute high/low + max gain/loss excluding outliers ---
+		minPrice := math.MaxFloat64
+		maxPrice := 0.0
+		gainIdx := -1
+		lossIdx := -1
+		bestGain := 0.0
+		bestLoss := 0.0
+		hasOutliers := false
+
+		trimmedHigh := 0.0
+		trimmedLow := math.MaxFloat64
+		for j, idx := range indices {
+			if outlier[j] {
+				hasOutliers = true
+				continue
+			}
+			r := &records[idx]
+			if r.Price > trimmedHigh {
+				trimmedHigh = r.Price
+			}
+			if r.Price < trimmedLow {
+				trimmedLow = r.Price
+			}
 			if r.Price < minPrice {
 				minPrice = r.Price
 			}
@@ -98,7 +150,6 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 				bestGain = g
 				gainIdx = j
 			}
-			// Max loss: buy at highest seen so far, sell now (absolute $).
 			if r.Price > maxPrice {
 				maxPrice = r.Price
 			}
@@ -107,9 +158,13 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 				lossIdx = j
 			}
 		}
+		if hasOutliers {
+			s.High = trimmedHigh
+			s.Low = trimmedLow
+		}
 
 		// Compute VWAP between the max-gain and max-loss time points,
-		// then measure gain% and loss% relative to that center price.
+		// then express gain/loss as percentages relative to that center.
 		if gainIdx >= 0 && lossIdx >= 0 && gainIdx != lossIdx {
 			lo, hi := gainIdx, lossIdx
 			if lo > hi {
@@ -118,24 +173,23 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 			var totalValue float64
 			var totalSize int64
 			for j := lo; j <= hi; j++ {
+				if outlier[j] {
+					continue
+				}
 				r := &records[indices[j]]
 				totalValue += r.Price * float64(r.Size)
 				totalSize += r.Size
 			}
 			if totalSize > 0 {
-				vwap := totalValue / float64(totalSize)
-				if vwap > 0 {
-					s.MaxGain = bestGain / vwap
-					s.MaxLoss = bestLoss / vwap
+				windowVwap := totalValue / float64(totalSize)
+				if windowVwap > 0 {
+					s.MaxGain = bestGain / windowVwap
+					s.MaxLoss = bestLoss / windowVwap
 				}
 			}
-		} else if s.Turnover > 0 && s.TotalSize > 0 {
-			// Fallback: use overall VWAP to normalize.
-			vwap := s.Turnover / float64(s.TotalSize)
-			if vwap > 0 {
-				s.MaxGain = bestGain / vwap
-				s.MaxLoss = bestLoss / vwap
-			}
+		} else if vwap > 0 {
+			s.MaxGain = bestGain / vwap
+			s.MaxLoss = bestLoss / vwap
 		}
 
 		m[sym] = s
