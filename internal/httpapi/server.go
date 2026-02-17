@@ -3,10 +3,12 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -536,9 +538,9 @@ func (s *DashboardServer) fetchLiveNews(symbol, date string) ([]NewsArticleJSON,
 
 	articles := make([]NewsArticleJSON, 0, len(news))
 	for _, a := range news {
-		body := a.Summary
+		body := stripHTML(a.Summary)
 		if a.Content != "" {
-			body = a.Content
+			body = stripHTML(a.Content)
 		}
 		articles = append(articles, NewsArticleJSON{
 			Time:     a.CreatedAt.UnixMilli(),
@@ -723,4 +725,13 @@ func (s *DashboardServer) loadSymbolDateStats(symbol, date, prevDate string) *Sy
 
 	s.symbolHistoryCache.Store(cacheKey, entry)
 	return entry
+}
+
+var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
+
+// stripHTML removes HTML tags and normalizes whitespace.
+func stripHTML(s string) string {
+	s = htmlTagRe.ReplaceAllString(s, " ")
+	s = html.UnescapeString(s)
+	return strings.Join(strings.Fields(s), " ")
 }
