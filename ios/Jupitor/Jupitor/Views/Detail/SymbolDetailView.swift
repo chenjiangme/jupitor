@@ -12,7 +12,17 @@ struct SymbolDetailView: View {
     @State private var panOffset: CGFloat = 0
     @State private var isTransitioning = false
 
-    private var combined: CombinedStatsJSON { symbols[currentIndex] }
+    private var currentSymbol: String { symbols[currentIndex].symbol }
+
+    /// For live dates, look up fresh stats from vm (updated every 5s).
+    private var combined: CombinedStatsJSON {
+        if date == vm.date, let today = vm.today {
+            if let fresh = today.tiers.flatMap(\.symbols).first(where: { $0.symbol == currentSymbol }) {
+                return fresh
+            }
+        }
+        return symbols[currentIndex]
+    }
 
     private var news: [NewsArticleJSON] {
         newsArticles.filter { $0.source != "stocktwits" }
