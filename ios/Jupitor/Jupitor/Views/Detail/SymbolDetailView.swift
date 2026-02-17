@@ -32,12 +32,15 @@ struct SymbolDetailView: View {
     }
     private static let et = TimeZone(identifier: "America/New_York")!
 
-    /// StockTwits messages split by ET time of day.
+    /// StockTwits messages for the display date only, split by ET time of day.
     private var stocktwitsBuckets: (overnight: Int, pre: Int, regular: Int, after: Int) {
         var overnight = 0, pre = 0, regular = 0, after = 0
         let cal = Calendar.current
         for a in newsArticles where a.source == "stocktwits" {
             let c = cal.dateComponents(in: Self.et, from: a.date)
+            // Only count messages from the display date.
+            let msgDate = String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+            guard msgDate == date else { continue }
             let minutes = (c.hour ?? 0) * 60 + (c.minute ?? 0)
             if minutes < 240 {         // before 4:00 AM
                 overnight += 1
@@ -140,29 +143,28 @@ struct SymbolDetailView: View {
                         Text("StockTwits")
                             .font(.headline)
                         Spacer()
-                        HStack(spacing: 12) {
+                        HStack(spacing: 8) {
                             if b.overnight > 0 {
                                 Label("\(b.overnight)", systemImage: "moon.fill")
-                                    .font(.caption.monospacedDigit())
                                     .foregroundStyle(.secondary)
                             }
                             if b.pre > 0 {
                                 Label("\(b.pre)", systemImage: "sunrise.fill")
-                                    .font(.caption.monospacedDigit())
                                     .foregroundStyle(.indigo)
                             }
                             if b.regular > 0 {
                                 Label("\(b.regular)", systemImage: "sun.max.fill")
-                                    .font(.caption.monospacedDigit())
                                     .foregroundStyle(.green.opacity(0.7))
                             }
                             if b.after > 0 {
                                 Label("\(b.after)", systemImage: "sunset.fill")
-                                    .font(.caption.monospacedDigit())
                                     .foregroundStyle(.orange.opacity(0.7))
                             }
                         }
+                        .font(.caption2.monospacedDigit())
+                        .fixedSize()
                     }
+                    .lineLimit(1)
                     .padding(.horizontal)
                 }
 
