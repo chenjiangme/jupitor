@@ -194,7 +194,7 @@ type stocktwitsMessage struct {
 
 // FetchStockTwits fetches StockTwits messages for a symbol. If paginate is
 // true, it pages backwards using the cursor until all messages in the
-// [start, end] window are fetched (up to 50 pages). Otherwise it fetches a
+// [start, end] window are fetched (up to 100 pages). Otherwise it fetches a
 // single page (~30 messages). The limiter controls request rate.
 func FetchStockTwits(symbol string, start, end time.Time, paginate bool, limiter *time.Ticker) ([]Article, error) {
 	baseURL := "https://api.stocktwits.com/api/2/streams/symbol/" + url.PathEscape(symbol) + ".json"
@@ -203,7 +203,7 @@ func FetchStockTwits(symbol string, start, end time.Time, paginate bool, limiter
 	seen := make(map[int]bool)
 	maxPages := 1
 	if paginate {
-		maxPages = 50
+		maxPages = 100
 	}
 
 	cursor := 0
