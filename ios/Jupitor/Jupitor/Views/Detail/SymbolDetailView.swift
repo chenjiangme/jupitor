@@ -122,82 +122,70 @@ struct SymbolDetailView: View {
 private struct DetailRingView: View {
     let combined: CombinedStatsJSON
 
-    private let diameter: CGFloat = 160
-    private let ringWidth: CGFloat = 14
-    private let minInnerRatio: CGFloat = 0.15
-
-    private var hasPre: Bool { combined.pre != nil }
-    private var hasReg: Bool { combined.reg != nil }
-    private var dualRing: Bool { hasPre && hasReg }
+    private let maxDiameter: CGFloat = 140
+    private let minDiameter: CGFloat = 50
+    private let ringWidth: CGFloat = 12
 
     private var preTurnover: Double { combined.pre?.turnover ?? 0 }
     private var regTurnover: Double { combined.reg?.turnover ?? 0 }
-    private var total: Double { preTurnover + regTurnover }
-    private var preRatio: CGFloat { total > 0 ? sqrt(CGFloat(preTurnover / total)) : 0 }
 
-    private var outerDia: CGFloat { diameter - ringWidth }
-    private var innerDia: CGFloat {
-        min(outerDia - 3 * ringWidth, outerDia * max(minInnerRatio, preRatio))
-    }
-    private var blackFillDia: CGFloat { innerDia + ringWidth }
-
-    /// Combined stats for close dial.
-    private var dialStats: (close: Double, low: Double, high: Double)? {
-        if let reg = combined.reg, reg.high > reg.low {
-            return (reg.close, min(combined.pre?.low ?? reg.low, reg.low), max(combined.pre?.high ?? reg.high, reg.high))
-        }
-        if let pre = combined.pre, pre.high > pre.low {
-            return (pre.close, pre.low, pre.high)
-        }
-        return nil
+    /// Diameter scaled by turnover relative to the larger session.
+    private func diameter(for turnover: Double, maxTurnover: Double) -> CGFloat {
+        guard maxTurnover > 0 else { return minDiameter }
+        let ratio = sqrt(CGFloat(turnover / maxTurnover))
+        return max(minDiameter, maxDiameter * ratio)
     }
 
     var body: some View {
-        ZStack {
-            if dualRing {
-                // Outer ring (regular session).
-                SessionRingView(
-                    gain: combined.reg?.maxGain ?? 0,
-                    loss: combined.reg?.maxLoss ?? 0,
-                    hasData: true,
-                    diameter: outerDia,
-                    lineWidth: ringWidth
-                )
+        let maxT = max(preTurnover, regTurnover)
+        let preDia = diameter(for: preTurnover, maxTurnover: maxT)
+        let regDia = diameter(for: regTurnover, maxTurnover: maxT)
 
-                // Black fill for clean separation.
-                Circle()
-                    .fill(Color.black)
-                    .frame(width: blackFillDia, height: blackFillDia)
-
-                // Inner ring (pre-market).
-                SessionRingView(
-                    gain: combined.pre?.maxGain ?? 0,
-                    loss: combined.pre?.maxLoss ?? 0,
-                    hasData: true,
-                    diameter: innerDia,
-                    lineWidth: ringWidth
-                )
-            } else {
-                // Single ring for whichever session exists.
-                SessionRingView(
-                    gain: combined.pre?.maxGain ?? combined.reg?.maxGain ?? 0,
-                    loss: combined.pre?.maxLoss ?? combined.reg?.maxLoss ?? 0,
-                    hasData: hasPre || hasReg,
-                    diameter: outerDia,
-                    lineWidth: ringWidth
+        HStack(spacing: 24) {
+            if let pre = combined.pre {
+                ringWithDial(
+                    label: "PRE",
+                    stats: pre,
+                    dia: preDia
                 )
             }
-
-            // Close dial needle.
-            if let s = dialStats {
-                CloseDialView(
-                    fraction: (s.close - s.low) / (s.high - s.low),
-                    needleRadius: outerDia / 2,
-                    lineWidth: max(1.5, ringWidth * 0.4)
+            if let reg = combined.reg {
+                ringWithDial(
+                    label: "REG",
+                    stats: reg,
+                    dia: regDia
                 )
-                .frame(width: diameter, height: diameter)
             }
         }
-        .frame(width: diameter, height: diameter)
+    }
+
+    @ViewBuilder
+    private func ringWithDial(label: String, stats: SymbolStatsJSON, dia: CGFloat) -> some View {
+        let outerDia = dia - ringWidth
+        VStack(spacing: 6) {
+            ZStack {
+                SessionRingView(
+                    gain: stats.maxGain,
+                    loss: stats.maxLoss,
+                    hasData: true,
+                    diameter: outerDia,
+                    lineWidth: ringWidth
+                )
+
+                if stats.high > stats.low {
+                    CloseDialView(
+                        fraction: (stats.close - stats.low) / (stats.high - stats.low),
+                        needleRadius: outerDia / 2,
+                        lineWidth: max(1.5, ringWidth * 0.4)
+                    )
+                    .frame(width: dia, height: dia)
+                }
+            }
+            .frame(width: dia, height: dia)
+
+            Text(label)
+                .font(.caption2.bold())
+                .foregroundStyle(.secondary)
+        }
     }
 }
