@@ -230,15 +230,15 @@ struct BubbleChartView: View {
         .frame(width: diameter, height: diameter)
         .position(bubble.position)
         .onTapGesture(count: 2) {
-            historySymbol = bubble.id
-            showHistory = true
-        }
-        .onTapGesture(count: 1) {
             Task { await vm.toggleWatchlist(symbol: bubble.id, date: wlDate) }
         }
-        .onLongPressGesture {
+        .onTapGesture(count: 1) {
             detailCombined = bubble.combined
             showDetail = true
+        }
+        .onLongPressGesture {
+            historySymbol = bubble.id
+            showHistory = true
         }
     }
 

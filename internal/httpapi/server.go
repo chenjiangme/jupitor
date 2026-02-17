@@ -1,14 +1,13 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"html"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +20,7 @@ import (
 
 	"jupitor/internal/dashboard"
 	"jupitor/internal/live"
+	"jupitor/internal/news"
 	"jupitor/internal/store"
 )
 
@@ -51,8 +51,13 @@ type DashboardServer struct {
 	watchlistMu  sync.RWMutex
 	watchlistIDs map[string]string // date -> Alpaca watchlist ID
 
-	// Alpaca marketdata client for live news (nil if not configured).
+	// Alpaca marketdata client for news (nil if not configured).
 	mdClient *marketdata.Client
+
+	// Background news cache: "SYMBOL:DATE" -> []NewsArticleJSON
+	newsCache sync.Map
+	// StockTwits rate limiter for background news refresh.
+	stLimiter *time.Ticker
 
 	// Cache for per-symbol per-date history stats. Key: "SYMBOL:DATE".
 	symbolHistoryCache sync.Map
@@ -79,9 +84,177 @@ func NewDashboardServer(
 		alpacaClient: alpacaClient,
 		watchlistIDs: make(map[string]string),
 		mdClient:     mdClient,
+		stLimiter:    time.NewTicker(500 * time.Millisecond),
 	}
 
 	return s
+}
+
+// Start launches background goroutines (news refresh). Call this after creating
+// the server, tied to the daemon's context for graceful shutdown.
+func (s *DashboardServer) Start(ctx context.Context) {
+	go s.startNewsRefresh(ctx)
+}
+
+// startNewsRefresh periodically fetches news from all sources for today's top
+// symbols and caches the results. Runs every 5 minutes.
+func (s *DashboardServer) startNewsRefresh(ctx context.Context) {
+	// Run immediately on startup, then every 5 minutes.
+	s.refreshNewsCache()
+
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	defer s.stLimiter.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.refreshNewsCache()
+		}
+	}
+}
+
+// refreshNewsCache fetches news for today's top symbols from all 4 sources.
+func (s *DashboardServer) refreshNewsCache() {
+	if s.mdClient == nil {
+		return
+	}
+
+	now := time.Now().In(s.loc)
+	date := now.Format("2006-01-02")
+
+	// Get today's trades and pick top symbols per tier.
+	_, todayExIdx := s.model.TodaySnapshot()
+	if len(todayExIdx) == 0 {
+		s.log.Debug("news refresh: no trades yet")
+		return
+	}
+
+	stats := dashboard.AggregateTrades(todayExIdx)
+
+	type symCount struct {
+		sym    string
+		trades int
+	}
+	tierSyms := map[string][]symCount{}
+	for sym, st := range stats {
+		tier, ok := s.tierMap[sym]
+		if !ok {
+			continue
+		}
+		tierSyms[tier] = append(tierSyms[tier], symCount{sym, st.Trades})
+	}
+	for tier := range tierSyms {
+		ss := tierSyms[tier]
+		sort.Slice(ss, func(i, j int) bool { return ss[i].trades > ss[j].trades })
+		tierSyms[tier] = ss
+	}
+
+	// Top 20 per tier.
+	symbolSet := make(map[string]bool)
+	for _, tier := range []string{"ACTIVE", "MODERATE", "SPORADIC"} {
+		ss := tierSyms[tier]
+		limit := 20
+		if len(ss) < limit {
+			limit = len(ss)
+		}
+		for _, sc := range ss[:limit] {
+			symbolSet[sc.sym] = true
+		}
+	}
+
+	symbols := make([]string, 0, len(symbolSet))
+	for sym := range symbolSet {
+		symbols = append(symbols, sym)
+	}
+	sort.Strings(symbols)
+
+	if len(symbols) == 0 {
+		return
+	}
+
+	// Time window: today 4AM ET → 8PM ET.
+	t, _ := time.ParseInLocation("2006-01-02", date, s.loc)
+	start := time.Date(t.Year(), t.Month(), t.Day(), 4, 0, 0, 0, s.loc)
+	end := time.Date(t.Year(), t.Month(), t.Day(), 20, 0, 0, 0, s.loc)
+
+	s.log.Info("news refresh starting", "date", date, "symbols", len(symbols))
+
+	// Fetch concurrently (4 workers).
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+
+	for _, sym := range symbols {
+		wg.Add(1)
+		go func(sym string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			var articles []NewsArticleJSON
+
+			// Alpaca news.
+			if aa, err := news.FetchAlpacaNews(s.mdClient, sym, start, end); err == nil {
+				for _, a := range aa {
+					articles = append(articles, NewsArticleJSON{
+						Time:     a.Time.UnixMilli(),
+						Source:   a.Source,
+						Headline: a.Headline,
+						Content:  a.Content,
+					})
+				}
+			}
+
+			// Google News RSS.
+			if aa, err := news.FetchGoogleNews(sym, start, end); err == nil {
+				for _, a := range aa {
+					articles = append(articles, NewsArticleJSON{
+						Time:     a.Time.UnixMilli(),
+						Source:   a.Source,
+						Headline: a.Headline,
+						Content:  a.Content,
+					})
+				}
+			}
+
+			// GlobeNewswire RSS.
+			if aa, err := news.FetchGlobeNewswire(sym, start, end); err == nil {
+				for _, a := range aa {
+					articles = append(articles, NewsArticleJSON{
+						Time:     a.Time.UnixMilli(),
+						Source:   a.Source,
+						Headline: a.Headline,
+						Content:  a.Content,
+					})
+				}
+			}
+
+			// StockTwits (single page, no deep pagination for live).
+			if aa, err := news.FetchStockTwits(sym, start, end, false, s.stLimiter); err == nil {
+				for _, a := range aa {
+					articles = append(articles, NewsArticleJSON{
+						Time:     a.Time.UnixMilli(),
+						Source:   a.Source,
+						Headline: a.Headline,
+						Content:  a.Content,
+					})
+				}
+			}
+
+			// Sort by time.
+			sort.Slice(articles, func(i, j int) bool {
+				return articles[i].Time < articles[j].Time
+			})
+
+			key := sym + ":" + date
+			s.newsCache.Store(key, articles)
+		}(sym)
+	}
+	wg.Wait()
+
+	s.log.Info("news refresh complete", "date", date, "symbols", len(symbols))
 }
 
 // resolveWatchlistID returns the Alpaca watchlist ID for the given date,
@@ -473,18 +646,20 @@ func (s *DashboardServer) handleNews(w http.ResponseWriter, r *http.Request) {
 	today := now.Format("2006-01-02")
 	tomorrow := now.AddDate(0, 0, 1).Format("2006-01-02")
 
-	// Use live Alpaca API for today and tomorrow (next trading day).
-	if s.mdClient != nil && (date == today || date == tomorrow) {
-		articles, err := s.fetchLiveNews(symbol, date)
-		if err != nil {
-			s.log.Warn("live news fetch failed, falling back to parquet", "symbol", symbol, "date", date, "error", err)
-		} else {
+	// For today/tomorrow, serve from background news cache.
+	if date == today || date == tomorrow {
+		key := symbol + ":" + date
+		if v, ok := s.newsCache.Load(key); ok {
+			articles := v.([]NewsArticleJSON)
 			writeJSON(w, NewsResponse{Symbol: symbol, Date: date, Articles: articles})
 			return
 		}
+		// Not in cache — return empty (background refresh will populate it).
+		writeJSON(w, NewsResponse{Symbol: symbol, Date: date, Articles: []NewsArticleJSON{}})
+		return
 	}
 
-	// Fall back to parquet file for historical dates (or if live fetch failed).
+	// Fall back to parquet file for historical dates.
 	path := filepath.Join(s.dataDir, "us", "news", date+".parquet")
 	records, err := parquet.ReadFile[NewsRecord](path)
 	if err != nil {
@@ -512,44 +687,6 @@ func (s *DashboardServer) handleNews(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, NewsResponse{Symbol: symbol, Date: date, Articles: articles})
-}
-
-// fetchLiveNews fetches news from the Alpaca marketdata API for a symbol on a given date.
-func (s *DashboardServer) fetchLiveNews(symbol, date string) ([]NewsArticleJSON, error) {
-	t, err := time.ParseInLocation("2006-01-02", date, s.loc)
-	if err != nil {
-		return nil, fmt.Errorf("parsing date: %w", err)
-	}
-	start := time.Date(t.Year(), t.Month(), t.Day(), 4, 0, 0, 0, s.loc)
-	end := time.Date(t.Year(), t.Month(), t.Day(), 20, 0, 0, 0, s.loc)
-
-	news, err := s.mdClient.GetNews(marketdata.GetNewsRequest{
-		Symbols:            []string{symbol},
-		Start:              start,
-		End:                end,
-		TotalLimit:         50,
-		IncludeContent:     true,
-		ExcludeContentless: true,
-		Sort:               marketdata.SortAsc,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("alpaca news API: %w", err)
-	}
-
-	articles := make([]NewsArticleJSON, 0, len(news))
-	for _, a := range news {
-		body := stripHTML(a.Summary)
-		if a.Content != "" {
-			body = stripHTML(a.Content)
-		}
-		articles = append(articles, NewsArticleJSON{
-			Time:     a.CreatedAt.UnixMilli(),
-			Source:   "alpaca",
-			Headline: a.Headline,
-			Content:  body,
-		})
-	}
-	return articles, nil
 }
 
 func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Request) {
@@ -725,13 +862,4 @@ func (s *DashboardServer) loadSymbolDateStats(symbol, date, prevDate string) *Sy
 
 	s.symbolHistoryCache.Store(cacheKey, entry)
 	return entry
-}
-
-var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
-
-// stripHTML removes HTML tags and normalizes whitespace.
-func stripHTML(s string) string {
-	s = htmlTagRe.ReplaceAllString(s, " ")
-	s = html.UnescapeString(s)
-	return strings.Join(strings.Fields(s), " ")
 }

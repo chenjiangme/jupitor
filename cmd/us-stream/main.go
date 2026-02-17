@@ -108,6 +108,7 @@ func main() {
 	// Start HTTP API server.
 	httpAddr := ":8080"
 	dashSrv := httpapi.NewDashboardServer(model, cfg.Storage.DataDir, loc, logger, tierMap, histDates, alpacaClient, mdClient)
+	dashSrv.Start(ctx)
 	httpServer := &http.Server{
 		Addr:    httpAddr,
 		Handler: dashSrv.Handler(),

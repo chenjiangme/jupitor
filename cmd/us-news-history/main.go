@@ -16,21 +16,13 @@
 package main
 
 import (
-	"encoding/json"
-	"encoding/xml"
 	"flag"
 	"fmt"
-	"html"
-	"io"
 	"log"
 	"log/slog"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +32,7 @@ import (
 
 	"jupitor/internal/config"
 	"jupitor/internal/dashboard"
+	"jupitor/internal/news"
 )
 
 // NewsRecord is one article row in the output parquet file.
@@ -271,62 +264,47 @@ func processDate(dataDir, date, prevDate string, loc *time.Location, mdc *market
 			defer func() { <-sem }()
 
 			// Alpaca news.
-			alpacaNews, err := mdc.GetNews(marketdata.GetNewsRequest{
-				Symbols:            []string{sym},
-				Start:              start,
-				End:                end,
-				TotalLimit:         50,
-				IncludeContent:     true,
-				ExcludeContentless: true,
-				Sort:               marketdata.SortAsc,
-			})
-			if err != nil {
-				slog.Debug("alpaca news error", "symbol", sym, "error", err)
-			} else {
-				for _, a := range alpacaNews {
-					body := ""
-					if a.Content != "" {
-						body = extractSymbolContent(a.Content, sym)
-					} else if a.Summary != "" {
-						body = a.Summary
-					}
-					mu.Lock()
-					records = append(records, NewsRecord{
-						Symbol:   sym,
-						Source:   "alpaca",
-						Time:     a.CreatedAt.UnixMilli(),
-						Headline: a.Headline,
-						Content:  body,
-					})
-					mu.Unlock()
-				}
-			}
-
-			// Google News RSS.
-			if articles, err := fetchGoogleNews(sym, start, end); err == nil {
+			if articles, err := news.FetchAlpacaNews(mdc, sym, start, end); err == nil {
 				mu.Lock()
 				for _, a := range articles {
 					records = append(records, NewsRecord{
 						Symbol:   sym,
-						Source:   "google",
-						Time:     a.time.UnixMilli(),
-						Headline: a.headline,
-						Content:  a.content,
+						Source:   a.Source,
+						Time:     a.Time.UnixMilli(),
+						Headline: a.Headline,
+						Content:  a.Content,
+					})
+				}
+				mu.Unlock()
+			} else {
+				slog.Debug("alpaca news error", "symbol", sym, "error", err)
+			}
+
+			// Google News RSS.
+			if articles, err := news.FetchGoogleNews(sym, start, end); err == nil {
+				mu.Lock()
+				for _, a := range articles {
+					records = append(records, NewsRecord{
+						Symbol:   sym,
+						Source:   a.Source,
+						Time:     a.Time.UnixMilli(),
+						Headline: a.Headline,
+						Content:  a.Content,
 					})
 				}
 				mu.Unlock()
 			}
 
 			// GlobeNewswire RSS.
-			if articles, err := fetchGlobeNewswire(sym, start, end); err == nil {
+			if articles, err := news.FetchGlobeNewswire(sym, start, end); err == nil {
 				mu.Lock()
 				for _, a := range articles {
 					records = append(records, NewsRecord{
 						Symbol:   sym,
-						Source:   "globenewswire",
-						Time:     a.time.UnixMilli(),
-						Headline: a.headline,
-						Content:  a.content,
+						Source:   a.Source,
+						Time:     a.Time.UnixMilli(),
+						Headline: a.Headline,
+						Content:  a.Content,
 					})
 				}
 				mu.Unlock()
@@ -334,15 +312,15 @@ func processDate(dataDir, date, prevDate string, loc *time.Location, mdc *market
 
 			// StockTwits: paginate for deep symbols, single page for others.
 			paginate := deepSet[sym]
-			if posts, err := fetchStockTwits(sym, start, end, paginate, stLimiter); err == nil {
+			if articles, err := news.FetchStockTwits(sym, start, end, paginate, stLimiter); err == nil {
 				mu.Lock()
-				for _, p := range posts {
+				for _, a := range articles {
 					records = append(records, NewsRecord{
 						Symbol:   sym,
-						Source:   "stocktwits",
-						Time:     p.time.UnixMilli(),
-						Headline: p.headline,
-						Content:  p.content,
+						Source:   a.Source,
+						Time:     a.Time.UnixMilli(),
+						Headline: a.Headline,
+						Content:  a.Content,
 					})
 				}
 				mu.Unlock()
@@ -360,253 +338,4 @@ func processDate(dataDir, date, prevDate string, loc *time.Location, mdc *market
 	})
 
 	return records, nil
-}
-
-// --- generic article type for RSS sources ---
-
-type article struct {
-	time     time.Time
-	headline string
-	content  string
-}
-
-// --- Google News RSS ---
-
-type rssResponse struct {
-	Channel struct {
-		Items []rssItem `xml:"item"`
-	} `xml:"channel"`
-}
-
-type rssItem struct {
-	Title   string `xml:"title"`
-	PubDate string `xml:"pubDate"`
-	Desc    string `xml:"description"`
-}
-
-var httpClient = &http.Client{Timeout: 10 * time.Second}
-
-func fetchGoogleNews(symbol string, start, end time.Time) ([]article, error) {
-	q := url.QueryEscape(symbol + " stock")
-	u := "https://news.google.com/rss/search?q=" + q + "&hl=en-US&gl=US&ceid=US:en"
-
-	req, err := http.NewRequest("GET", u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var rss rssResponse
-	if err := xml.NewDecoder(resp.Body).Decode(&rss); err != nil {
-		return nil, err
-	}
-
-	var articles []article
-	for _, item := range rss.Channel.Items {
-		t, err := time.Parse(time.RFC1123Z, item.PubDate)
-		if err != nil {
-			t, err = time.Parse(time.RFC1123, item.PubDate)
-			if err != nil {
-				continue
-			}
-		}
-		if t.Before(start) || t.After(end) {
-			continue
-		}
-		headline := item.Title
-		if idx := strings.LastIndex(headline, " - "); idx > 0 {
-			headline = headline[:idx]
-		}
-		articles = append(articles, article{
-			time:     t,
-			headline: headline,
-			content:  stripHTML(item.Desc),
-		})
-	}
-	return articles, nil
-}
-
-// --- GlobeNewswire RSS ---
-
-func fetchGlobeNewswire(symbol string, start, end time.Time) ([]article, error) {
-	u := "https://www.globenewswire.com/RssFeed/keyword/" + url.PathEscape(symbol) + "/feedTitle/GlobeNewswire.xml"
-
-	req, err := http.NewRequest("GET", u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var rss rssResponse
-	if err := xml.NewDecoder(resp.Body).Decode(&rss); err != nil {
-		return nil, err
-	}
-
-	var articles []article
-	for _, item := range rss.Channel.Items {
-		t, err := time.Parse("Mon, 02 Jan 2006 15:04 MST", item.PubDate)
-		if err != nil {
-			t, err = time.Parse(time.RFC1123Z, item.PubDate)
-			if err != nil {
-				t, err = time.Parse(time.RFC1123, item.PubDate)
-				if err != nil {
-					continue
-				}
-			}
-		}
-		if t.Before(start) || t.After(end) {
-			continue
-		}
-		articles = append(articles, article{
-			time:     t,
-			headline: item.Title,
-			content:  stripHTML(item.Desc),
-		})
-	}
-	return articles, nil
-}
-
-// --- StockTwits ---
-
-type stocktwitsResponse struct {
-	Response struct {
-		Status int `json:"status"`
-	} `json:"response"`
-	Messages []stocktwitsMessage `json:"messages"`
-}
-
-type stocktwitsMessage struct {
-	ID        int    `json:"id"`
-	Body      string `json:"body"`
-	CreatedAt string `json:"created_at"`
-	User      struct {
-		Username string `json:"username"`
-	} `json:"user"`
-}
-
-// fetchStockTwits fetches StockTwits messages for a symbol. If paginate is
-// true, it pages backwards using the cursor until all messages in the
-// [start, end] window are fetched (up to 50 pages). Otherwise it fetches a
-// single page (~30 messages). The limiter controls request rate.
-func fetchStockTwits(symbol string, start, end time.Time, paginate bool, limiter *time.Ticker) ([]article, error) {
-	baseURL := "https://api.stocktwits.com/api/2/streams/symbol/" + url.PathEscape(symbol) + ".json"
-
-	var all []article
-	maxPages := 1
-	if paginate {
-		maxPages = 50 // safety cap
-	}
-
-	cursor := 0
-	for page := 0; page < maxPages; page++ {
-		// Rate limit.
-		<-limiter.C
-
-		u := baseURL
-		if cursor > 0 {
-			u += fmt.Sprintf("?max=%d", cursor)
-		}
-
-		req, err := http.NewRequest("GET", u, nil)
-		if err != nil {
-			return all, err
-		}
-		req.Header.Set("User-Agent", "Mozilla/5.0")
-
-		resp, err := httpClient.Do(req)
-		if err != nil {
-			return all, err
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return all, err
-		}
-
-		var st stocktwitsResponse
-		if err := json.Unmarshal(body, &st); err != nil {
-			return all, err
-		}
-		if st.Response.Status != 200 {
-			return all, fmt.Errorf("stocktwits status %d", st.Response.Status)
-		}
-		if len(st.Messages) == 0 {
-			break
-		}
-
-		oldestInWindow := false
-		for _, msg := range st.Messages {
-			t, err := time.Parse("2006-01-02T15:04:05Z", msg.CreatedAt)
-			if err != nil {
-				continue
-			}
-			if t.Before(start) {
-				oldestInWindow = true
-				continue
-			}
-			if t.After(end) {
-				continue
-			}
-			text := html.UnescapeString(msg.Body)
-			all = append(all, article{
-				time:     t,
-				headline: "@" + msg.User.Username,
-				content:  text,
-			})
-		}
-
-		// Stop if we've gone past the start of the window.
-		if oldestInWindow {
-			break
-		}
-
-		// Set cursor to oldest message ID for next page.
-		cursor = st.Messages[len(st.Messages)-1].ID
-	}
-
-	return all, nil
-}
-
-// --- HTML helpers ---
-
-var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
-var htmlParaRe = regexp.MustCompile(`(?i)</?(p|br|div|li|h[1-6])\b[^>]*>`)
-
-func stripHTML(s string) string {
-	s = htmlTagRe.ReplaceAllString(s, " ")
-	s = html.UnescapeString(s)
-	fields := strings.Fields(s)
-	return strings.Join(fields, " ")
-}
-
-func extractSymbolContent(rawHTML, symbol string) string {
-	chunks := htmlParaRe.Split(rawHTML, -1)
-	var matched []string
-	upper := strings.ToUpper(symbol)
-	for _, chunk := range chunks {
-		plain := stripHTML(chunk)
-		if plain == "" {
-			continue
-		}
-		if strings.Contains(strings.ToUpper(plain), upper) {
-			matched = append(matched, plain)
-		}
-	}
-	if len(matched) > 0 {
-		return strings.Join(matched, " ")
-	}
-	return stripHTML(rawHTML)
 }
