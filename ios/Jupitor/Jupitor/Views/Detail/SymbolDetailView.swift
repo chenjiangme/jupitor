@@ -23,8 +23,9 @@ struct SymbolDetailView: View {
     private var currentSymbol: String { symbols[currentIndex].symbol }
 
     /// For live dates, look up fresh stats from vm (updated every 5s).
+    /// In NEXT mode, skip the fresh lookup so we use the NEXT session data as passed.
     private var combined: CombinedStatsJSON {
-        if date == vm.date, let today = vm.today {
+        if !isNextMode, date == vm.date, let today = vm.today {
             if let fresh = today.tiers.flatMap(\.symbols).first(where: { $0.symbol == currentSymbol }) {
                 return fresh
             }
