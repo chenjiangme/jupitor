@@ -200,6 +200,7 @@ func FetchStockTwits(symbol string, start, end time.Time, paginate bool, limiter
 	baseURL := "https://api.stocktwits.com/api/2/streams/symbol/" + url.PathEscape(symbol) + ".json"
 
 	var all []Article
+	seen := make(map[int]bool)
 	maxPages := 1
 	if paginate {
 		maxPages = 50
@@ -244,6 +245,10 @@ func FetchStockTwits(symbol string, start, end time.Time, paginate bool, limiter
 
 		oldestInWindow := false
 		for _, msg := range st.Messages {
+			if seen[msg.ID] {
+				continue
+			}
+			seen[msg.ID] = true
 			t, err := time.Parse("2006-01-02T15:04:05Z", msg.CreatedAt)
 			if err != nil {
 				continue
