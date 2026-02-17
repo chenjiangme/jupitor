@@ -410,6 +410,11 @@ private struct TargetRingView: View {
         .onChange(of: targetKey) { _, newKey in
             target = vm.targetCache[date]?[newKey]
         }
+        .onChange(of: vm.targetCache[date]?[targetKey]) { _, newValue in
+            if !isDragging {
+                target = newValue
+            }
+        }
         .onChange(of: resetToken) { _, _ in
             target = nil
         }

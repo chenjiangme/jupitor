@@ -109,6 +109,11 @@ final class DashboardViewModel {
         } catch {
             self.error = error.localizedDescription
         }
+
+        // Refresh targets for the current date (enables cross-device sync).
+        if !watchlistDate.isEmpty {
+            await loadTargets(for: watchlistDate)
+        }
     }
 
     private func loadDates() async {
