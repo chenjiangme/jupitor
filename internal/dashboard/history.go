@@ -60,6 +60,28 @@ func LoadHistoryTrades(dataDir, date string) ([]store.TradeRecord, error) {
 	return records, nil
 }
 
+// LoadPerSymbolTrades reads trades from per-symbol trade files for a given date,
+// filtered to the timestamp window (minTS, maxTS]. Only symbols in the provided
+// list are loaded to avoid scanning thousands of files.
+func LoadPerSymbolTrades(dataDir, date string, minTS, maxTS int64, symbols []string) []store.TradeRecord {
+	tradesDir := filepath.Join(dataDir, "us", "trades")
+	var all []store.TradeRecord
+	for _, sym := range symbols {
+		path := filepath.Join(tradesDir, sym, date+".parquet")
+		records, err := parquet.ReadFile[store.TradeRecord](path)
+		if err != nil {
+			continue
+		}
+		for i := range records {
+			r := &records[i]
+			if r.Timestamp > minTS && r.Timestamp <= maxTS {
+				all = append(all, *r)
+			}
+		}
+	}
+	return all
+}
+
 // LoadTierMapForDate reads the trade-universe CSV for a specific date.
 func LoadTierMapForDate(dataDir, date string) (map[string]string, error) {
 	path := filepath.Join(dataDir, "us", "trade-universe", date+".csv")

@@ -400,6 +400,12 @@ func open930ET(date string, loc *time.Location) int64 {
 	return open930.UnixMilli() + int64(off)*1000
 }
 
+// postMarketStartET returns 4PM ET on the given date as ET-shifted milliseconds.
+func postMarketStartET(date string) int64 {
+	t, _ := time.Parse("2006-01-02", date)
+	return time.Date(t.Year(), t.Month(), t.Day(), 16, 0, 0, 0, time.UTC).UnixMilli()
+}
+
 // postMarketEndET returns 8PM ET on the given date as ET-shifted milliseconds.
 func postMarketEndET(date string) int64 {
 	t, _ := time.Parse("2006-01-02", date)
@@ -522,25 +528,22 @@ func (s *DashboardServer) handleHistory(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	} else if len(s.historyDates) > 0 && date == s.historyDates[len(s.historyDates)-1] {
-		// Latest date: use live model for next-day data.
-		_, liveTrades := s.model.TodaySnapshot()
-		if len(liveTrades) > 0 {
-			postEnd := postMarketEndET(date)
-			var filtered []store.TradeRecord
-			for i := range liveTrades {
-				if liveTrades[i].Timestamp <= postEnd {
-					filtered = append(filtered, liveTrades[i])
-				}
-			}
-			if len(filtered) > 0 {
-				now := time.Now().In(s.loc)
-				nextDateLabel := now.Format("2006-01-02")
-				nextOpen930 := open930ET(nextDateLabel, s.loc)
-				nextData := dashboard.ComputeDayData("NEXT: "+nextDateLabel, filtered, tierMap, nextOpen930, sortMode)
-				nd := convertDayData(nextData, newsCounts)
-				nd.Date = nextDateLabel
-				resp.Next = &nd
-			}
+		// Latest date: read per-symbol trade files for post-market window.
+		postStart := postMarketStartET(date)
+		postEnd := postMarketEndET(date)
+		symbols := make([]string, 0, len(tierMap))
+		for sym := range tierMap {
+			symbols = append(symbols, sym)
+		}
+		filtered := dashboard.LoadPerSymbolTrades(s.dataDir, date, postStart, postEnd, symbols)
+		if len(filtered) > 0 {
+			now := time.Now().In(s.loc)
+			nextDateLabel := now.Format("2006-01-02")
+			nextOpen930 := open930ET(nextDateLabel, s.loc)
+			nextData := dashboard.ComputeDayData("NEXT: "+nextDateLabel, filtered, tierMap, nextOpen930, sortMode)
+			nd := convertDayData(nextData, newsCounts)
+			nd.Date = nextDateLabel
+			resp.Next = &nd
 		}
 	}
 
