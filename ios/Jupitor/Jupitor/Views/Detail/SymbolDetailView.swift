@@ -116,7 +116,7 @@ struct SymbolDetailView: View {
                 .padding(.horizontal)
 
                 // Ring visualization.
-                DetailRingView(combined: combined)
+                DetailRingView(combined: combined, date: date)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
 
@@ -240,6 +240,7 @@ struct SymbolDetailView: View {
 
 private struct DetailRingView: View {
     let combined: CombinedStatsJSON
+    let date: String
 
     private let maxDiameter: CGFloat = 140
     private let minDiameter: CGFloat = 50
@@ -248,7 +249,6 @@ private struct DetailRingView: View {
     private var preTurnover: Double { combined.pre?.turnover ?? 0 }
     private var regTurnover: Double { combined.reg?.turnover ?? 0 }
 
-    /// Diameter scaled by turnover relative to the larger session.
     private func diameter(for turnover: Double, maxTurnover: Double) -> CGFloat {
         guard maxTurnover > 0 else { return minDiameter }
         let ratio = sqrt(CGFloat(turnover / maxTurnover))
@@ -262,25 +262,45 @@ private struct DetailRingView: View {
 
         HStack(spacing: 24) {
             if let pre = combined.pre {
-                ringWithDial(
+                TargetRingView(
                     label: "PRE",
                     stats: pre,
-                    dia: preDia
+                    dia: preDia,
+                    ringWidth: ringWidth,
+                    targetKey: "\(combined.symbol):\(date):PRE"
                 )
             }
             if let reg = combined.reg {
-                ringWithDial(
+                TargetRingView(
                     label: "REG",
                     stats: reg,
-                    dia: regDia
+                    dia: regDia,
+                    ringWidth: ringWidth,
+                    targetKey: "\(combined.symbol):\(date):REG"
                 )
             }
         }
     }
+}
 
-    @ViewBuilder
-    private func ringWithDial(label: String, stats: SymbolStatsJSON, dia: CGFloat) -> some View {
-        let outerDia = dia - ringWidth
+// MARK: - Target Ring (interactive gain target)
+
+private struct TargetRingView: View {
+    let label: String
+    let stats: SymbolStatsJSON
+    let dia: CGFloat
+    let ringWidth: CGFloat
+    let targetKey: String
+
+    @State private var target: Double? = nil
+    @State private var prevAngle: Double = 0
+    @State private var isDragging = false
+
+    private var outerDia: CGFloat { dia - ringWidth }
+    // Extra padding for the arrow to sit outside the ring.
+    private var viewSize: CGFloat { dia + 20 }
+
+    var body: some View {
         VStack(spacing: 6) {
             ZStack {
                 SessionRingView(
@@ -299,12 +319,153 @@ private struct DetailRingView: View {
                     )
                     .frame(width: dia, height: dia)
                 }
-            }
-            .frame(width: dia, height: dia)
 
-            Text(label)
-                .font(.caption2.bold())
-                .foregroundStyle(.secondary)
+                // Target arrow overlay.
+                if let t = target, t > 0 {
+                    TargetArrowCanvas(
+                        gain: t,
+                        ringRadius: outerDia / 2,
+                        lineWidth: ringWidth
+                    )
+                }
+            }
+            .frame(width: viewSize, height: viewSize)
+            .contentShape(Circle())
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 5)
+                    .onChanged { value in
+                        let center = CGPoint(x: viewSize / 2, y: viewSize / 2)
+                        let dx = value.location.x - center.x
+                        let dy = value.location.y - center.y
+                        // Angle from 12 o'clock, clockwise (0 to 2π).
+                        var angle = atan2(Double(dx), -Double(dy))
+                        if angle < 0 { angle += 2 * .pi }
+
+                        if !isDragging {
+                            isDragging = true
+                            prevAngle = angle
+                            if target == nil {
+                                // First touch: place arrow at finger angle.
+                                target = angle / (2 * .pi)
+                            }
+                            return
+                        }
+
+                        var delta = angle - prevAngle
+                        // Handle wrap-around at 12 o'clock.
+                        if delta > .pi { delta -= 2 * .pi }
+                        if delta < -.pi { delta += 2 * .pi }
+
+                        let current = target ?? 0
+                        target = max(0, min(5.0, current + delta / (2 * .pi)))
+                        prevAngle = angle
+                    }
+                    .onEnded { _ in
+                        isDragging = false
+                        // Clear if dragged below 2%.
+                        if let t = target, t < 0.02 {
+                            target = nil
+                            TargetStore.remove(targetKey)
+                        } else if let t = target {
+                            TargetStore.save(targetKey, value: t)
+                        }
+                    }
+            )
+
+            // Label + target %.
+            HStack(spacing: 4) {
+                Text(label)
+                    .font(.caption2.bold())
+                    .foregroundStyle(.secondary)
+                if let t = target, t > 0 {
+                    Text(String(format: "%.0f%%", t * 100))
+                        .font(.caption2.bold())
+                        .foregroundStyle(.yellow)
+                }
+            }
         }
+        .onAppear {
+            target = TargetStore.load(targetKey)
+        }
+    }
+}
+
+// MARK: - Target Arrow Canvas
+
+private struct TargetArrowCanvas: View {
+    let gain: Double    // 0-5 (1.0 = 100%)
+    let ringRadius: CGFloat
+    let lineWidth: CGFloat
+
+    var body: some View {
+        Canvas { context, size in
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            // Angle: 12 o'clock = -π/2, clockwise. Wraps every 100%.
+            let frac = gain.truncatingRemainder(dividingBy: 1.0)
+            let adjustedFrac = gain >= 1.0 && frac == 0 ? 1.0 : frac
+            let rad = -Double.pi / 2 + 2 * Double.pi * adjustedFrac
+
+            let arrowR = ringRadius + lineWidth / 2 + 6
+            let tipR = ringRadius + lineWidth / 2 - 2
+            let spread: Double = 0.12
+
+            let tip = CGPoint(
+                x: center.x + cos(rad) * tipR,
+                y: center.y + sin(rad) * tipR
+            )
+            let base1 = CGPoint(
+                x: center.x + cos(rad - spread) * arrowR,
+                y: center.y + sin(rad - spread) * arrowR
+            )
+            let base2 = CGPoint(
+                x: center.x + cos(rad + spread) * arrowR,
+                y: center.y + sin(rad + spread) * arrowR
+            )
+
+            var triangle = Path()
+            triangle.move(to: tip)
+            triangle.addLine(to: base1)
+            triangle.addLine(to: base2)
+            triangle.closeSubpath()
+            context.fill(triangle, with: .color(.yellow.opacity(0.9)))
+
+            // Band dots for >100% (show filled dots outside ring).
+            let bands = Int(gain)
+            if bands > 0 {
+                let dotR = arrowR + 6
+                for i in 0..<min(bands, 4) {
+                    let dotAngle = rad + Double(i - bands / 2) * 0.2
+                    let pos = CGPoint(
+                        x: center.x + cos(dotAngle) * dotR,
+                        y: center.y + sin(dotAngle) * dotR
+                    )
+                    context.fill(Circle().path(in: CGRect(x: pos.x - 2, y: pos.y - 2, width: 4, height: 4)),
+                                 with: .color(.yellow.opacity(0.6)))
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Target Persistence
+
+private enum TargetStore {
+    private static let key = "targetGains"
+
+    static func load(_ id: String) -> Double? {
+        let dict = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
+        return dict[id]
+    }
+
+    static func save(_ id: String, value: Double) {
+        var dict = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
+        dict[id] = value
+        UserDefaults.standard.set(dict, forKey: key)
+    }
+
+    static func remove(_ id: String) {
+        var dict = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
+        dict.removeValue(forKey: id)
+        UserDefaults.standard.set(dict, forKey: key)
     }
 }
