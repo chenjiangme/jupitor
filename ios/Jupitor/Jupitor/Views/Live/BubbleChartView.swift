@@ -40,10 +40,13 @@ struct BubbleChartView: View {
     }
 
     private var sortedByTurnover: [CombinedStatsJSON] {
-        symbolData.map(\.combined).sorted {
-            ($0.pre?.turnover ?? 0) + ($0.reg?.turnover ?? 0) >
-            ($1.pre?.turnover ?? 0) + ($1.reg?.turnover ?? 0)
+        symbolData.map(\.combined).sorted { a, b in
+            totalTurnover(a) > totalTurnover(b)
         }
+    }
+
+    private func totalTurnover(_ s: CombinedStatsJSON) -> Double {
+        (s.pre?.turnover ?? 0) + (s.reg?.turnover ?? 0)
     }
 
     var body: some View {
