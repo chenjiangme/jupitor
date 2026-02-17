@@ -6,6 +6,10 @@ struct SymbolDetailView: View {
     let symbols: [CombinedStatsJSON]
     let initialSymbol: String
     let date: String
+    var newsDate: String = ""
+
+    /// The date used to fetch news. Falls back to `date` if not set.
+    private var effectiveNewsDate: String { newsDate.isEmpty ? date : newsDate }
 
     @State private var currentIndex: Int = 0
     @State private var newsArticles: [NewsArticleJSON] = []
@@ -28,28 +32,47 @@ struct SymbolDetailView: View {
     }
 
     private var news: [NewsArticleJSON] {
-        newsArticles.filter { $0.source != "stocktwits" }
+        let isNextMode = !newsDate.isEmpty && newsDate != date
+        let cal = Calendar.current
+        return newsArticles.filter { a in
+            guard a.source != "stocktwits" else { return false }
+            if isNextMode {
+                // NEXT mode: only after-4PM articles.
+                let c = cal.dateComponents(in: Self.et, from: a.date)
+                let minutes = (c.hour ?? 0) * 60 + (c.minute ?? 0)
+                return minutes >= 960
+            }
+            return true
+        }
     }
     private static let et = TimeZone(identifier: "America/New_York")!
 
-    /// StockTwits messages for the display date only, split by ET time of day.
+    /// StockTwits messages split by ET time of day.
+    /// In NEXT mode (newsDate != date), counts only after-4PM messages from newsDate.
+    /// Otherwise counts only messages from the display date.
     private var stocktwitsBuckets: (overnight: Int, pre: Int, regular: Int, after: Int) {
+        let isNextMode = !newsDate.isEmpty && newsDate != date
         var overnight = 0, pre = 0, regular = 0, after = 0
         let cal = Calendar.current
         for a in newsArticles where a.source == "stocktwits" {
             let c = cal.dateComponents(in: Self.et, from: a.date)
-            // Only count messages from the display date.
             let msgDate = String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
-            guard msgDate == date else { continue }
             let minutes = (c.hour ?? 0) * 60 + (c.minute ?? 0)
-            if minutes < 240 {         // before 4:00 AM
-                overnight += 1
-            } else if minutes < 570 {  // 4:00 AM – 9:30 AM
-                pre += 1
-            } else if minutes < 960 {  // 9:30 AM – 4:00 PM
-                regular += 1
-            } else {                   // 4:00 PM+
+            if isNextMode {
+                // NEXT mode: only after-4PM messages from the news date.
+                guard msgDate == newsDate, minutes >= 960 else { continue }
                 after += 1
+            } else {
+                guard msgDate == date else { continue }
+                if minutes < 240 {         // before 4:00 AM
+                    overnight += 1
+                } else if minutes < 570 {  // 4:00 AM – 9:30 AM
+                    pre += 1
+                } else if minutes < 960 {  // 9:30 AM – 4:00 PM
+                    regular += 1
+                } else {                   // 4:00 PM+
+                    after += 1
+                }
             }
         }
         return (overnight, pre, regular, after)
@@ -242,7 +265,7 @@ struct SymbolDetailView: View {
         }
         .task(id: combined.symbol) {
             isLoadingNews = true
-            newsArticles = await vm.fetchNewsArticles(symbol: combined.symbol, date: date)
+            newsArticles = await vm.fetchNewsArticles(symbol: combined.symbol, date: effectiveNewsDate)
             isLoadingNews = false
         }
         .onShake {

@@ -117,7 +117,7 @@ struct BubbleChartView: View {
         }
         .navigationDestination(isPresented: $showDetail) {
             if let combined = detailCombined {
-                SymbolDetailView(symbols: sortedByTurnover, initialSymbol: combined.symbol, date: date)
+                SymbolDetailView(symbols: sortedByTurnover, initialSymbol: combined.symbol, date: date, newsDate: sessionMode == .next ? wlDate : "")
             }
         }
         .navigationDestination(isPresented: $showHistory) {
