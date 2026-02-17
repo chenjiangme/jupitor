@@ -103,9 +103,62 @@ func (s *DashboardServer) Start(ctx context.Context) {
 	go s.startNewsRefresh(ctx)
 }
 
+// newsCacheFile returns the path to the news cache JSON file for a date.
+func newsCacheFile(date string) string {
+	return fmt.Sprintf("/tmp/us-stream-news-%s.json", date)
+}
+
+// loadNewsFromDisk loads the persisted news cache for a date into memory.
+func (s *DashboardServer) loadNewsFromDisk(date string) int {
+	data, err := os.ReadFile(newsCacheFile(date))
+	if err != nil {
+		return 0
+	}
+	var cached map[string][]NewsArticleJSON
+	if err := json.Unmarshal(data, &cached); err != nil {
+		s.log.Warn("loading news cache", "error", err)
+		return 0
+	}
+	count := 0
+	for sym, articles := range cached {
+		key := sym + ":" + date
+		s.newsCache.Store(key, articles)
+		count += len(articles)
+	}
+	return count
+}
+
+// saveNewsToDisk persists the in-memory news cache for a date to disk.
+func (s *DashboardServer) saveNewsToDisk(date string) {
+	cached := make(map[string][]NewsArticleJSON)
+	s.newsCache.Range(func(k, v any) bool {
+		key := k.(string)
+		// Keys are "SYMBOL:DATE" — only save entries for this date.
+		if idx := strings.LastIndex(key, ":"); idx > 0 && key[idx+1:] == date {
+			sym := key[:idx]
+			cached[sym] = v.([]NewsArticleJSON)
+		}
+		return true
+	})
+	data, err := json.Marshal(cached)
+	if err != nil {
+		s.log.Error("marshalling news cache", "error", err)
+		return
+	}
+	if err := os.WriteFile(newsCacheFile(date), data, 0644); err != nil {
+		s.log.Error("writing news cache", "error", err)
+	}
+}
+
 // startNewsRefresh periodically fetches news from all sources for today's top
 // symbols and caches the results. Runs every 5 minutes.
 func (s *DashboardServer) startNewsRefresh(ctx context.Context) {
+	// Load persisted cache for today before fetching.
+	today := time.Now().In(s.loc).Format("2006-01-02")
+	if n := s.loadNewsFromDisk(today); n > 0 {
+		s.log.Info("loaded news cache from disk", "date", today, "articles", n)
+	}
+
 	// Run immediately on startup, then every 5 minutes.
 	s.refreshNewsCache()
 
@@ -262,6 +315,9 @@ func (s *DashboardServer) refreshNewsCache() {
 	wg.Wait()
 
 	s.log.Info("news refresh complete", "date", date, "symbols", len(symbols), "articles", totalArticles)
+
+	// Persist to disk for fast restart.
+	s.saveNewsToDisk(date)
 }
 
 // resolveWatchlistID returns the Alpaca watchlist ID for the given date,

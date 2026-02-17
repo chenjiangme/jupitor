@@ -32,27 +32,29 @@ struct SymbolDetailView: View {
     }
     private static let et = TimeZone(identifier: "America/New_York")!
 
-    /// StockTwits messages split by ET time of day: before 4AM, 4AM–9:30AM, after 9:30AM.
-    private var stocktwitsBuckets: (overnight: Int, pre: Int, regular: Int) {
-        var overnight = 0, pre = 0, regular = 0
+    /// StockTwits messages split by ET time of day.
+    private var stocktwitsBuckets: (overnight: Int, pre: Int, regular: Int, after: Int) {
+        var overnight = 0, pre = 0, regular = 0, after = 0
         let cal = Calendar.current
         for a in newsArticles where a.source == "stocktwits" {
-            var c = cal.dateComponents(in: Self.et, from: a.date)
+            let c = cal.dateComponents(in: Self.et, from: a.date)
             let minutes = (c.hour ?? 0) * 60 + (c.minute ?? 0)
             if minutes < 240 {         // before 4:00 AM
                 overnight += 1
             } else if minutes < 570 {  // 4:00 AM – 9:30 AM
                 pre += 1
-            } else {                   // 9:30 AM+
+            } else if minutes < 960 {  // 9:30 AM – 4:00 PM
                 regular += 1
+            } else {                   // 4:00 PM+
+                after += 1
             }
         }
-        return (overnight, pre, regular)
+        return (overnight, pre, regular, after)
     }
 
     private var stocktwitsTotal: Int {
         let b = stocktwitsBuckets
-        return b.overnight + b.pre + b.regular
+        return b.overnight + b.pre + b.regular + b.after
     }
 
     private var canGoBack: Bool { currentIndex > 0 }
@@ -153,6 +155,11 @@ struct SymbolDetailView: View {
                                 Label("\(b.regular)", systemImage: "sun.max.fill")
                                     .font(.caption.monospacedDigit())
                                     .foregroundStyle(.green.opacity(0.7))
+                            }
+                            if b.after > 0 {
+                                Label("\(b.after)", systemImage: "sunset.fill")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.orange.opacity(0.7))
                             }
                         }
                     }
