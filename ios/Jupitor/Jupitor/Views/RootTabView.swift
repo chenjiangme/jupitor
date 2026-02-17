@@ -197,7 +197,7 @@ struct RootTabView: View {
                     } else {
                         Button {
                             currentDate = vm.date
-                            sessionMode = .day
+                            sessionMode = .reg
                         } label: {
                             Text("LIVE")
                                 .font(.caption2.bold())
