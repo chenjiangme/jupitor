@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"jupitor/internal/gather/us"
 	"jupitor/internal/httpapi"
 	"jupitor/internal/live"
+	"jupitor/internal/tradeparams"
 )
 
 func main() {
@@ -105,9 +107,13 @@ func main() {
 		})
 	}
 
+	// Create trade params store.
+	targetFile := filepath.Join(cfg.Storage.DataDir, "us", "targets.json")
+	tpStore := tradeparams.NewStore(targetFile, logger)
+
 	// Start HTTP API server.
 	httpAddr := ":8080"
-	dashSrv := httpapi.NewDashboardServer(model, cfg.Storage.DataDir, loc, logger, tierMap, histDates, alpacaClient, mdClient)
+	dashSrv := httpapi.NewDashboardServer(model, cfg.Storage.DataDir, loc, logger, tierMap, histDates, alpacaClient, mdClient, tpStore)
 	dashSrv.Start(ctx)
 	httpServer := &http.Server{
 		Addr:    httpAddr,

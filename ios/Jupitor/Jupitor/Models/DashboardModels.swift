@@ -48,7 +48,6 @@ struct DashboardResponse: Codable {
     let next: DayDataJSON?
     let sortMode: Int
     let sortLabel: String
-    let targets: [String: Double]?
 }
 
 struct DatesResponse: Codable {

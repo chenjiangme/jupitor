@@ -97,36 +97,6 @@ actor APIService {
         return try JSONDecoder().decode(SymbolHistoryResponse.self, from: data)
     }
 
-    // MARK: - Targets
-
-    func setTarget(date: String, key: String, value: Double) async throws {
-        let url = baseURL.appendingPathComponent("api/targets")
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = ["date": date, "key": key, "value": value]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (_, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw APIError.requestFailed
-        }
-    }
-
-    func deleteTarget(date: String, key: String) async throws {
-        let url = baseURL.appendingPathComponent("api/targets")
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            URLQueryItem(name: "date", value: date),
-            URLQueryItem(name: "key", value: key),
-        ]
-        var request = URLRequest(url: components.url!)
-        request.httpMethod = "DELETE"
-        let (_, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw APIError.requestFailed
-        }
-    }
-
     // MARK: - Private
 
     private func fetch<T: Decodable>(_ url: URL) async throws -> T {

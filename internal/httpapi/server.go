@@ -23,6 +23,7 @@ import (
 	"jupitor/internal/live"
 	"jupitor/internal/news"
 	"jupitor/internal/store"
+	"jupitor/internal/tradeparams"
 )
 
 // NewsRecord matches the parquet schema in us-news-history.
@@ -63,10 +64,8 @@ type DashboardServer struct {
 	// Cache for per-symbol per-date history stats. Key: "SYMBOL:DATE".
 	symbolHistoryCache sync.Map
 
-	// Target gain settings: date -> "SYMBOL:SESSION" -> value.
-	targetMu   sync.RWMutex
-	targets    map[string]map[string]float64
-	targetFile string
+	// Trade parameters (targets, etc.) with pub/sub for SSE push.
+	tradeParams *tradeparams.Store
 }
 
 // NewDashboardServer creates a new dashboard HTTP server.
@@ -79,6 +78,7 @@ func NewDashboardServer(
 	historyDates []string,
 	alpacaClient *alpacaapi.Client,
 	mdClient *marketdata.Client,
+	tradeParams *tradeparams.Store,
 ) *DashboardServer {
 	s := &DashboardServer{
 		model:        model,
@@ -91,12 +91,8 @@ func NewDashboardServer(
 		watchlistIDs: make(map[string]string),
 		mdClient:     mdClient,
 		stLimiter:    time.NewTicker(500 * time.Millisecond),
-		targets:      make(map[string]map[string]float64),
-		targetFile:   filepath.Join(dataDir, "us", "targets.json"),
+		tradeParams:  tradeParams,
 	}
-
-	// Load persisted targets.
-	s.loadTargets()
 
 	return s
 }
@@ -357,6 +353,7 @@ func (s *DashboardServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/targets", s.handleGetTargets)
 	mux.HandleFunc("PUT /api/targets", s.handleSetTarget)
 	mux.HandleFunc("DELETE /api/targets", s.handleDeleteTarget)
+	mux.HandleFunc("GET /api/targets/stream", s.handleTargetStream)
 }
 
 // Handler returns an http.Handler with CORS middleware.
@@ -468,16 +465,11 @@ func (s *DashboardServer) handleDashboard(w http.ResponseWriter, r *http.Request
 	todayJSON := convertDayData(todayData, newsCounts)
 	todayJSON.Date = date
 
-	s.targetMu.RLock()
-	targets := s.targets[date]
-	s.targetMu.RUnlock()
-
 	resp := DashboardResponse{
 		Date:      date,
 		Today:     todayJSON,
 		SortMode:  sortMode,
 		SortLabel: dashboard.SortModeLabel(sortMode),
-		Targets:   targets,
 	}
 
 	if len(nextExIdx) > 0 {
@@ -517,16 +509,11 @@ func (s *DashboardServer) handleHistory(w http.ResponseWriter, r *http.Request) 
 	todayJSON := convertDayData(data, newsCounts)
 	todayJSON.Date = date
 
-	s.targetMu.RLock()
-	histTargets := s.targets[date]
-	s.targetMu.RUnlock()
-
 	resp := DashboardResponse{
 		Date:      date,
 		Today:     todayJSON,
 		SortMode:  sortMode,
 		SortLabel: dashboard.SortModeLabel(sortMode),
-		Targets:   histTargets,
 	}
 
 	// Load next day data.
@@ -825,47 +812,13 @@ func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Req
 	writeJSON(w, SymbolHistoryResponse{Symbol: symbol, Dates: dates, HasMore: hasMore})
 }
 
-// loadTargets reads the targets JSON file into memory.
-func (s *DashboardServer) loadTargets() {
-	data, err := os.ReadFile(s.targetFile)
-	if err != nil {
-		return // File doesn't exist yet — start empty.
-	}
-	var loaded map[string]map[string]float64
-	if err := json.Unmarshal(data, &loaded); err != nil {
-		s.log.Warn("loading targets file", "error", err)
-		return
-	}
-	s.targets = loaded
-	s.log.Info("loaded targets", "dates", len(loaded))
-}
-
-// flushTargets writes the in-memory targets to the JSON file. Must be called with targetMu held.
-func (s *DashboardServer) flushTargets() {
-	data, err := json.Marshal(s.targets)
-	if err != nil {
-		s.log.Error("marshalling targets", "error", err)
-		return
-	}
-	if err := os.WriteFile(s.targetFile, data, 0644); err != nil {
-		s.log.Error("writing targets file", "error", err)
-	}
-}
-
 func (s *DashboardServer) handleGetTargets(w http.ResponseWriter, r *http.Request) {
 	date := r.URL.Query().Get("date")
 	if date == "" {
 		date = time.Now().In(s.loc).Format("2006-01-02")
 	}
 
-	s.targetMu.RLock()
-	m := s.targets[date]
-	s.targetMu.RUnlock()
-
-	if m == nil {
-		m = map[string]float64{}
-	}
-	writeJSON(w, map[string]any{"targets": m})
+	writeJSON(w, map[string]any{"targets": s.tradeParams.Get(date)})
 }
 
 func (s *DashboardServer) handleSetTarget(w http.ResponseWriter, r *http.Request) {
@@ -883,14 +836,7 @@ func (s *DashboardServer) handleSetTarget(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	s.targetMu.Lock()
-	if s.targets[req.Date] == nil {
-		s.targets[req.Date] = make(map[string]float64)
-	}
-	s.targets[req.Date][req.Key] = req.Value
-	s.flushTargets()
-	s.targetMu.Unlock()
-
+	s.tradeParams.Set(req.Date, req.Key, req.Value)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -902,17 +848,51 @@ func (s *DashboardServer) handleDeleteTarget(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	s.targetMu.Lock()
-	if m, ok := s.targets[date]; ok {
-		delete(m, key)
-		if len(m) == 0 {
-			delete(s.targets, date)
+	s.tradeParams.Delete(date, key)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *DashboardServer) handleTargetStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	// Subscribe to store events.
+	subID, ch := s.tradeParams.Subscribe(64)
+	defer s.tradeParams.Unsubscribe(subID)
+
+	// Send snapshot.
+	snap := tradeparams.Event{
+		Type: "snapshot",
+		Data: s.tradeParams.Snapshot(),
+	}
+	if data, err := json.Marshal(snap); err == nil {
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	// Stream incremental events.
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-ch:
+			if !ok {
+				return
+			}
+			if data, err := json.Marshal(evt); err == nil {
+				fmt.Fprintf(w, "data: %s\n\n", data)
+				flusher.Flush()
+			}
 		}
 	}
-	s.flushTargets()
-	s.targetMu.Unlock()
-
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // loadSymbolDateStats reads per-symbol trade files using the same (P 4PM, D 4PM]

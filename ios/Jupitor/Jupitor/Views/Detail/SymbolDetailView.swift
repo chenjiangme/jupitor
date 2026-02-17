@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SymbolDetailView: View {
     @Environment(DashboardViewModel.self) private var vm
+    @Environment(TradeParamsModel.self) private var tradeParams
     let symbols: [CombinedStatsJSON]
     let initialSymbol: String
     let date: String
@@ -236,7 +237,7 @@ struct SymbolDetailView: View {
             isLoadingNews = false
         }
         .onShake {
-            Task { await vm.deleteAllTargets(symbol: combined.symbol, date: date) }
+            Task { await tradeParams.deleteAllTargets(symbol: combined.symbol, date: date) }
             targetResetToken += 1
         }
     }
@@ -300,7 +301,7 @@ private struct DetailRingView: View {
 // MARK: - Target Ring (interactive gain target)
 
 private struct TargetRingView: View {
-    @Environment(DashboardViewModel.self) private var vm
+    @Environment(TradeParamsModel.self) private var tp
     let label: String
     let stats: SymbolStatsJSON
     let dia: CGFloat
@@ -385,9 +386,9 @@ private struct TargetRingView: View {
                         // Clear if dragged below 2%.
                         if let t = target, t < 0.02 {
                             target = nil
-                            Task { await vm.deleteTarget(key: targetKey, date: date) }
+                            Task { await tp.deleteTarget(key: targetKey, date: date) }
                         } else if let t = target {
-                            Task { await vm.setTarget(key: targetKey, value: t, date: date) }
+                            Task { await tp.setTarget(key: targetKey, value: t, date: date) }
                         }
                     }
             )
@@ -405,12 +406,12 @@ private struct TargetRingView: View {
             }
         }
         .onAppear {
-            target = vm.targetCache[date]?[targetKey]
+            target = tp.targets[date]?[targetKey]
         }
         .onChange(of: targetKey) { _, newKey in
-            target = vm.targetCache[date]?[newKey]
+            target = tp.targets[date]?[newKey]
         }
-        .onChange(of: vm.targetCache[date]?[targetKey]) { _, newValue in
+        .onChange(of: tp.targets[date]?[targetKey]) { _, newValue in
             if !isDragging {
                 target = newValue
             }
