@@ -68,11 +68,9 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 		minPrice := math.MaxFloat64
 		maxPrice := 0.0
 
-		// Track the indices and prices where max gain/loss are realized.
+		// Track the indices where max gain/loss are realized.
 		gainIdx := -1
 		lossIdx := -1
-		gainSellPrice := 0.0
-		lossSellPrice := 0.0
 		bestGain := 0.0
 		bestLoss := 0.0
 
@@ -99,7 +97,6 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 			if g := r.Price - minPrice; g > bestGain {
 				bestGain = g
 				gainIdx = j
-				gainSellPrice = r.Price
 			}
 			// Max loss: buy at highest seen so far, sell now (absolute $).
 			if r.Price > maxPrice {
@@ -108,7 +105,6 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 			if l := maxPrice - r.Price; l > bestLoss {
 				bestLoss = l
 				lossIdx = j
-				lossSellPrice = r.Price
 			}
 		}
 
@@ -129,14 +125,8 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 			if totalSize > 0 {
 				vwap := totalValue / float64(totalSize)
 				if vwap > 0 {
-					s.MaxGain = (gainSellPrice - vwap) / vwap
-					s.MaxLoss = (vwap - lossSellPrice) / vwap
-					if s.MaxGain < 0 {
-						s.MaxGain = 0
-					}
-					if s.MaxLoss < 0 {
-						s.MaxLoss = 0
-					}
+					s.MaxGain = bestGain / vwap
+					s.MaxLoss = bestLoss / vwap
 				}
 			}
 		} else if s.Turnover > 0 && s.TotalSize > 0 {
