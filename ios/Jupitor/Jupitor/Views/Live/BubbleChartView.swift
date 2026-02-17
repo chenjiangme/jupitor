@@ -39,6 +39,13 @@ struct BubbleChartView: View {
         return watchlist + rest
     }
 
+    private var sortedByTurnover: [CombinedStatsJSON] {
+        symbolData.map(\.combined).sorted {
+            ($0.pre?.turnover ?? 0) + ($0.reg?.turnover ?? 0) >
+            ($1.pre?.turnover ?? 0) + ($1.reg?.turnover ?? 0)
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if symbolData.isEmpty {
@@ -107,11 +114,7 @@ struct BubbleChartView: View {
         }
         .navigationDestination(isPresented: $showDetail) {
             if let combined = detailCombined {
-                let sorted = symbolData.map(\.combined).sorted {
-                    ($0.pre?.turnover ?? 0) + ($0.reg?.turnover ?? 0) >
-                    ($1.pre?.turnover ?? 0) + ($1.reg?.turnover ?? 0)
-                }
-                SymbolDetailView(symbols: sorted, initialSymbol: combined.symbol, date: date)
+                SymbolDetailView(symbols: sortedByTurnover, initialSymbol: combined.symbol, date: date)
             }
         }
         .navigationDestination(isPresented: $showHistory) {

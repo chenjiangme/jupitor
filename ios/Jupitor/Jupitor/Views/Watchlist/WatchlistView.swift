@@ -9,6 +9,13 @@ struct WatchlistView: View {
             .filter { vm.watchlistSymbols.contains($0.symbol) }
     }
 
+    private var sortedByTurnover: [CombinedStatsJSON] {
+        watchlistSymbols.sorted {
+            ($0.pre?.turnover ?? 0) + ($0.reg?.turnover ?? 0) >
+            ($1.pre?.turnover ?? 0) + ($1.reg?.turnover ?? 0)
+        }
+    }
+
     var body: some View {
         ScrollView {
             if watchlistSymbols.isEmpty {
@@ -21,11 +28,7 @@ struct WatchlistView: View {
                 LazyVStack(spacing: 4) {
                     ForEach(watchlistSymbols) { combined in
                         NavigationLink {
-                            let sorted = watchlistSymbols.sorted {
-                                ($0.pre?.turnover ?? 0) + ($0.reg?.turnover ?? 0) >
-                                ($1.pre?.turnover ?? 0) + ($1.reg?.turnover ?? 0)
-                            }
-                            SymbolDetailView(symbols: sorted, initialSymbol: combined.symbol, date: vm.date)
+                            SymbolDetailView(symbols: sortedByTurnover, initialSymbol: combined.symbol, date: vm.date)
                         } label: {
                             SymbolCardView(
                                 combined: combined,
