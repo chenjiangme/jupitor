@@ -213,6 +213,11 @@ struct RootTabView: View {
                         Text(sessionMode.label)
                             .font(.caption2.bold())
                             .foregroundStyle(sessionMode == .day ? Color.secondary : Color.white)
+                        if !vm.watchlistSymbols.isEmpty {
+                            Text("\(vm.watchlistSymbols.count)")
+                                .font(.caption2.bold())
+                                .foregroundStyle(Color.watchlistColor)
+                        }
                     }
                 }
 
