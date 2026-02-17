@@ -248,7 +248,21 @@ struct BubbleChartView: View {
         switch sessionMode {
         case .pre, .next: return c.pre
         case .reg: return c.reg
-        case .day: return c.reg ?? c.pre
+        case .day:
+            guard let pre = c.pre else { return c.reg }
+            guard let reg = c.reg else { return pre }
+            return SymbolStatsJSON(
+                symbol: pre.symbol,
+                trades: pre.trades + reg.trades,
+                high: max(pre.high, reg.high),
+                low: min(pre.low, reg.low),
+                open: pre.open,
+                close: reg.close,
+                size: pre.size + reg.size,
+                turnover: pre.turnover + reg.turnover,
+                maxGain: max(pre.maxGain, reg.maxGain),
+                maxLoss: max(pre.maxLoss, reg.maxLoss)
+            )
         }
     }
 

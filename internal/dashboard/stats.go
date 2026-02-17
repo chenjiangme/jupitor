@@ -68,6 +68,14 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 		minPrice := math.MaxFloat64
 		maxPrice := 0.0
 
+		// Track the indices and prices where max gain/loss are realized.
+		gainIdx := -1
+		lossIdx := -1
+		gainSellPrice := 0.0
+		lossSellPrice := 0.0
+		bestGain := 0.0
+		bestLoss := 0.0
+
 		for j, idx := range indices {
 			r := &records[idx]
 			s.Trades++
@@ -84,25 +92,62 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 			}
 			s.Close = r.Price
 
-			// Max gain: buy at lowest seen so far, sell now.
+			// Max gain: buy at lowest seen so far, sell now (absolute $).
 			if r.Price < minPrice {
 				minPrice = r.Price
 			}
-			if minPrice > 0 {
-				if g := (r.Price - minPrice) / minPrice; g > s.MaxGain {
-					s.MaxGain = g
-				}
+			if g := r.Price - minPrice; g > bestGain {
+				bestGain = g
+				gainIdx = j
+				gainSellPrice = r.Price
 			}
-			// Max loss: buy at highest seen so far, sell now.
+			// Max loss: buy at highest seen so far, sell now (absolute $).
 			if r.Price > maxPrice {
 				maxPrice = r.Price
 			}
-			if r.Price > 0 {
-				if l := (maxPrice - r.Price) / r.Price; l > s.MaxLoss {
-					s.MaxLoss = l
-				}
+			if l := maxPrice - r.Price; l > bestLoss {
+				bestLoss = l
+				lossIdx = j
+				lossSellPrice = r.Price
 			}
 		}
+
+		// Compute VWAP between the max-gain and max-loss time points,
+		// then measure gain% and loss% relative to that center price.
+		if gainIdx >= 0 && lossIdx >= 0 && gainIdx != lossIdx {
+			lo, hi := gainIdx, lossIdx
+			if lo > hi {
+				lo, hi = hi, lo
+			}
+			var totalValue float64
+			var totalSize int64
+			for j := lo; j <= hi; j++ {
+				r := &records[indices[j]]
+				totalValue += r.Price * float64(r.Size)
+				totalSize += r.Size
+			}
+			if totalSize > 0 {
+				vwap := totalValue / float64(totalSize)
+				if vwap > 0 {
+					s.MaxGain = (gainSellPrice - vwap) / vwap
+					s.MaxLoss = (vwap - lossSellPrice) / vwap
+					if s.MaxGain < 0 {
+						s.MaxGain = 0
+					}
+					if s.MaxLoss < 0 {
+						s.MaxLoss = 0
+					}
+				}
+			}
+		} else if s.Turnover > 0 && s.TotalSize > 0 {
+			// Fallback: use overall VWAP to normalize.
+			vwap := s.Turnover / float64(s.TotalSize)
+			if vwap > 0 {
+				s.MaxGain = bestGain / vwap
+				s.MaxLoss = bestLoss / vwap
+			}
+		}
+
 		m[sym] = s
 	}
 	return m
