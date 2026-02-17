@@ -12,6 +12,7 @@ struct SymbolDetailView: View {
     @State private var panOffset: CGFloat = 0
     @State private var isTransitioning = false
     @State private var isAdjustingTarget = false
+    @State private var targetResetToken = 0
 
     private var currentSymbol: String { symbols[currentIndex].symbol }
 
@@ -117,7 +118,7 @@ struct SymbolDetailView: View {
                 .padding(.horizontal)
 
                 // Ring visualization.
-                DetailRingView(combined: combined, date: date, isAdjustingTarget: $isAdjustingTarget)
+                DetailRingView(combined: combined, date: date, isAdjustingTarget: $isAdjustingTarget, resetToken: targetResetToken)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
 
@@ -234,6 +235,10 @@ struct SymbolDetailView: View {
             newsArticles = await vm.fetchNewsArticles(symbol: combined.symbol, date: date)
             isLoadingNews = false
         }
+        .onShake {
+            TargetStore.removeAll(symbol: combined.symbol, date: date)
+            targetResetToken += 1
+        }
     }
 }
 
@@ -243,6 +248,7 @@ private struct DetailRingView: View {
     let combined: CombinedStatsJSON
     let date: String
     @Binding var isAdjustingTarget: Bool
+    let resetToken: Int
 
     private let maxDiameter: CGFloat = 140
     private let minDiameter: CGFloat = 50
@@ -270,7 +276,8 @@ private struct DetailRingView: View {
                     dia: preDia,
                     ringWidth: ringWidth,
                     targetKey: "\(combined.symbol):\(date):PRE",
-                    isAdjusting: $isAdjustingTarget
+                    isAdjusting: $isAdjustingTarget,
+                    resetToken: resetToken
                 )
             }
             if let reg = combined.reg {
@@ -280,7 +287,8 @@ private struct DetailRingView: View {
                     dia: regDia,
                     ringWidth: ringWidth,
                     targetKey: "\(combined.symbol):\(date):REG",
-                    isAdjusting: $isAdjustingTarget
+                    isAdjusting: $isAdjustingTarget,
+                    resetToken: resetToken
                 )
             }
         }
@@ -296,6 +304,7 @@ private struct TargetRingView: View {
     let ringWidth: CGFloat
     let targetKey: String
     @Binding var isAdjusting: Bool
+    let resetToken: Int
 
     @State private var target: Double? = nil
     @State private var prevAngle: Double = 0
@@ -397,6 +406,9 @@ private struct TargetRingView: View {
         .onChange(of: targetKey) { _, newKey in
             target = TargetStore.load(newKey)
         }
+        .onChange(of: resetToken) { _, _ in
+            target = nil
+        }
     }
 }
 
@@ -476,6 +488,14 @@ private enum TargetStore {
     static func remove(_ id: String) {
         var dict = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
         dict.removeValue(forKey: id)
+        UserDefaults.standard.set(dict, forKey: key)
+    }
+
+    /// Remove all targets for a symbol on a given date (both PRE and REG).
+    static func removeAll(symbol: String, date: String) {
+        var dict = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
+        dict.removeValue(forKey: "\(symbol):\(date):PRE")
+        dict.removeValue(forKey: "\(symbol):\(date):REG")
         UserDefaults.standard.set(dict, forKey: key)
     }
 }
