@@ -77,6 +77,12 @@ struct NewsResponse: Codable {
     let articles: [NewsArticleJSON]
 }
 
+// MARK: - Targets
+
+struct TargetsResponse: Decodable {
+    let targets: [String: Double]
+}
+
 // MARK: - Symbol History
 
 struct SymbolDateStats: Codable, Identifiable {

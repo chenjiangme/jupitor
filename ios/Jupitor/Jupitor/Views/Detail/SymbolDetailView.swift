@@ -236,7 +236,7 @@ struct SymbolDetailView: View {
             isLoadingNews = false
         }
         .onShake {
-            TargetStore.removeAll(symbol: combined.symbol, date: date)
+            Task { await vm.deleteAllTargets(symbol: combined.symbol, date: date) }
             targetResetToken += 1
         }
     }
@@ -275,7 +275,8 @@ private struct DetailRingView: View {
                     stats: pre,
                     dia: preDia,
                     ringWidth: ringWidth,
-                    targetKey: "\(combined.symbol):\(date):PRE",
+                    targetKey: "\(combined.symbol):PRE",
+                    date: date,
                     isAdjusting: $isAdjustingTarget,
                     resetToken: resetToken
                 )
@@ -286,7 +287,8 @@ private struct DetailRingView: View {
                     stats: reg,
                     dia: regDia,
                     ringWidth: ringWidth,
-                    targetKey: "\(combined.symbol):\(date):REG",
+                    targetKey: "\(combined.symbol):REG",
+                    date: date,
                     isAdjusting: $isAdjustingTarget,
                     resetToken: resetToken
                 )
@@ -298,11 +300,13 @@ private struct DetailRingView: View {
 // MARK: - Target Ring (interactive gain target)
 
 private struct TargetRingView: View {
+    @Environment(DashboardViewModel.self) private var vm
     let label: String
     let stats: SymbolStatsJSON
     let dia: CGFloat
     let ringWidth: CGFloat
     let targetKey: String
+    let date: String
     @Binding var isAdjusting: Bool
     let resetToken: Int
 
@@ -381,9 +385,9 @@ private struct TargetRingView: View {
                         // Clear if dragged below 2%.
                         if let t = target, t < 0.02 {
                             target = nil
-                            TargetStore.remove(targetKey)
+                            Task { await vm.deleteTarget(key: targetKey, date: date) }
                         } else if let t = target {
-                            TargetStore.save(targetKey, value: t)
+                            Task { await vm.setTarget(key: targetKey, value: t, date: date) }
                         }
                     }
             )
@@ -401,10 +405,10 @@ private struct TargetRingView: View {
             }
         }
         .onAppear {
-            target = TargetStore.load(targetKey)
+            target = vm.targetCache[date]?[targetKey]
         }
         .onChange(of: targetKey) { _, newKey in
-            target = TargetStore.load(newKey)
+            target = vm.targetCache[date]?[newKey]
         }
         .onChange(of: resetToken) { _, _ in
             target = nil
@@ -469,33 +473,3 @@ private struct TargetArrowCanvas: View {
     }
 }
 
-// MARK: - Target Persistence
-
-private enum TargetStore {
-    private static let key = "targetGains"
-
-    static func load(_ id: String) -> Double? {
-        let dict = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
-        return dict[id]
-    }
-
-    static func save(_ id: String, value: Double) {
-        var dict = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
-        dict[id] = value
-        UserDefaults.standard.set(dict, forKey: key)
-    }
-
-    static func remove(_ id: String) {
-        var dict = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
-        dict.removeValue(forKey: id)
-        UserDefaults.standard.set(dict, forKey: key)
-    }
-
-    /// Remove all targets for a symbol on a given date (both PRE and REG).
-    static func removeAll(symbol: String, date: String) {
-        var dict = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
-        dict.removeValue(forKey: "\(symbol):\(date):PRE")
-        dict.removeValue(forKey: "\(symbol):\(date):REG")
-        UserDefaults.standard.set(dict, forKey: key)
-    }
-}

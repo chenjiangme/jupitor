@@ -62,6 +62,11 @@ type DashboardServer struct {
 
 	// Cache for per-symbol per-date history stats. Key: "SYMBOL:DATE".
 	symbolHistoryCache sync.Map
+
+	// Target gain settings: date -> "SYMBOL:SESSION" -> value.
+	targetMu   sync.RWMutex
+	targets    map[string]map[string]float64
+	targetFile string
 }
 
 // NewDashboardServer creates a new dashboard HTTP server.
@@ -86,7 +91,12 @@ func NewDashboardServer(
 		watchlistIDs: make(map[string]string),
 		mdClient:     mdClient,
 		stLimiter:    time.NewTicker(500 * time.Millisecond),
+		targets:      make(map[string]map[string]float64),
+		targetFile:   filepath.Join(dataDir, "us", "targets.json"),
 	}
+
+	// Load persisted targets.
+	s.loadTargets()
 
 	return s
 }
@@ -344,6 +354,9 @@ func (s *DashboardServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/watchlist/{symbol}", s.handleRemoveWatchlist)
 	mux.HandleFunc("GET /api/news/{symbol}", s.handleNews)
 	mux.HandleFunc("GET /api/symbol-history/{symbol}", s.handleSymbolHistory)
+	mux.HandleFunc("GET /api/targets", s.handleGetTargets)
+	mux.HandleFunc("PUT /api/targets", s.handleSetTarget)
+	mux.HandleFunc("DELETE /api/targets", s.handleDeleteTarget)
 }
 
 // Handler returns an http.Handler with CORS middleware.
@@ -800,6 +813,96 @@ func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Req
 	}
 
 	writeJSON(w, SymbolHistoryResponse{Symbol: symbol, Dates: dates, HasMore: hasMore})
+}
+
+// loadTargets reads the targets JSON file into memory.
+func (s *DashboardServer) loadTargets() {
+	data, err := os.ReadFile(s.targetFile)
+	if err != nil {
+		return // File doesn't exist yet — start empty.
+	}
+	var loaded map[string]map[string]float64
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		s.log.Warn("loading targets file", "error", err)
+		return
+	}
+	s.targets = loaded
+	s.log.Info("loaded targets", "dates", len(loaded))
+}
+
+// flushTargets writes the in-memory targets to the JSON file. Must be called with targetMu held.
+func (s *DashboardServer) flushTargets() {
+	data, err := json.Marshal(s.targets)
+	if err != nil {
+		s.log.Error("marshalling targets", "error", err)
+		return
+	}
+	if err := os.WriteFile(s.targetFile, data, 0644); err != nil {
+		s.log.Error("writing targets file", "error", err)
+	}
+}
+
+func (s *DashboardServer) handleGetTargets(w http.ResponseWriter, r *http.Request) {
+	date := r.URL.Query().Get("date")
+	if date == "" {
+		date = time.Now().In(s.loc).Format("2006-01-02")
+	}
+
+	s.targetMu.RLock()
+	m := s.targets[date]
+	s.targetMu.RUnlock()
+
+	if m == nil {
+		m = map[string]float64{}
+	}
+	writeJSON(w, map[string]any{"targets": m})
+}
+
+func (s *DashboardServer) handleSetTarget(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Date  string  `json:"date"`
+		Key   string  `json:"key"`
+		Value float64 `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Date == "" || req.Key == "" {
+		writeError(w, http.StatusBadRequest, "date and key required")
+		return
+	}
+
+	s.targetMu.Lock()
+	if s.targets[req.Date] == nil {
+		s.targets[req.Date] = make(map[string]float64)
+	}
+	s.targets[req.Date][req.Key] = req.Value
+	s.flushTargets()
+	s.targetMu.Unlock()
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *DashboardServer) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
+	date := r.URL.Query().Get("date")
+	key := r.URL.Query().Get("key")
+	if date == "" || key == "" {
+		writeError(w, http.StatusBadRequest, "date and key required")
+		return
+	}
+
+	s.targetMu.Lock()
+	if m, ok := s.targets[date]; ok {
+		delete(m, key)
+		if len(m) == 0 {
+			delete(s.targets, date)
+		}
+	}
+	s.flushTargets()
+	s.targetMu.Unlock()
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // loadSymbolDateStats reads per-symbol trade files using the same (P 4PM, D 4PM]

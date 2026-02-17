@@ -29,6 +29,10 @@ final class DashboardViewModel {
     var watchlistDate: String = "" // date the current watchlist is for
     private var watchlistCache: [String: Set<String>] = [:] // date -> symbols
 
+    // MARK: - Targets
+
+    var targetCache: [String: [String: Double]] = [:] // date -> "SYMBOL:SESSION" -> value
+
     // MARK: - Status
 
     var isLoading = false
@@ -86,8 +90,10 @@ final class DashboardViewModel {
 
         _ = await (dashTask, datesTask)
 
-        // Load watchlist for the live date (now known after refreshLive).
-        await loadWatchlist(for: date)
+        // Load watchlist and targets for the live date (now known after refreshLive).
+        async let wl: () = loadWatchlist(for: date)
+        async let tg: () = loadTargets(for: date)
+        _ = await (wl, tg)
 
         startPreloadingHistory()
     }
@@ -135,10 +141,12 @@ final class DashboardViewModel {
         }
     }
 
-    /// Called by views when the display date changes; reloads watchlist if needed.
+    /// Called by views when the display date changes; reloads watchlist and targets if needed.
     func updateDisplayDate(_ date: String) async {
         guard !date.isEmpty, date != watchlistDate else { return }
-        await loadWatchlist(for: date)
+        async let wl: () = loadWatchlist(for: date)
+        async let tg: () = loadTargets(for: date)
+        _ = await (wl, tg)
     }
 
     // MARK: - History
@@ -247,6 +255,73 @@ final class DashboardViewModel {
             }
         }
         watchlistCache[date] = watchlistSymbols
+    }
+
+    // MARK: - Targets
+
+    func loadTargets(for date: String) async {
+        guard !date.isEmpty else { return }
+        if targetCache[date] != nil { return }
+
+        do {
+            let resp = try await api.fetchTargets(date: date)
+            targetCache[date] = resp.targets
+        } catch {
+            // Non-fatal.
+        }
+    }
+
+    func setTarget(key: String, value: Double, date: String) async {
+        // Optimistic update.
+        if targetCache[date] == nil { targetCache[date] = [:] }
+        targetCache[date]?[key] = value
+
+        do {
+            try await api.setTarget(date: date, key: key, value: value)
+        } catch {
+            // Revert on error.
+            targetCache[date]?.removeValue(forKey: key)
+        }
+    }
+
+    func deleteTarget(key: String, date: String) async {
+        let old = targetCache[date]?[key]
+        targetCache[date]?.removeValue(forKey: key)
+
+        do {
+            try await api.deleteTarget(date: date, key: key)
+        } catch {
+            // Revert on error.
+            if let old {
+                if targetCache[date] == nil { targetCache[date] = [:] }
+                targetCache[date]?[key] = old
+            }
+        }
+    }
+
+    func deleteAllTargets(symbol: String, date: String) async {
+        let preKey = "\(symbol):PRE"
+        let regKey = "\(symbol):REG"
+        let oldPre = targetCache[date]?[preKey]
+        let oldReg = targetCache[date]?[regKey]
+
+        targetCache[date]?.removeValue(forKey: preKey)
+        targetCache[date]?.removeValue(forKey: regKey)
+
+        do {
+            if oldPre != nil { try await api.deleteTarget(date: date, key: preKey) }
+            if oldReg != nil { try await api.deleteTarget(date: date, key: regKey) }
+        } catch {
+            // Revert on error.
+            if let oldPre {
+                if targetCache[date] == nil { targetCache[date] = [:] }
+                targetCache[date]?[preKey] = oldPre
+            }
+            if let oldReg {
+                if targetCache[date] == nil { targetCache[date] = [:] }
+                targetCache[date]?[regKey] = oldReg
+            }
+        }
     }
 
     // MARK: - Symbol History
