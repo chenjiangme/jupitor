@@ -14,6 +14,7 @@ import (
 	"time"
 
 	alpacaapi "github.com/alpacahq/alpaca-trade-api-go/v3/alpaca"
+	"github.com/alpacahq/alpaca-trade-api-go/v3/marketdata"
 	"google.golang.org/grpc"
 
 	"jupitor/internal/config"
@@ -90,10 +91,15 @@ func main() {
 		log.Fatalf("loading timezone: %v", err)
 	}
 
-	// Optional Alpaca trading client for watchlist support.
+	// Optional Alpaca clients for watchlist and live news support.
 	var alpacaClient *alpacaapi.Client
+	var mdClient *marketdata.Client
 	if cfg.Alpaca.APIKey != "" {
 		alpacaClient = alpacaapi.NewClient(alpacaapi.ClientOpts{
+			APIKey:    cfg.Alpaca.APIKey,
+			APISecret: cfg.Alpaca.APISecret,
+		})
+		mdClient = marketdata.NewClient(marketdata.ClientOpts{
 			APIKey:    cfg.Alpaca.APIKey,
 			APISecret: cfg.Alpaca.APISecret,
 		})
@@ -101,7 +107,7 @@ func main() {
 
 	// Start HTTP API server.
 	httpAddr := ":8080"
-	dashSrv := httpapi.NewDashboardServer(model, cfg.Storage.DataDir, loc, logger, tierMap, histDates, alpacaClient)
+	dashSrv := httpapi.NewDashboardServer(model, cfg.Storage.DataDir, loc, logger, tierMap, histDates, alpacaClient, mdClient)
 	httpServer := &http.Server{
 		Addr:    httpAddr,
 		Handler: dashSrv.Handler(),

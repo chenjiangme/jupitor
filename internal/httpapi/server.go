@@ -14,6 +14,7 @@ import (
 	"time"
 
 	alpacaapi "github.com/alpacahq/alpaca-trade-api-go/v3/alpaca"
+	"github.com/alpacahq/alpaca-trade-api-go/v3/marketdata"
 	"github.com/parquet-go/parquet-go"
 
 	"jupitor/internal/dashboard"
@@ -48,6 +49,9 @@ type DashboardServer struct {
 	watchlistMu  sync.RWMutex
 	watchlistIDs map[string]string // date -> Alpaca watchlist ID
 
+	// Alpaca marketdata client for live news (nil if not configured).
+	mdClient *marketdata.Client
+
 	// Cache for per-symbol per-date history stats. Key: "SYMBOL:DATE".
 	symbolHistoryCache sync.Map
 }
@@ -61,6 +65,7 @@ func NewDashboardServer(
 	tierMap map[string]string,
 	historyDates []string,
 	alpacaClient *alpacaapi.Client,
+	mdClient *marketdata.Client,
 ) *DashboardServer {
 	s := &DashboardServer{
 		model:        model,
@@ -71,6 +76,7 @@ func NewDashboardServer(
 		historyDates: historyDates,
 		alpacaClient: alpacaClient,
 		watchlistIDs: make(map[string]string),
+		mdClient:     mdClient,
 	}
 
 	return s
@@ -461,6 +467,22 @@ func (s *DashboardServer) handleNews(w http.ResponseWriter, r *http.Request) {
 		date = time.Now().In(s.loc).Format("2006-01-02")
 	}
 
+	now := time.Now().In(s.loc)
+	today := now.Format("2006-01-02")
+	tomorrow := now.AddDate(0, 0, 1).Format("2006-01-02")
+
+	// Use live Alpaca API for today and tomorrow (next trading day).
+	if s.mdClient != nil && (date == today || date == tomorrow) {
+		articles, err := s.fetchLiveNews(symbol, date)
+		if err != nil {
+			s.log.Warn("live news fetch failed, falling back to parquet", "symbol", symbol, "date", date, "error", err)
+		} else {
+			writeJSON(w, NewsResponse{Symbol: symbol, Date: date, Articles: articles})
+			return
+		}
+	}
+
+	// Fall back to parquet file for historical dates (or if live fetch failed).
 	path := filepath.Join(s.dataDir, "us", "news", date+".parquet")
 	records, err := parquet.ReadFile[NewsRecord](path)
 	if err != nil {
@@ -488,6 +510,44 @@ func (s *DashboardServer) handleNews(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, NewsResponse{Symbol: symbol, Date: date, Articles: articles})
+}
+
+// fetchLiveNews fetches news from the Alpaca marketdata API for a symbol on a given date.
+func (s *DashboardServer) fetchLiveNews(symbol, date string) ([]NewsArticleJSON, error) {
+	t, err := time.ParseInLocation("2006-01-02", date, s.loc)
+	if err != nil {
+		return nil, fmt.Errorf("parsing date: %w", err)
+	}
+	start := time.Date(t.Year(), t.Month(), t.Day(), 4, 0, 0, 0, s.loc)
+	end := time.Date(t.Year(), t.Month(), t.Day(), 20, 0, 0, 0, s.loc)
+
+	news, err := s.mdClient.GetNews(marketdata.GetNewsRequest{
+		Symbols:            []string{symbol},
+		Start:              start,
+		End:                end,
+		TotalLimit:         50,
+		IncludeContent:     true,
+		ExcludeContentless: true,
+		Sort:               marketdata.SortAsc,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("alpaca news API: %w", err)
+	}
+
+	articles := make([]NewsArticleJSON, 0, len(news))
+	for _, a := range news {
+		body := a.Summary
+		if a.Content != "" {
+			body = a.Content
+		}
+		articles = append(articles, NewsArticleJSON{
+			Time:     a.CreatedAt.UnixMilli(),
+			Source:   "alpaca",
+			Headline: a.Headline,
+			Content:  body,
+		})
+	}
+	return articles, nil
 }
 
 func (s *DashboardServer) handleSymbolHistory(w http.ResponseWriter, r *http.Request) {

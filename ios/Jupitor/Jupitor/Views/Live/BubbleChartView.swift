@@ -210,8 +210,10 @@ struct BubbleChartView: View {
 
             // Symbol label + price.
             VStack(spacing: 0) {
+                let closePriceBelowDollar = (sessionStats(bubble.combined)?.close ?? 1) < 1
                 Text(bubble.id)
                     .font(.system(size: max(7, bubble.radius * 0.3), weight: .heavy))
+                    .italic(closePriceBelowDollar)
                     .foregroundStyle((isWatchlist ? Color.watchlistColor : .white).opacity(0.5))
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
