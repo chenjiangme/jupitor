@@ -2,6 +2,7 @@ import SwiftUI
 
 struct BubbleChartView: View {
     @Environment(DashboardViewModel.self) private var vm
+    @Environment(TradeParamsModel.self) private var tp
     let day: DayDataJSON
     let date: String
     var watchlistDate: String = ""
@@ -206,6 +207,30 @@ struct BubbleChartView: View {
                     lineWidth: ringWidth,
                     isSquare: isWatchlist
                 )
+            }
+
+            // Target gain markers (yellow arrows on ring).
+            if dualRing {
+                if let t = tp.targets[date]?["\(bubble.id):REG"], t > 0 {
+                    TargetMarkerCanvas(gain: t, ringRadius: outerDia / 2, lineWidth: ringWidth)
+                        .frame(width: diameter, height: diameter)
+                }
+                if let t = tp.targets[date]?["\(bubble.id):PRE"], t > 0 {
+                    TargetMarkerCanvas(gain: t, ringRadius: innerDia / 2, lineWidth: ringWidth)
+                        .frame(width: diameter, height: diameter)
+                }
+            } else {
+                let targetKey: String = {
+                    switch sessionMode {
+                    case .pre, .next: return "\(bubble.id):PRE"
+                    case .reg: return "\(bubble.id):REG"
+                    case .day: return "\(bubble.id):PRE"
+                    }
+                }()
+                if let t = tp.targets[date]?[targetKey], t > 0 {
+                    TargetMarkerCanvas(gain: t, ringRadius: outerDia / 2, lineWidth: ringWidth)
+                        .frame(width: diameter, height: diameter)
+                }
             }
 
             // Close-position needle (center → outer ring edge).
@@ -483,6 +508,47 @@ struct CloseDialView: View {
             needle.addLine(to: tip)
             context.stroke(needle, with: .color(color.opacity(0.5)),
                           style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+        }
+    }
+}
+
+// MARK: - Target Marker (small yellow arrow on ring)
+
+private struct TargetMarkerCanvas: View {
+    let gain: Double        // 0-5 (1.0 = 100%)
+    let ringRadius: CGFloat
+    let lineWidth: CGFloat
+
+    var body: some View {
+        Canvas { context, size in
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let frac = gain.truncatingRemainder(dividingBy: 1.0)
+            let adjustedFrac = gain >= 1.0 && frac == 0 ? 1.0 : frac
+            let rad = -Double.pi / 2 + 2 * Double.pi * adjustedFrac
+
+            let arrowR = ringRadius + lineWidth / 2 + 3
+            let tipR = ringRadius + lineWidth / 2 - 1
+            let spread: Double = 0.15
+
+            let tip = CGPoint(
+                x: center.x + cos(rad) * tipR,
+                y: center.y + sin(rad) * tipR
+            )
+            let base1 = CGPoint(
+                x: center.x + cos(rad - spread) * arrowR,
+                y: center.y + sin(rad - spread) * arrowR
+            )
+            let base2 = CGPoint(
+                x: center.x + cos(rad + spread) * arrowR,
+                y: center.y + sin(rad + spread) * arrowR
+            )
+
+            var triangle = Path()
+            triangle.move(to: tip)
+            triangle.addLine(to: base1)
+            triangle.addLine(to: base2)
+            triangle.closeSubpath()
+            context.fill(triangle, with: .color(.yellow.opacity(0.85)))
         }
     }
 }
