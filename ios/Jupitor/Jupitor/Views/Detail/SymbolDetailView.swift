@@ -346,9 +346,9 @@ private struct TargetRingView: View {
     @State private var target: Double? = nil
     @State private var prevAngle: Double = 0
     @State private var isDragging = false
+    @State private var isLocked = false
 
     private var outerDia: CGFloat { dia - ringWidth }
-    // Extra padding for the arrow to sit outside the ring.
     private var viewSize: CGFloat { dia + 20 }
 
     var body: some View {
@@ -371,7 +371,7 @@ private struct TargetRingView: View {
                     .frame(width: dia, height: dia)
                 }
 
-                // Target arrow overlay.
+                // Target line overlay.
                 if let t = target, t > 0 {
                     TargetArrowCanvas(
                         gain: t,
@@ -379,16 +379,27 @@ private struct TargetRingView: View {
                         lineWidth: ringWidth
                     )
                 }
+
+                // Lock indicator.
+                if isLocked, target != nil {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.yellow.opacity(0.6))
+                }
             }
             .frame(width: viewSize, height: viewSize)
             .contentShape(Circle())
+            .onTapGesture(count: 2) {
+                guard target != nil else { return }
+                isLocked.toggle()
+            }
             .highPriorityGesture(
                 DragGesture(minimumDistance: 5)
                     .onChanged { value in
+                        guard !isLocked else { return }
                         let center = CGPoint(x: viewSize / 2, y: viewSize / 2)
                         let dx = value.location.x - center.x
                         let dy = value.location.y - center.y
-                        // Angle from 12 o'clock, clockwise (0 to 2π).
                         var angle = atan2(Double(dx), -Double(dy))
                         if angle < 0 { angle += 2 * .pi }
 
@@ -397,14 +408,12 @@ private struct TargetRingView: View {
                             isAdjusting = true
                             prevAngle = angle
                             if target == nil {
-                                // First touch: place arrow at finger angle.
                                 target = angle / (2 * .pi)
                             }
                             return
                         }
 
                         var delta = angle - prevAngle
-                        // Handle wrap-around at 12 o'clock.
                         if delta > .pi { delta -= 2 * .pi }
                         if delta < -.pi { delta += 2 * .pi }
 
@@ -413,9 +422,9 @@ private struct TargetRingView: View {
                         prevAngle = angle
                     }
                     .onEnded { _ in
+                        guard !isLocked else { return }
                         isDragging = false
                         isAdjusting = false
-                        // Clear if dragged below 2%.
                         if let t = target, t < 0.02 {
                             target = nil
                             Task { await tp.deleteTarget(key: targetKey, date: date) }
@@ -433,7 +442,12 @@ private struct TargetRingView: View {
                 if let t = target, t > 0 {
                     Text(String(format: "%.0f%%", t * 100))
                         .font(.caption2.bold())
-                        .foregroundStyle(.yellow)
+                        .foregroundStyle(isLocked ? .yellow.opacity(0.5) : .yellow)
+                }
+                if isLocked {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.yellow.opacity(0.5))
                 }
             }
         }
