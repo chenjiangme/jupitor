@@ -18,6 +18,7 @@ struct SymbolDetailView: View {
     @State private var panOffset: CGFloat = 0
     @State private var isTransitioning = false
     @State private var isAdjustingTarget = false
+    @State private var isSwiping = false
     @State private var targetResetToken = 0
 
     private var currentSymbol: String { symbols[currentIndex].symbol }
@@ -235,17 +236,20 @@ struct SymbolDetailView: View {
         .background(Color.black)
         .navigationTitle(combined.symbol)
         .navigationBarTitleDisplayMode(.inline)
+        .scrollDisabled(isSwiping)
         .simultaneousGesture(
             DragGesture(minimumDistance: 30)
                 .onChanged { value in
                     guard !isTransitioning, !isAdjustingTarget else { return }
                     let t = value.translation
                     guard abs(t.width) > abs(t.height) else { return }
+                    isSwiping = true
                     if (t.width < 0 && canGoForward) || (t.width > 0 && canGoBack) {
                         panOffset = t.width
                     }
                 }
                 .onEnded { value in
+                    isSwiping = false
                     guard !isTransitioning, !isAdjustingTarget else {
                         panOffset = 0
                         return
