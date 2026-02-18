@@ -526,29 +526,19 @@ private struct TargetMarkerCanvas: View {
             let adjustedFrac = gain >= 1.0 && frac == 0 ? 1.0 : frac
             let rad = -Double.pi / 2 + 2 * Double.pi * adjustedFrac
 
-            let arrowR = ringRadius + lineWidth / 2 + 3
-            let tipR = ringRadius + lineWidth / 2 - 1
-            let spread: Double = 0.15
+            let innerR = ringRadius - lineWidth / 2 - 2
+            let outerR = ringRadius + lineWidth / 2 + 2
 
-            let tip = CGPoint(
-                x: center.x + cos(rad) * tipR,
-                y: center.y + sin(rad) * tipR
-            )
-            let base1 = CGPoint(
-                x: center.x + cos(rad - spread) * arrowR,
-                y: center.y + sin(rad - spread) * arrowR
-            )
-            let base2 = CGPoint(
-                x: center.x + cos(rad + spread) * arrowR,
-                y: center.y + sin(rad + spread) * arrowR
-            )
+            let p1 = CGPoint(x: center.x + cos(rad) * innerR,
+                             y: center.y + sin(rad) * innerR)
+            let p2 = CGPoint(x: center.x + cos(rad) * outerR,
+                             y: center.y + sin(rad) * outerR)
 
-            var triangle = Path()
-            triangle.move(to: tip)
-            triangle.addLine(to: base1)
-            triangle.addLine(to: base2)
-            triangle.closeSubpath()
-            context.fill(triangle, with: .color(.yellow.opacity(0.85)))
+            var line = Path()
+            line.move(to: p1)
+            line.addLine(to: p2)
+            context.stroke(line, with: .color(.yellow.opacity(0.9)),
+                          style: StrokeStyle(lineWidth: 2, lineCap: .round))
         }
     }
 }
