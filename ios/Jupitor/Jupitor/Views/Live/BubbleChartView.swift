@@ -209,14 +209,16 @@ struct BubbleChartView: View {
                 )
             }
 
-            // Target gain markers (yellow arrows on ring).
+            // Target gain markers (yellow line across ring).
             if dualRing {
                 if let t = tp.targets[date]?["\(bubble.id):REG"], t > 0 {
-                    TargetMarkerCanvas(gain: t, ringRadius: outerDia / 2, lineWidth: ringWidth)
+                    TargetMarkerCanvas(gain: t, ringRadius: outerDia / 2, lineWidth: ringWidth,
+                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15)
                         .frame(width: diameter, height: diameter)
                 }
                 if let t = tp.targets[date]?["\(bubble.id):PRE"], t > 0 {
-                    TargetMarkerCanvas(gain: t, ringRadius: innerDia / 2, lineWidth: ringWidth)
+                    TargetMarkerCanvas(gain: t, ringRadius: innerDia / 2, lineWidth: ringWidth,
+                                       isSquare: isWatchlist, cornerRadius: innerDia * 0.15)
                         .frame(width: diameter, height: diameter)
                 }
             } else {
@@ -228,7 +230,8 @@ struct BubbleChartView: View {
                     }
                 }()
                 if let t = tp.targets[date]?[targetKey], t > 0 {
-                    TargetMarkerCanvas(gain: t, ringRadius: outerDia / 2, lineWidth: ringWidth)
+                    TargetMarkerCanvas(gain: t, ringRadius: outerDia / 2, lineWidth: ringWidth,
+                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15)
                         .frame(width: diameter, height: diameter)
                 }
             }
@@ -516,8 +519,10 @@ struct CloseDialView: View {
 
 private struct TargetMarkerCanvas: View {
     let gain: Double        // 0-5 (1.0 = 100%)
-    let ringRadius: CGFloat
-    let lineWidth: CGFloat
+    let ringRadius: CGFloat // center of the ring stroke
+    let lineWidth: CGFloat  // ring stroke width
+    var isSquare: Bool = false
+    var cornerRadius: CGFloat = 0
 
     var body: some View {
         Canvas { context, size in
@@ -526,13 +531,22 @@ private struct TargetMarkerCanvas: View {
             let adjustedFrac = gain >= 1.0 && frac == 0 ? 1.0 : frac
             let rad = -Double.pi / 2 + 2 * Double.pi * adjustedFrac
 
-            let innerR = ringRadius - lineWidth / 2 - 2
-            let outerR = ringRadius + lineWidth / 2 + 2
+            let p1: CGPoint
+            let p2: CGPoint
 
-            let p1 = CGPoint(x: center.x + cos(rad) * innerR,
-                             y: center.y + sin(rad) * innerR)
-            let p2 = CGPoint(x: center.x + cos(rad) * outerR,
-                             y: center.y + sin(rad) * outerR)
+            if isSquare && cornerRadius > 0 {
+                let innerHalf = ringRadius - lineWidth / 2
+                let outerHalf = ringRadius + lineWidth / 2
+                let innerCR = max(0, cornerRadius - lineWidth / 2)
+                let outerCR = cornerRadius + lineWidth / 2
+                p1 = Self.pointOnRoundedRect(angle: rad, halfSize: innerHalf, cr: innerCR, center: center)
+                p2 = Self.pointOnRoundedRect(angle: rad, halfSize: outerHalf, cr: outerCR, center: center)
+            } else {
+                let innerR = ringRadius - lineWidth / 2
+                let outerR = ringRadius + lineWidth / 2
+                p1 = CGPoint(x: center.x + cos(rad) * innerR, y: center.y + sin(rad) * innerR)
+                p2 = CGPoint(x: center.x + cos(rad) * outerR, y: center.y + sin(rad) * outerR)
+            }
 
             var line = Path()
             line.move(to: p1)
@@ -540,6 +554,43 @@ private struct TargetMarkerCanvas: View {
             context.stroke(line, with: .color(.yellow.opacity(0.9)),
                           style: StrokeStyle(lineWidth: 2, lineCap: .round))
         }
+    }
+
+    /// Ray-rounded-rectangle intersection: returns the point on the perimeter
+    /// of a rounded rectangle where a ray from center at `angle` exits.
+    private static func pointOnRoundedRect(angle: Double, halfSize: CGFloat, cr: CGFloat, center: CGPoint) -> CGPoint {
+        let s = Double(halfSize)
+        let r = min(Double(cr), s)
+        let straight = s - r // where corner arcs begin
+
+        let dx = cos(angle)
+        let dy = sin(angle)
+
+        // Ray-box intersection.
+        let tX = dx != 0 ? s / abs(dx) : Double.infinity
+        let tY = dy != 0 ? s / abs(dy) : Double.infinity
+        let t = min(tX, tY)
+        let px = dx * t
+        let py = dy * t
+
+        // Check if ray exits through a corner region.
+        if abs(px) > straight + 0.001 && abs(py) > straight + 0.001 && r > 0 {
+            let ccx = (px > 0 ? 1.0 : -1.0) * straight
+            let ccy = (py > 0 ? 1.0 : -1.0) * straight
+
+            // Solve |(dx*t - ccx, dy*t - ccy)| = r
+            let b = -2.0 * (dx * ccx + dy * ccy)
+            let c = ccx * ccx + ccy * ccy - r * r
+            let disc = b * b - 4.0 * c
+            if disc >= 0 {
+                let t1 = (-b + sqrt(disc)) / 2.0
+                let t2 = (-b - sqrt(disc)) / 2.0
+                let tc = max(t1, t2)
+                return CGPoint(x: center.x + CGFloat(dx * tc), y: center.y + CGFloat(dy * tc))
+            }
+        }
+
+        return CGPoint(x: center.x + CGFloat(px), y: center.y + CGFloat(py))
     }
 }
 
