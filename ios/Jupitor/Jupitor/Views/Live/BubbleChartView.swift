@@ -210,7 +210,7 @@ struct BubbleChartView: View {
             }
 
             // Close gain markers (dark green line across ring).
-            let darkGreen = Color(hue: 0.33, saturation: 0.9, brightness: 0.4)
+            let darkGreen = Color(hue: 0.33, saturation: 1.0, brightness: 0.7)
             if dualRing {
                 if let cg = bubble.combined.reg?.closeGain, cg > 0 {
                     TargetMarkerCanvas(gain: cg, ringRadius: outerDia / 2, lineWidth: ringWidth,
