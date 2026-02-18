@@ -348,12 +348,28 @@ func (s *DashboardServer) refreshNewsCache() {
 				s.log.Debug("news fetch error", "source", "stocktwits", "symbol", sym, "error", err)
 			}
 
+			// Merge with existing cached articles (keep old articles from sources
+			// that may have failed this cycle, and deduplicate by time+source).
+			key := sym + ":" + date
+			seen := make(map[string]bool, len(articles))
+			for _, a := range articles {
+				seen[fmt.Sprintf("%d:%s", a.Time, a.Source)] = true
+			}
+			if old, ok := s.newsCache.Load(key); ok {
+				for _, a := range old.([]NewsArticleJSON) {
+					k := fmt.Sprintf("%d:%s", a.Time, a.Source)
+					if !seen[k] {
+						articles = append(articles, a)
+						seen[k] = true
+					}
+				}
+			}
+
 			// Sort by time.
 			sort.Slice(articles, func(i, j int) bool {
 				return articles[i].Time < articles[j].Time
 			})
 
-			key := sym + ":" + date
 			s.newsCache.Store(key, articles)
 			atomic.AddInt64(&totalArticles, int64(len(articles)))
 		}(sym)
