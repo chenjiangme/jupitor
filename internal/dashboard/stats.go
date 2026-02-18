@@ -22,6 +22,7 @@ type SymbolStats struct {
 	Turnover  float64 // sum(price * size)
 	MaxGain   float64 // max possible gain over all (buy, sell) pairs where sell is after buy
 	MaxLoss   float64 // max possible loss over all (buy, sell) pairs where sell is after buy
+	CloseGain float64 // (close - low) / vwap using same VWAP logic as MaxGain
 }
 
 // CombinedStats pairs pre-market and regular stats for a single symbol.
@@ -185,11 +186,17 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 				if windowVwap > 0 {
 					s.MaxGain = bestGain / windowVwap
 					s.MaxLoss = bestLoss / windowVwap
+					if s.Close > s.Low {
+						s.CloseGain = (s.Close - s.Low) / windowVwap
+					}
 				}
 			}
 		} else if vwap > 0 {
 			s.MaxGain = bestGain / vwap
 			s.MaxLoss = bestLoss / vwap
+			if s.Close > s.Low {
+				s.CloseGain = (s.Close - s.Low) / vwap
+			}
 		}
 
 		m[sym] = s

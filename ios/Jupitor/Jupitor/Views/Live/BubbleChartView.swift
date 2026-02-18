@@ -209,6 +209,27 @@ struct BubbleChartView: View {
                 )
             }
 
+            // Close gain markers (dark green line across ring).
+            let darkGreen = Color(hue: 0.33, saturation: 0.9, brightness: 0.4)
+            if dualRing {
+                if let cg = bubble.combined.reg?.closeGain, cg > 0 {
+                    TargetMarkerCanvas(gain: cg, ringRadius: outerDia / 2, lineWidth: ringWidth,
+                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15, color: darkGreen)
+                        .frame(width: diameter, height: diameter)
+                }
+                if let cg = bubble.combined.pre?.closeGain, cg > 0 {
+                    TargetMarkerCanvas(gain: cg, ringRadius: innerDia / 2, lineWidth: ringWidth,
+                                       isSquare: isWatchlist, cornerRadius: innerDia * 0.15, color: darkGreen)
+                        .frame(width: diameter, height: diameter)
+                }
+            } else {
+                if let stats = sessionStats(bubble.combined), let cg = stats.closeGain, cg > 0 {
+                    TargetMarkerCanvas(gain: cg, ringRadius: outerDia / 2, lineWidth: ringWidth,
+                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15, color: darkGreen)
+                        .frame(width: diameter, height: diameter)
+                }
+            }
+
             // Target gain markers (yellow line across ring).
             if dualRing {
                 if let t = tp.targets[date]?["\(bubble.id):REG"], t > 0 {
@@ -317,7 +338,8 @@ struct BubbleChartView: View {
                 size: pre.size + reg.size,
                 turnover: pre.turnover + reg.turnover,
                 maxGain: max(pre.maxGain, reg.maxGain),
-                maxLoss: max(pre.maxLoss, reg.maxLoss)
+                maxLoss: max(pre.maxLoss, reg.maxLoss),
+                closeGain: max(pre.closeGain ?? 0, reg.closeGain ?? 0)
             )
         }
     }
@@ -562,6 +584,7 @@ private struct TargetMarkerCanvas: View {
     let lineWidth: CGFloat  // ring stroke width
     var isSquare: Bool = false
     var cornerRadius: CGFloat = 0
+    var color: Color = .yellow.opacity(0.9)
 
     var body: some View {
         Canvas { context, size in
@@ -590,7 +613,7 @@ private struct TargetMarkerCanvas: View {
             var line = Path()
             line.move(to: p1)
             line.addLine(to: p2)
-            context.stroke(line, with: .color(.yellow.opacity(0.9)),
+            context.stroke(line, with: .color(color),
                           style: StrokeStyle(lineWidth: 2, lineCap: .round))
         }
     }

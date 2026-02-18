@@ -8,16 +8,17 @@ import (
 
 // SymbolStatsJSON is the JSON representation of per-symbol session stats.
 type SymbolStatsJSON struct {
-	Symbol   string  `json:"symbol"`
-	Trades   int     `json:"trades"`
-	High     float64 `json:"high"`
-	Low      float64 `json:"low"`
-	Open     float64 `json:"open"`
-	Close    float64 `json:"close"`
-	Size     int64   `json:"size"`
-	Turnover float64 `json:"turnover"`
-	MaxGain  float64 `json:"maxGain"`
-	MaxLoss  float64 `json:"maxLoss"`
+	Symbol    string  `json:"symbol"`
+	Trades    int     `json:"trades"`
+	High      float64 `json:"high"`
+	Low       float64 `json:"low"`
+	Open      float64 `json:"open"`
+	Close     float64 `json:"close"`
+	Size      int64   `json:"size"`
+	Turnover  float64 `json:"turnover"`
+	MaxGain   float64 `json:"maxGain"`
+	MaxLoss   float64 `json:"maxLoss"`
+	CloseGain float64 `json:"closeGain,omitempty"`
 }
 
 // CombinedStatsJSON pairs pre-market and regular session stats.
@@ -110,16 +111,17 @@ func convertSymbolStats(s *dashboard.SymbolStats) *SymbolStatsJSON {
 		return nil
 	}
 	return &SymbolStatsJSON{
-		Symbol:   s.Symbol,
-		Trades:   s.Trades,
-		High:     s.High,
-		Low:      s.Low,
-		Open:     s.Open,
-		Close:    s.Close,
-		Size:     s.TotalSize,
-		Turnover: s.Turnover,
-		MaxGain:  s.MaxGain,
-		MaxLoss:  s.MaxLoss,
+		Symbol:    s.Symbol,
+		Trades:    s.Trades,
+		High:      s.High,
+		Low:       s.Low,
+		Open:      s.Open,
+		Close:     s.Close,
+		Size:      s.TotalSize,
+		Turnover:  s.Turnover,
+		MaxGain:   s.MaxGain,
+		MaxLoss:   s.MaxLoss,
+		CloseGain: s.CloseGain,
 	}
 }
 
