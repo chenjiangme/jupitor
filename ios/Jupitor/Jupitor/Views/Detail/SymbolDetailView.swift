@@ -362,6 +362,11 @@ private struct TargetRingView: View {
                     lineWidth: ringWidth
                 )
 
+                // Close gain marker (green line across ring).
+                if let cg = stats.closeGain, cg > 0 {
+                    CloseGainMarkerCanvas(gain: cg, ringRadius: outerDia / 2, lineWidth: ringWidth)
+                }
+
                 if stats.high > stats.low {
                     CloseDialView(
                         fraction: (stats.close - stats.low) / (stats.high - stats.low),
@@ -494,6 +499,39 @@ private struct TargetArrowCanvas: View {
             line.move(to: p1)
             line.addLine(to: p2)
             context.stroke(line, with: .color(.yellow.opacity(0.9)),
+                          style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+        }
+    }
+}
+
+// MARK: - Close Gain Marker
+
+private struct CloseGainMarkerCanvas: View {
+    let gain: Double
+    let ringRadius: CGFloat
+    let lineWidth: CGFloat
+
+    private let color = Color(hue: 0.33, saturation: 1.0, brightness: 0.7)
+
+    var body: some View {
+        Canvas { context, size in
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let frac = gain.truncatingRemainder(dividingBy: 1.0)
+            let adjustedFrac = gain >= 1.0 && frac == 0 ? 1.0 : frac
+            let rad = -Double.pi / 2 + 2 * Double.pi * adjustedFrac
+
+            let innerR = ringRadius - lineWidth / 2
+            let outerR = ringRadius + lineWidth / 2
+
+            let p1 = CGPoint(x: center.x + cos(rad) * innerR,
+                             y: center.y + sin(rad) * innerR)
+            let p2 = CGPoint(x: center.x + cos(rad) * outerR,
+                             y: center.y + sin(rad) * outerR)
+
+            var line = Path()
+            line.move(to: p1)
+            line.addLine(to: p2)
+            context.stroke(line, with: .color(color),
                           style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
         }
     }
