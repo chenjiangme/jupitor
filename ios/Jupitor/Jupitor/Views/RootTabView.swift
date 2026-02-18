@@ -264,8 +264,19 @@ struct RootTabView: View {
                 SettingsView()
             }
             .onChange(of: vm.date) { oldDate, newDate in
-                if !newDate.isEmpty && (currentDate.isEmpty || currentDate == oldDate) {
+                let isFirst = currentDate.isEmpty
+                if !newDate.isEmpty && (isFirst || currentDate == oldDate) {
                     currentDate = newDate
+                }
+                // Auto-detect session on first load.
+                if isFirst && !newDate.isEmpty {
+                    if let next = vm.next, !next.tiers.isEmpty {
+                        sessionMode = .next
+                    } else if let today = vm.today, today.regCount > 0 {
+                        sessionMode = .reg
+                    } else {
+                        sessionMode = .pre
+                    }
                 }
             }
             .onChange(of: nextData == nil) { _, noNext in
