@@ -209,23 +209,43 @@ struct BubbleChartView: View {
                 )
             }
 
-            // Close gain markers (dark green line across ring).
-            let darkGreen = Color(hue: 0.33, saturation: 1.0, brightness: 0.7)
+            // Close gain markers (green line across ring).
+            let closeGainColor = Color(hue: 0.33, saturation: 1.0, brightness: 0.7)
             if dualRing {
                 if let cg = bubble.combined.reg?.closeGain, cg > 0 {
                     TargetMarkerCanvas(gain: cg, ringRadius: outerDia / 2, lineWidth: ringWidth,
-                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15, color: darkGreen)
+                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15, color: closeGainColor)
                         .frame(width: diameter, height: diameter)
                 }
                 if let cg = bubble.combined.pre?.closeGain, cg > 0 {
                     TargetMarkerCanvas(gain: cg, ringRadius: innerDia / 2, lineWidth: ringWidth,
-                                       isSquare: isWatchlist, cornerRadius: innerDia * 0.15, color: darkGreen)
+                                       isSquare: isWatchlist, cornerRadius: innerDia * 0.15, color: closeGainColor)
                         .frame(width: diameter, height: diameter)
                 }
             } else {
                 if let stats = sessionStats(bubble.combined), let cg = stats.closeGain, cg > 0 {
                     TargetMarkerCanvas(gain: cg, ringRadius: outerDia / 2, lineWidth: ringWidth,
-                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15, color: darkGreen)
+                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15, color: closeGainColor)
+                        .frame(width: diameter, height: diameter)
+                }
+            }
+
+            // Max drawdown markers (cyan line — where price dropped to after peak).
+            if dualRing {
+                if let reg = bubble.combined.reg, let dd = reg.maxDrawdown, dd > 0 {
+                    TargetMarkerCanvas(gain: reg.maxGain - dd, ringRadius: outerDia / 2, lineWidth: ringWidth,
+                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15, color: .cyan.opacity(0.9))
+                        .frame(width: diameter, height: diameter)
+                }
+                if let pre = bubble.combined.pre, let dd = pre.maxDrawdown, dd > 0 {
+                    TargetMarkerCanvas(gain: pre.maxGain - dd, ringRadius: innerDia / 2, lineWidth: ringWidth,
+                                       isSquare: isWatchlist, cornerRadius: innerDia * 0.15, color: .cyan.opacity(0.9))
+                        .frame(width: diameter, height: diameter)
+                }
+            } else {
+                if let stats = sessionStats(bubble.combined), let dd = stats.maxDrawdown, dd > 0 {
+                    TargetMarkerCanvas(gain: stats.maxGain - dd, ringRadius: outerDia / 2, lineWidth: ringWidth,
+                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15, color: .cyan.opacity(0.9))
                         .frame(width: diameter, height: diameter)
                 }
             }
@@ -339,7 +359,8 @@ struct BubbleChartView: View {
                 turnover: pre.turnover + reg.turnover,
                 maxGain: max(pre.maxGain, reg.maxGain),
                 maxLoss: max(pre.maxLoss, reg.maxLoss),
-                closeGain: max(pre.closeGain ?? 0, reg.closeGain ?? 0)
+                closeGain: max(pre.closeGain ?? 0, reg.closeGain ?? 0),
+                maxDrawdown: max(pre.maxDrawdown ?? 0, reg.maxDrawdown ?? 0)
             )
         }
     }

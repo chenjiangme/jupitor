@@ -22,7 +22,8 @@ type SymbolStats struct {
 	Turnover  float64 // sum(price * size)
 	MaxGain   float64 // max possible gain over all (buy, sell) pairs where sell is after buy
 	MaxLoss   float64 // max possible loss over all (buy, sell) pairs where sell is after buy
-	CloseGain float64 // (close - low) / vwap using same VWAP logic as MaxGain
+	CloseGain    float64 // (close - low) / vwap using same VWAP logic as MaxGain
+	MaxDrawdown  float64 // (peakPrice - minAfterPeak) / vwap — drawdown from max gain point
 }
 
 // CombinedStats pairs pre-market and regular stats for a single symbol.
@@ -164,6 +165,21 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 			s.Low = trimmedLow
 		}
 
+		// Find max drawdown from the peak (lowest price after gainIdx).
+		peakPrice := 0.0
+		minAfterPeak := math.MaxFloat64
+		if gainIdx >= 0 {
+			peakPrice = records[indices[gainIdx]].Price
+			for j := gainIdx + 1; j < len(indices); j++ {
+				if outlier[j] {
+					continue
+				}
+				if records[indices[j]].Price < minAfterPeak {
+					minAfterPeak = records[indices[j]].Price
+				}
+			}
+		}
+
 		// Compute VWAP between the max-gain and max-loss time points,
 		// then express gain/loss as percentages relative to that center.
 		if gainIdx >= 0 && lossIdx >= 0 && gainIdx != lossIdx {
@@ -189,6 +205,9 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 					if s.Close > s.Low {
 						s.CloseGain = (s.Close - s.Low) / windowVwap
 					}
+					if peakPrice > minAfterPeak {
+						s.MaxDrawdown = (peakPrice - minAfterPeak) / windowVwap
+					}
 				}
 			}
 		} else if vwap > 0 {
@@ -196,6 +215,9 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 			s.MaxLoss = bestLoss / vwap
 			if s.Close > s.Low {
 				s.CloseGain = (s.Close - s.Low) / vwap
+			}
+			if peakPrice > minAfterPeak {
+				s.MaxDrawdown = (peakPrice - minAfterPeak) / vwap
 			}
 		}
 

@@ -15,6 +15,7 @@ struct SymbolStatsJSON: Codable, Equatable {
     let maxGain: Double
     let maxLoss: Double
     let closeGain: Double?
+    let maxDrawdown: Double?
 }
 
 struct CombinedStatsJSON: Codable, Identifiable, Equatable {
