@@ -404,41 +404,39 @@ private struct TargetRingView: View {
                 guard target != nil else { return }
                 isLocked.toggle()
             }
-            .highPriorityGesture(
-                DragGesture(minimumDistance: 20)
+            .gesture(
+                LongPressGesture(minimumDuration: 0.3)
+                    .sequenced(before: DragGesture(minimumDistance: 5))
                     .onChanged { value in
                         guard !isLocked else { return }
-                        let center = CGPoint(x: viewSize / 2, y: viewSize / 2)
-                        let dx = value.location.x - center.x
-                        let dy = value.location.y - center.y
-                        let dist = sqrt(dx * dx + dy * dy)
-                        var angle = atan2(Double(dx), -Double(dy))
-                        if angle < 0 { angle += 2 * .pi }
+                        switch value {
+                        case .second(true, let drag):
+                            guard let drag else { return }
+                            let center = CGPoint(x: viewSize / 2, y: viewSize / 2)
+                            let dx = drag.location.x - center.x
+                            let dy = drag.location.y - center.y
+                            var angle = atan2(Double(dx), -Double(dy))
+                            if angle < 0 { angle += 2 * .pi }
 
-                        if !isDragging {
-                            // Only start if drag began near the ring edge.
-                            let startDx = value.startLocation.x - center.x
-                            let startDy = value.startLocation.y - center.y
-                            let startDist = sqrt(startDx * startDx + startDy * startDy)
-                            let ringR = outerDia / 2
-                            guard startDist > ringR * 0.5 else { return }
-
-                            isDragging = true
-                            isAdjusting = true
-                            prevAngle = angle
-                            if target == nil {
-                                target = angle / (2 * .pi)
+                            if !isDragging {
+                                isDragging = true
+                                isAdjusting = true
+                                prevAngle = angle
+                                if target == nil {
+                                    target = angle / (2 * .pi)
+                                }
+                                return
                             }
-                            return
+
+                            var delta = angle - prevAngle
+                            if delta > .pi { delta -= 2 * .pi }
+                            if delta < -.pi { delta += 2 * .pi }
+
+                            let current = target ?? 0
+                            target = max(0, min(5.0, current + delta / (2 * .pi)))
+                            prevAngle = angle
+                        default: break
                         }
-
-                        var delta = angle - prevAngle
-                        if delta > .pi { delta -= 2 * .pi }
-                        if delta < -.pi { delta += 2 * .pi }
-
-                        let current = target ?? 0
-                        target = max(0, min(5.0, current + delta / (2 * .pi)))
-                        prevAngle = angle
                     }
                     .onEnded { _ in
                         guard !isLocked else { return }
