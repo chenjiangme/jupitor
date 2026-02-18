@@ -270,7 +270,7 @@ struct BubbleChartView: View {
                 Text(bubble.id)
                     .font(.system(size: max(7, bubble.radius * 0.3), weight: .heavy))
                     .italic(closePriceBelowDollar)
-                    .foregroundStyle((isWatchlist ? Color.watchlistColor : .white).opacity(0.5))
+                    .foregroundStyle((isWatchlist ? Color.watchlistColor : Color.tierColor(for: bubble.combined.tier)).opacity(0.5))
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                 if isWatchlist, let stats = sessionStats(bubble.combined) {
