@@ -405,16 +405,24 @@ private struct TargetRingView: View {
                 isLocked.toggle()
             }
             .highPriorityGesture(
-                DragGesture(minimumDistance: 5)
+                DragGesture(minimumDistance: 20)
                     .onChanged { value in
                         guard !isLocked else { return }
                         let center = CGPoint(x: viewSize / 2, y: viewSize / 2)
                         let dx = value.location.x - center.x
                         let dy = value.location.y - center.y
+                        let dist = sqrt(dx * dx + dy * dy)
                         var angle = atan2(Double(dx), -Double(dy))
                         if angle < 0 { angle += 2 * .pi }
 
                         if !isDragging {
+                            // Only start if drag began near the ring edge.
+                            let startDx = value.startLocation.x - center.x
+                            let startDy = value.startLocation.y - center.y
+                            let startDist = sqrt(startDx * startDx + startDy * startDy)
+                            let ringR = outerDia / 2
+                            guard startDist > ringR * 0.5 else { return }
+
                             isDragging = true
                             isAdjusting = true
                             prevAngle = angle
