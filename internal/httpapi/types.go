@@ -26,7 +26,18 @@ type CombinedStatsJSON struct {
 	Tier   string           `json:"tier"`
 	Pre    *SymbolStatsJSON `json:"pre,omitempty"`
 	Reg    *SymbolStatsJSON `json:"reg,omitempty"`
-	News   int              `json:"news,omitempty"`
+	News   int              `json:"news,omitempty"`   // non-StockTwits article count
+	StPre  int              `json:"stPre,omitempty"`  // StockTwits before 9:30 AM ET
+	StReg  int              `json:"stReg,omitempty"`  // StockTwits 9:30 AM – 4 PM ET
+	StPost int              `json:"stPost,omitempty"` // StockTwits after 4 PM ET
+}
+
+// SymbolNewsCounts holds per-symbol news counts broken down by source and session.
+type SymbolNewsCounts struct {
+	News   int // non-StockTwits articles
+	StPre  int // StockTwits before 9:30 AM ET
+	StReg  int // StockTwits 9:30 AM – 4 PM ET
+	StPost int // StockTwits after 4 PM ET
 }
 
 // TierGroupJSON holds sorted symbols for one tier.
@@ -114,7 +125,7 @@ func convertSymbolStats(s *dashboard.SymbolStats) *SymbolStatsJSON {
 
 // convertDayData converts a dashboard.DayData to JSON, enriching with
 // tier names and optional news counts.
-func convertDayData(d dashboard.DayData, newsCounts map[string]int) DayDataJSON {
+func convertDayData(d dashboard.DayData, newsCounts map[string]*SymbolNewsCounts) DayDataJSON {
 	tiers := make([]TierGroupJSON, 0, len(d.Tiers))
 	for _, tier := range d.Tiers {
 		symbols := make([]CombinedStatsJSON, 0, len(tier.Symbols))
@@ -125,8 +136,11 @@ func convertDayData(d dashboard.DayData, newsCounts map[string]int) DayDataJSON 
 				Pre:    convertSymbolStats(c.Pre),
 				Reg:    convertSymbolStats(c.Reg),
 			}
-			if newsCounts != nil {
-				cs.News = newsCounts[c.Symbol]
+			if nc := newsCounts[c.Symbol]; nc != nil {
+				cs.News = nc.News
+				cs.StPre = nc.StPre
+				cs.StReg = nc.StReg
+				cs.StPost = nc.StPost
 			}
 			symbols = append(symbols, cs)
 		}

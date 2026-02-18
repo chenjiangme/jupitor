@@ -561,18 +561,77 @@ func (s *DashboardServer) nextDateFor(date string) string {
 	return ""
 }
 
-// loadNewsCounts reads the news parquet file for a date and returns symbol→count.
-func (s *DashboardServer) loadNewsCounts(date string) map[string]int {
+// computeNewsCounts returns per-symbol news counts from the in-memory cache.
+// StockTwits messages are bucketed by ET session; other sources counted as news.
+// Only messages whose ET date matches `date` are counted.
+func (s *DashboardServer) computeNewsCounts(date string) map[string]*SymbolNewsCounts {
+	result := make(map[string]*SymbolNewsCounts)
+	suffix := ":" + date
+	s.newsCache.Range(func(k, v any) bool {
+		key := k.(string)
+		if !strings.HasSuffix(key, suffix) {
+			return true
+		}
+		sym := key[:len(key)-len(suffix)]
+		articles := v.([]NewsArticleJSON)
+		nc := &SymbolNewsCounts{}
+		for _, a := range articles {
+			t := time.UnixMilli(a.Time).In(s.loc)
+			if t.Format("2006-01-02") != date {
+				continue
+			}
+			minutes := t.Hour()*60 + t.Minute()
+			if a.Source == "stocktwits" {
+				if minutes < 570 { // before 9:30 AM
+					nc.StPre++
+				} else if minutes < 960 { // before 4 PM
+					nc.StReg++
+				} else {
+					nc.StPost++
+				}
+			} else {
+				nc.News++
+			}
+		}
+		result[sym] = nc
+		return true
+	})
+	return result
+}
+
+// loadNewsCounts reads the news parquet file for a date and returns per-symbol counts.
+func (s *DashboardServer) loadNewsCounts(date string) map[string]*SymbolNewsCounts {
 	path := filepath.Join(s.dataDir, "us", "news", date+".parquet")
 	records, err := parquet.ReadFile[NewsRecord](path)
 	if err != nil {
 		return nil
 	}
-	counts := make(map[string]int)
+	result := make(map[string]*SymbolNewsCounts)
 	for i := range records {
-		counts[records[i].Symbol]++
+		r := &records[i]
+		nc := result[r.Symbol]
+		if nc == nil {
+			nc = &SymbolNewsCounts{}
+			result[r.Symbol] = nc
+		}
+		t := time.UnixMilli(r.Time).In(s.loc)
+		if t.Format("2006-01-02") != date {
+			continue
+		}
+		minutes := t.Hour()*60 + t.Minute()
+		if r.Source == "stocktwits" {
+			if minutes < 570 {
+				nc.StPre++
+			} else if minutes < 960 {
+				nc.StReg++
+			} else {
+				nc.StPost++
+			}
+		} else {
+			nc.News++
+		}
 	}
-	return counts
+	return result
 }
 
 func (s *DashboardServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -590,7 +649,7 @@ func (s *DashboardServer) handleDashboard(w http.ResponseWriter, r *http.Request
 	_, nextExIdx := s.model.NextSnapshot()
 
 	todayData := dashboard.ComputeDayData("TODAY", todayExIdx, s.tierMap, todayOpen930ET, sortMode)
-	newsCounts := s.loadNewsCounts(date)
+	newsCounts := s.computeNewsCounts(date)
 	todayJSON := convertDayData(todayData, newsCounts)
 	todayJSON.Date = date
 

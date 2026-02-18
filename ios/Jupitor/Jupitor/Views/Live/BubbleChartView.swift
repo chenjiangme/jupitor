@@ -246,8 +246,26 @@ struct BubbleChartView: View {
                 .frame(width: diameter, height: diameter)
             }
 
-            // Symbol label + price.
+            // Symbol label + counts + price.
             VStack(spacing: 0) {
+                // StockTwits + news counts.
+                let counts = newsCounts(for: bubble.combined)
+                if counts.st > 0 || counts.news > 0 {
+                    HStack(spacing: 2) {
+                        if counts.st > 0 {
+                            Text("\(counts.st)")
+                                .foregroundStyle(counts.stColor.opacity(0.5))
+                        }
+                        if counts.news > 0 {
+                            Text("\(counts.news)")
+                                .foregroundStyle(Color.blue.opacity(0.5))
+                        }
+                    }
+                    .font(.system(size: max(5, bubble.radius * 0.18)))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                }
+
                 let closePriceBelowDollar = (sessionStats(bubble.combined)?.close ?? 1) < 1
                 Text(bubble.id)
                     .font(.system(size: max(7, bubble.radius * 0.3), weight: .heavy))
@@ -304,6 +322,27 @@ struct BubbleChartView: View {
         }
     }
 
+
+    /// StockTwits count + color and news count for the current session.
+    private func newsCounts(for c: CombinedStatsJSON) -> (st: Int, stColor: Color, news: Int) {
+        let st: Int
+        let color: Color
+        switch sessionMode {
+        case .pre:
+            st = c.stPre ?? 0
+            color = .indigo
+        case .reg:
+            st = c.stReg ?? 0
+            color = .green
+        case .day:
+            st = (c.stPre ?? 0) + (c.stReg ?? 0)
+            color = .white
+        case .next:
+            st = c.stPost ?? 0
+            color = .orange
+        }
+        return (st, color, c.news ?? 0)
+    }
 
     private func singleRingGain(_ c: CombinedStatsJSON) -> Double {
         switch sessionMode {

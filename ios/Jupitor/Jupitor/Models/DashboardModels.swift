@@ -22,6 +22,9 @@ struct CombinedStatsJSON: Codable, Identifiable, Equatable {
     let pre: SymbolStatsJSON?
     let reg: SymbolStatsJSON?
     let news: Int?
+    let stPre: Int?
+    let stReg: Int?
+    let stPost: Int?
 
     var id: String { symbol }
 }
