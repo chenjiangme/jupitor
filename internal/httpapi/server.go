@@ -239,13 +239,17 @@ func (s *DashboardServer) refreshNewsCache() {
 		}
 	}
 
-	// Accumulate "ever seen" symbols for this date.
+	// Accumulate "ever seen" symbols for this date; track new arrivals.
 	s.newsSeenMu.Lock()
 	if s.newsSeenDate != date {
 		s.newsSeenSymbols = make(map[string]bool)
 		s.newsSeenDate = date
 	}
+	var newSymbols []string
 	for sym := range symbolSet {
+		if !s.newsSeenSymbols[sym] {
+			newSymbols = append(newSymbols, sym)
+		}
 		s.newsSeenSymbols[sym] = true
 	}
 	// Copy the full accumulated set.
@@ -255,11 +259,22 @@ func (s *DashboardServer) refreshNewsCache() {
 	}
 	s.newsSeenMu.Unlock()
 
-	symbols := make([]string, 0, len(allSymbols))
-	for sym := range allSymbols {
-		symbols = append(symbols, sym)
+	// Prioritize newly appeared symbols first, then the rest alphabetically.
+	sort.Strings(newSymbols)
+	newSet := make(map[string]bool, len(newSymbols))
+	for _, sym := range newSymbols {
+		newSet[sym] = true
 	}
-	sort.Strings(symbols)
+	var rest []string
+	for sym := range allSymbols {
+		if !newSet[sym] {
+			rest = append(rest, sym)
+		}
+	}
+	sort.Strings(rest)
+	symbols := make([]string, 0, len(newSymbols)+len(rest))
+	symbols = append(symbols, newSymbols...)
+	symbols = append(symbols, rest...)
 
 	if len(symbols) == 0 {
 		return
@@ -279,7 +294,7 @@ func (s *DashboardServer) refreshNewsCache() {
 		}
 	}
 
-	s.log.Info("news refresh starting", "date", date, "symbols", len(symbols))
+	s.log.Info("news refresh starting", "date", date, "symbols", len(symbols), "new", len(newSymbols))
 
 	// Fetch concurrently (4 workers).
 	sem := make(chan struct{}, 4)
