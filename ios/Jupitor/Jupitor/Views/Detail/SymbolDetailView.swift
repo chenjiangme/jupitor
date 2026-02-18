@@ -454,7 +454,7 @@ private struct TargetRingView: View {
     }
 }
 
-// MARK: - Target Arrow Canvas
+// MARK: - Target Line Canvas
 
 private struct TargetArrowCanvas: View {
     let gain: Double    // 0-5 (1.0 = 100%)
@@ -464,49 +464,23 @@ private struct TargetArrowCanvas: View {
     var body: some View {
         Canvas { context, size in
             let center = CGPoint(x: size.width / 2, y: size.height / 2)
-            // Angle: 12 o'clock = -π/2, clockwise. Wraps every 100%.
             let frac = gain.truncatingRemainder(dividingBy: 1.0)
             let adjustedFrac = gain >= 1.0 && frac == 0 ? 1.0 : frac
             let rad = -Double.pi / 2 + 2 * Double.pi * adjustedFrac
 
-            let arrowR = ringRadius + lineWidth / 2 + 6
-            let tipR = ringRadius + lineWidth / 2 - 2
-            let spread: Double = 0.12
+            let innerR = ringRadius - lineWidth / 2
+            let outerR = ringRadius + lineWidth / 2
 
-            let tip = CGPoint(
-                x: center.x + cos(rad) * tipR,
-                y: center.y + sin(rad) * tipR
-            )
-            let base1 = CGPoint(
-                x: center.x + cos(rad - spread) * arrowR,
-                y: center.y + sin(rad - spread) * arrowR
-            )
-            let base2 = CGPoint(
-                x: center.x + cos(rad + spread) * arrowR,
-                y: center.y + sin(rad + spread) * arrowR
-            )
+            let p1 = CGPoint(x: center.x + cos(rad) * innerR,
+                             y: center.y + sin(rad) * innerR)
+            let p2 = CGPoint(x: center.x + cos(rad) * outerR,
+                             y: center.y + sin(rad) * outerR)
 
-            var triangle = Path()
-            triangle.move(to: tip)
-            triangle.addLine(to: base1)
-            triangle.addLine(to: base2)
-            triangle.closeSubpath()
-            context.fill(triangle, with: .color(.yellow.opacity(0.9)))
-
-            // Band dots for >100% (show filled dots outside ring).
-            let bands = Int(gain)
-            if bands > 0 {
-                let dotR = arrowR + 6
-                for i in 0..<min(bands, 4) {
-                    let dotAngle = rad + Double(i - bands / 2) * 0.2
-                    let pos = CGPoint(
-                        x: center.x + cos(dotAngle) * dotR,
-                        y: center.y + sin(dotAngle) * dotR
-                    )
-                    context.fill(Circle().path(in: CGRect(x: pos.x - 2, y: pos.y - 2, width: 4, height: 4)),
-                                 with: .color(.yellow.opacity(0.6)))
-                }
-            }
+            var line = Path()
+            line.move(to: p1)
+            line.addLine(to: p2)
+            context.stroke(line, with: .color(.yellow.opacity(0.9)),
+                          style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
         }
     }
 }
