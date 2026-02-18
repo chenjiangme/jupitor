@@ -274,7 +274,7 @@ struct BubbleChartView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                 if isWatchlist, let stats = sessionStats(bubble.combined) {
-                    Text("\(Fmt.compactPrice(stats.open)) \(Fmt.compactPrice(stats.high)) \(Fmt.compactPrice(stats.low)) \(Fmt.compactPrice(stats.close))")
+                    Text("\(Fmt.compactPrice(stats.open)) \(Fmt.compactPrice(stats.low)) \(Fmt.compactPrice(stats.high)) \(Fmt.compactPrice(stats.close))")
                         .font(.system(size: max(5, bubble.radius * 0.16)))
                         .foregroundStyle(Color.watchlistPriceColor.opacity(0.4))
                         .lineLimit(1)
