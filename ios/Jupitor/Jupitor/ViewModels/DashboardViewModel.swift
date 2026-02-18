@@ -103,6 +103,11 @@ final class DashboardViewModel {
         } catch {
             self.error = error.localizedDescription
         }
+
+        // Refresh watchlist from server for cross-device sync.
+        if !watchlistDate.isEmpty {
+            await loadWatchlist(for: watchlistDate, forceRefresh: true)
+        }
     }
 
     private func loadDates() async {
@@ -114,11 +119,11 @@ final class DashboardViewModel {
         }
     }
 
-    func loadWatchlist(for date: String) async {
+    func loadWatchlist(for date: String, forceRefresh: Bool = false) async {
         guard !date.isEmpty else { return }
 
-        // Check in-memory cache.
-        if let cached = watchlistCache[date] {
+        // Check in-memory cache (skip if force-refreshing for cross-device sync).
+        if !forceRefresh, let cached = watchlistCache[date] {
             watchlistDate = date
             watchlistSymbols = cached
             return

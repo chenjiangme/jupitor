@@ -20,6 +20,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 
 	"jupitor/internal/dashboard"
+	us "jupitor/internal/gather/us"
 	"jupitor/internal/live"
 	"jupitor/internal/news"
 	"jupitor/internal/store"
@@ -45,7 +46,8 @@ type DashboardServer struct {
 	// Tier map (latest, loaded once at startup).
 	tierMap map[string]string
 
-	// History dates (loaded once, can be refreshed).
+	// History dates (loaded once, refreshed by news history backfill).
+	historyMu    sync.RWMutex
 	historyDates []string
 
 	// Alpaca client for watchlist (nil if not configured).
@@ -70,6 +72,9 @@ type DashboardServer struct {
 
 	// Trade parameters (targets, etc.) with pub/sub for SSE push.
 	tradeParams *tradeparams.Store
+
+	// Reference data directory for trade-universe generation.
+	refDir string
 }
 
 // NewDashboardServer creates a new dashboard HTTP server.
@@ -83,6 +88,7 @@ func NewDashboardServer(
 	alpacaClient *alpacaapi.Client,
 	mdClient *marketdata.Client,
 	tradeParams *tradeparams.Store,
+	refDir string,
 ) *DashboardServer {
 	s := &DashboardServer{
 		model:        model,
@@ -96,15 +102,24 @@ func NewDashboardServer(
 		mdClient:     mdClient,
 		stLimiter:    time.NewTicker(500 * time.Millisecond),
 		tradeParams:  tradeParams,
+		refDir:       refDir,
 	}
 
 	return s
 }
 
-// Start launches background goroutines (news refresh). Call this after creating
-// the server, tied to the daemon's context for graceful shutdown.
+// Start launches background goroutines (news refresh, history backfill). Call
+// this after creating the server, tied to the daemon's context for graceful shutdown.
 func (s *DashboardServer) Start(ctx context.Context) {
 	go s.startNewsRefresh(ctx)
+	go s.startNewsHistoryBackfill(ctx)
+}
+
+// getHistoryDates returns a snapshot of the history dates slice (thread-safe).
+func (s *DashboardServer) getHistoryDates() []string {
+	s.historyMu.RLock()
+	defer s.historyMu.RUnlock()
+	return s.historyDates
 }
 
 // newsCacheFile returns the path to the news cache JSON file for a date.
@@ -254,10 +269,11 @@ func (s *DashboardServer) refreshNewsCache() {
 	t, _ := time.ParseInLocation("2006-01-02", date, s.loc)
 	end := time.Date(t.Year(), t.Month(), t.Day(), 20, 0, 0, 0, s.loc)
 	// Find previous trading day from history dates.
+	histDates := s.getHistoryDates()
 	start := time.Date(t.Year(), t.Month(), t.Day(), 4, 0, 0, 0, s.loc) // fallback
-	for i := len(s.historyDates) - 1; i >= 0; i-- {
-		if s.historyDates[i] < date {
-			p, _ := time.ParseInLocation("2006-01-02", s.historyDates[i], s.loc)
+	for i := len(histDates) - 1; i >= 0; i-- {
+		if histDates[i] < date {
+			p, _ := time.ParseInLocation("2006-01-02", histDates[i], s.loc)
 			start = time.Date(p.Year(), p.Month(), p.Day(), 16, 0, 0, 0, s.loc)
 			break
 		}
@@ -341,10 +357,11 @@ func (s *DashboardServer) fetchNewsOnDemand(symbol, date string) []NewsArticleJS
 	// Compute time window: prev trading day 4PM ET → date 8PM ET.
 	t, _ := time.ParseInLocation("2006-01-02", date, s.loc)
 	end := time.Date(t.Year(), t.Month(), t.Day(), 20, 0, 0, 0, s.loc)
+	histDates := s.getHistoryDates()
 	start := time.Date(t.Year(), t.Month(), t.Day(), 4, 0, 0, 0, s.loc)
-	for i := len(s.historyDates) - 1; i >= 0; i-- {
-		if s.historyDates[i] < date {
-			p, _ := time.ParseInLocation("2006-01-02", s.historyDates[i], s.loc)
+	for i := len(histDates) - 1; i >= 0; i-- {
+		if histDates[i] < date {
+			p, _ := time.ParseInLocation("2006-01-02", histDates[i], s.loc)
 			start = time.Date(p.Year(), p.Month(), p.Day(), 16, 0, 0, 0, s.loc)
 			break
 		}
@@ -391,6 +408,376 @@ func (s *DashboardServer) fetchNewsOnDemand(symbol, date string) []NewsArticleJS
 	s.newsCache.Store(key, articles)
 	s.log.Info("news on-demand fetch", "symbol", symbol, "date", date, "articles", len(articles))
 	return articles
+}
+
+// fillIndexFileGaps copies the latest available SPX/NDX index files to dates
+// that have universe files but no index files. Returns the number of dates filled.
+// This ensures GenerateTradeUniverse can proceed for recent dates even if the
+// Python us_index_data script hasn't been run.
+func (s *DashboardServer) fillIndexFileGaps() int {
+	universeDir := filepath.Join(s.dataDir, "us", "universe")
+	spxDir := filepath.Join(s.dataDir, "us", "index", "spx")
+	ndxDir := filepath.Join(s.dataDir, "us", "index", "ndx")
+
+	// List universe dates.
+	entries, err := os.ReadDir(universeDir)
+	if err != nil {
+		return 0
+	}
+	var universeDates []string
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasSuffix(name, ".txt") {
+			date := strings.TrimSuffix(name, ".txt")
+			if len(date) == 10 && date[4] == '-' && date[7] == '-' {
+				universeDates = append(universeDates, date)
+			}
+		}
+	}
+	sort.Strings(universeDates)
+
+	// Find latest available SPX/NDX files.
+	latestSPX := latestDateTxt(spxDir)
+	latestNDX := latestDateTxt(ndxDir)
+	if latestSPX == "" || latestNDX == "" {
+		return 0
+	}
+
+	filled := 0
+	for _, date := range universeDates {
+		spxPath := filepath.Join(spxDir, date+".txt")
+		ndxPath := filepath.Join(ndxDir, date+".txt")
+
+		spxExists := fileExistsCheck(spxPath)
+		ndxExists := fileExistsCheck(ndxPath)
+		if spxExists && ndxExists {
+			// Update latest available for future copies.
+			latestSPX = spxPath
+			latestNDX = ndxPath
+			continue
+		}
+
+		// Copy from latest available.
+		if !spxExists {
+			if err := copyFile(latestSPX, spxPath); err != nil {
+				s.log.Warn("copying SPX index file", "date", date, "error", err)
+				continue
+			}
+		}
+		if !ndxExists {
+			if err := copyFile(latestNDX, ndxPath); err != nil {
+				s.log.Warn("copying NDX index file", "date", date, "error", err)
+				continue
+			}
+		}
+		latestSPX = spxPath
+		latestNDX = ndxPath
+		filled++
+	}
+	return filled
+}
+
+// latestDateTxt returns the path to the latest YYYY-MM-DD.txt file in dir.
+func latestDateTxt(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var latest string
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasSuffix(name, ".txt") {
+			date := strings.TrimSuffix(name, ".txt")
+			if len(date) == 10 && date[4] == '-' && date[7] == '-' && name > latest {
+				latest = name
+			}
+		}
+	}
+	if latest == "" {
+		return ""
+	}
+	return filepath.Join(dir, latest)
+}
+
+func fileExistsCheck(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0o644)
+}
+
+// startNewsHistoryBackfill runs the automated history pipeline in the background.
+// Checks every 30 minutes for new data to process.
+func (s *DashboardServer) startNewsHistoryBackfill(ctx context.Context) {
+
+	// Wait for live system to settle before starting history backfill.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(2 * time.Minute):
+	}
+
+	s.runHistoryPipeline(ctx)
+
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.runHistoryPipeline(ctx)
+		}
+	}
+}
+
+// runHistoryPipeline runs the full automated pipeline:
+//  1. Fill SPX/NDX index file gaps (copy latest to dates that have universe but no index files)
+//  2. Generate trade-universe CSVs (needs universe + index + daily bars)
+//  3. Generate stock-trades-ex-index (needs trade-universe + per-symbol trades)
+//  4. Backfill news for dates with stock-trades-ex-index but no news parquet
+//
+// Also refreshes the server's historyDates list.
+func (s *DashboardServer) runHistoryPipeline(ctx context.Context) {
+	// Step 1: Fill index file gaps so trade-universe generation can proceed.
+	if filled := s.fillIndexFileGaps(); filled > 0 {
+		s.log.Info("filled index file gaps", "dates", filled)
+	}
+
+	// Step 2: Generate trade-universe CSVs for new dates.
+	if s.refDir != "" {
+		ref := us.LoadReferenceData(s.refDir)
+		if wrote, err := us.GenerateTradeUniverse(ctx, s.dataDir, ref, s.log); err != nil {
+			s.log.Warn("auto trade-universe generation", "error", err)
+		} else if wrote {
+			s.log.Info("auto trade-universe generation complete")
+		}
+	}
+
+	// Step 3: Generate stock-trades-ex-index for recent dates (limit to latest 10).
+	if wrote, err := us.GenerateStockTrades(ctx, s.dataDir, 10, true, s.log); err != nil {
+		s.log.Warn("auto stock-trades-ex-index generation", "error", err)
+	} else if wrote > 0 {
+		s.log.Info("auto stock-trades-ex-index generation complete", "files", wrote)
+	}
+
+	// Re-list history dates to pick up newly generated files.
+	dates, err := dashboard.ListHistoryDates(s.dataDir)
+	if err != nil {
+		s.log.Warn("history pipeline: listing dates", "error", err)
+		return
+	}
+
+	// Update the server's history dates list.
+	s.historyMu.Lock()
+	s.historyDates = dates
+	s.historyMu.Unlock()
+
+	// Step 4: Backfill news for dates missing news parquet files.
+	newsDir := filepath.Join(s.dataDir, "us", "news")
+	os.MkdirAll(newsDir, 0o755)
+
+	var todo []string
+	for _, d := range dates {
+		outPath := filepath.Join(newsDir, d+".parquet")
+		if _, err := os.Stat(outPath); err == nil {
+			continue // already done
+		}
+		todo = append(todo, d)
+	}
+
+	if len(todo) == 0 {
+		return
+	}
+
+	// Process most recent first.
+	for i, j := 0, len(todo)-1; i < j; i, j = i+1, j-1 {
+		todo[i], todo[j] = todo[j], todo[i]
+	}
+
+	s.log.Info("news history backfill starting", "total_dates", len(dates), "todo", len(todo))
+
+	for i, date := range todo {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		// Find previous trading day from history dates.
+		prevDate := ""
+		for j, d := range dates {
+			if d == date && j > 0 {
+				prevDate = dates[j-1]
+				break
+			}
+		}
+
+		s.log.Info("news history backfill: processing", "date", date, "progress", fmt.Sprintf("%d/%d", i+1, len(todo)))
+
+		records, err := s.processNewsHistoryDate(ctx, date, prevDate)
+		if err != nil {
+			s.log.Error("news history backfill failed", "date", date, "error", err)
+			continue
+		}
+
+		outPath := filepath.Join(newsDir, date+".parquet")
+		if err := parquet.WriteFile(outPath, records); err != nil {
+			s.log.Error("news history backfill: writing parquet", "date", date, "error", err)
+			continue
+		}
+
+		s.log.Info("news history backfill complete", "date", date, "articles", len(records))
+	}
+}
+
+// processNewsHistoryDate loads trades for a date, picks top symbols per tier,
+// and fetches news from all 4 sources. Same logic as cmd/us-news-history.
+func (s *DashboardServer) processNewsHistoryDate(ctx context.Context, date, prevDate string) ([]NewsRecord, error) {
+	trades, err := dashboard.LoadHistoryTrades(s.dataDir, date)
+	if err != nil {
+		return nil, fmt.Errorf("loading trades: %w", err)
+	}
+	tierMap, err := dashboard.LoadTierMapForDate(s.dataDir, date)
+	if err != nil {
+		return nil, fmt.Errorf("loading tier map: %w", err)
+	}
+
+	stats := dashboard.AggregateTrades(trades)
+
+	// Group by tier, sorted by trade count descending.
+	type symCount struct {
+		sym    string
+		trades int
+	}
+	tierSyms := map[string][]symCount{}
+	for sym, st := range stats {
+		tier, ok := tierMap[sym]
+		if !ok {
+			continue
+		}
+		tierSyms[tier] = append(tierSyms[tier], symCount{sym, st.Trades})
+	}
+	for tier := range tierSyms {
+		ss := tierSyms[tier]
+		sort.Slice(ss, func(i, j int) bool { return ss[i].trades > ss[j].trades })
+		tierSyms[tier] = ss
+	}
+
+	// Top 100 per tier for news fetching.
+	symbolSet := make(map[string]bool)
+	for _, tier := range []string{"ACTIVE", "MODERATE", "SPORADIC"} {
+		ss := tierSyms[tier]
+		limit := 100
+		if len(ss) < limit {
+			limit = len(ss)
+		}
+		for _, sc := range ss[:limit] {
+			symbolSet[sc.sym] = true
+		}
+	}
+
+	// Deep StockTwits: top 20 MODERATE + SPORADIC.
+	deepSet := make(map[string]bool)
+	for _, tier := range []string{"MODERATE", "SPORADIC"} {
+		ss := tierSyms[tier]
+		limit := 20
+		if len(ss) < limit {
+			limit = len(ss)
+		}
+		for _, sc := range ss[:limit] {
+			deepSet[sc.sym] = true
+		}
+	}
+
+	symbols := make([]string, 0, len(symbolSet))
+	for sym := range symbolSet {
+		symbols = append(symbols, sym)
+	}
+	sort.Strings(symbols)
+
+	// Time window: prevDate 4PM ET → date 8PM ET.
+	t, _ := time.ParseInLocation("2006-01-02", date, s.loc)
+	end := time.Date(t.Year(), t.Month(), t.Day(), 20, 0, 0, 0, s.loc)
+	var start time.Time
+	if prevDate != "" {
+		p, _ := time.ParseInLocation("2006-01-02", prevDate, s.loc)
+		start = time.Date(p.Year(), p.Month(), p.Day(), 16, 0, 0, 0, s.loc)
+	} else {
+		start = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, s.loc)
+	}
+
+	s.log.Info("news history: fetching", "date", date, "symbols", len(symbols), "deep_st", len(deepSet))
+
+	// Fetch concurrently (8 workers).
+	var mu sync.Mutex
+	var records []NewsRecord
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+
+	for _, sym := range symbols {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		wg.Add(1)
+		go func(sym string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			appendAll := func(aa []news.Article) {
+				mu.Lock()
+				for _, a := range aa {
+					records = append(records, NewsRecord{
+						Symbol:   sym,
+						Source:   a.Source,
+						Time:     a.Time.UnixMilli(),
+						Headline: a.Headline,
+						Content:  a.Content,
+					})
+				}
+				mu.Unlock()
+			}
+
+			if aa, err := news.FetchAlpacaNews(s.mdClient, sym, start, end); err == nil {
+				appendAll(aa)
+			}
+			if aa, err := news.FetchGoogleNews(sym, start, end); err == nil {
+				appendAll(aa)
+			}
+			if aa, err := news.FetchGlobeNewswire(sym, start, end); err == nil {
+				appendAll(aa)
+			}
+			paginate := deepSet[sym]
+			if aa, err := news.FetchStockTwits(sym, start, end, paginate, s.stLimiter); err == nil {
+				appendAll(aa)
+			}
+		}(sym)
+	}
+	wg.Wait()
+
+	// Sort by symbol then time.
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].Symbol != records[j].Symbol {
+			return records[i].Symbol < records[j].Symbol
+		}
+		return records[i].Time < records[j].Time
+	})
+
+	return records, nil
 }
 
 // resolveWatchlistID returns the Alpaca watchlist ID for the given date,
@@ -553,9 +940,10 @@ func postMarketEndET(date string) int64 {
 
 // nextDateFor returns the next history date after the given date, or "".
 func (s *DashboardServer) nextDateFor(date string) string {
-	for i, d := range s.historyDates {
-		if d == date && i+1 < len(s.historyDates) {
-			return s.historyDates[i+1]
+	histDates := s.getHistoryDates()
+	for i, d := range histDates {
+		if d == date && i+1 < len(histDates) {
+			return histDates[i+1]
 		}
 	}
 	return ""
@@ -725,7 +1113,7 @@ func (s *DashboardServer) handleHistory(w http.ResponseWriter, r *http.Request) 
 				resp.Next = &nd
 			}
 		}
-	} else if len(s.historyDates) > 0 && date == s.historyDates[len(s.historyDates)-1] {
+	} else if hd := s.getHistoryDates(); len(hd) > 0 && date == hd[len(hd)-1] {
 		// Latest date: read per-symbol trade files for post-market window.
 		postStart := postMarketStartET(date)
 		postEnd := postMarketEndET(date)
@@ -749,7 +1137,7 @@ func (s *DashboardServer) handleHistory(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *DashboardServer) handleDates(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, DatesResponse{Dates: s.historyDates})
+	writeJSON(w, DatesResponse{Dates: s.getHistoryDates()})
 }
 
 func (s *DashboardServer) handleGetWatchlist(w http.ResponseWriter, r *http.Request) {
