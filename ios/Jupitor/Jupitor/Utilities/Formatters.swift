@@ -25,11 +25,17 @@ enum Fmt {
         return String(format: "%.2f", p)
     }
 
-    /// Compact price: no leading zero for < $1 (e.g. ".45").
+    /// Compact price: no leading zero for < $1 (e.g. ".45"), trailing zeros stripped.
     static func compactPrice(_ p: Double) -> String {
         if p == 0 { return "-" }
-        let s = String(format: "%.2f", p)
-        if p > 0 && p < 1 { return String(s.dropFirst()) }  // "0.45" → ".45"
+        var s = String(format: "%.2f", p)
+        // Strip trailing zeros: "1.20" → "1.2", "1.00" → "1"
+        if s.contains(".") {
+            while s.hasSuffix("0") { s = String(s.dropLast()) }
+            if s.hasSuffix(".") { s = String(s.dropLast()) }
+        }
+        // Drop leading zero only if formatted value starts with "0." (not rounded up to 1+)
+        if s.hasPrefix("0.") { s = String(s.dropFirst()) }
         return s
     }
 
