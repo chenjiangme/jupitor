@@ -22,6 +22,7 @@ type SymbolStats struct {
 	Turnover  float64 // sum(price * size)
 	MaxGain   float64 // max possible gain over all (buy, sell) pairs where sell is after buy
 	MaxLoss   float64 // max possible loss over all (buy, sell) pairs where sell is after buy
+	GainFirst    bool    // true if max gain was reached before max loss
 	CloseGain    float64 // (close - low) / vwap using same VWAP logic as MaxGain
 	MaxDrawdown  float64 // (peakPrice - minAfterPeak) / vwap — drawdown from max gain point
 }
@@ -163,6 +164,13 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 		if hasOutliers {
 			s.High = trimmedHigh
 			s.Low = trimmedLow
+		}
+
+		// Track which max was reached first.
+		if gainIdx >= 0 && lossIdx >= 0 {
+			s.GainFirst = gainIdx <= lossIdx
+		} else {
+			s.GainFirst = gainIdx >= 0
 		}
 
 		// Find max drawdown from the peak (lowest price after gainIdx).

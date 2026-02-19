@@ -168,7 +168,8 @@ struct BubbleChartView: View {
                     loss: bubble.combined.reg?.maxLoss ?? 0,
                     hasData: true,
                     diameter: outerDia,
-                    lineWidth: ringWidth
+                    lineWidth: ringWidth,
+                    gainFirst: bubble.combined.reg?.gainFirst ?? true
                 )
 
                 // Black fill covers inner ring area for clean separation.
@@ -182,7 +183,8 @@ struct BubbleChartView: View {
                     loss: bubble.combined.pre?.maxLoss ?? 0,
                     hasData: true,
                     diameter: innerDia,
-                    lineWidth: ringWidth
+                    lineWidth: ringWidth,
+                    gainFirst: bubble.combined.pre?.gainFirst ?? true
                 )
             } else {
                 // Single ring for the relevant session.
@@ -191,7 +193,8 @@ struct BubbleChartView: View {
                     loss: singleRingLoss(bubble.combined),
                     hasData: hasPre || hasReg,
                     diameter: outerDia,
-                    lineWidth: ringWidth
+                    lineWidth: ringWidth,
+                    gainFirst: singleRingGainFirst(bubble.combined)
                 )
             }
 
@@ -384,6 +387,14 @@ struct BubbleChartView: View {
         case .pre, .next: return c.pre?.maxLoss ?? 0
         case .reg: return c.reg?.maxLoss ?? 0
         case .day: return c.pre?.maxLoss ?? c.reg?.maxLoss ?? 0
+        }
+    }
+
+    private func singleRingGainFirst(_ c: CombinedStatsJSON) -> Bool {
+        switch sessionMode {
+        case .pre, .next: return c.pre?.gainFirst ?? true
+        case .reg: return c.reg?.gainFirst ?? true
+        case .day: return c.pre?.gainFirst ?? c.reg?.gainFirst ?? true
         }
     }
 

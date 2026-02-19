@@ -126,7 +126,8 @@ struct SymbolHistoryView: View {
                 loss: entry.reg?.maxLoss ?? 0,
                 hasData: entry.reg != nil,
                 diameter: outerDia,
-                lineWidth: lineWidth
+                lineWidth: lineWidth,
+                gainFirst: entry.reg?.gainFirst ?? true
             )
 
             // Black fill covers inner ring area for clean separation.
@@ -139,7 +140,8 @@ struct SymbolHistoryView: View {
                 loss: entry.pre?.maxLoss ?? 0,
                 hasData: entry.pre != nil,
                 diameter: innerDia,
-                lineWidth: lineWidth
+                lineWidth: lineWidth,
+                gainFirst: entry.pre?.gainFirst ?? true
             )
         }
         .frame(width: diameter, height: diameter)

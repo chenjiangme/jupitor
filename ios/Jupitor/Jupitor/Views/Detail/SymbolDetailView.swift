@@ -363,7 +363,8 @@ private struct TargetRingView: View {
                     loss: stats.maxLoss,
                     hasData: true,
                     diameter: outerDia,
-                    lineWidth: ringWidth
+                    lineWidth: ringWidth,
+                    gainFirst: stats.gainFirst ?? true
                 )
 
                 // Close gain marker (green line across ring).

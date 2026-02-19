@@ -14,6 +14,7 @@ struct SymbolStatsJSON: Codable, Equatable {
     let turnover: Double
     let maxGain: Double
     let maxLoss: Double
+    let gainFirst: Bool?
     let closeGain: Double?
     let maxDrawdown: Double?
 }
