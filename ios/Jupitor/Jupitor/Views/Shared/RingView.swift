@@ -55,25 +55,33 @@ struct SessionRingView: View {
                 // The arc that happened first starts at 12 o'clock.
                 // Gain goes clockwise, loss goes counter-clockwise.
                 // The second arc starts where the first ends, going back.
-                // Whichever arc is longer at any point gets the wide stroke.
+                // Wider arc drawn first (behind), thinner arc on top.
                 if gainFirst {
                     let gainEnd = min(gain, 5.0).truncatingRemainder(dividingBy: 1.0)
-                    let gainWide = gain >= loss
-                    GradientArcsView(value: gain, shades: gainShades,
-                                     lineWidth: gainWide ? lineWidth : lineWidth * 0.5)
-                    GradientArcsView(value: loss, shades: lossShades,
-                                     lineWidth: gainWide ? lineWidth * 0.5 : lineWidth)
-                        .scaleEffect(x: -1, y: 1)
-                        .rotationEffect(.degrees(gainEnd * 360))
+                    if gain >= loss {
+                        GradientArcsView(value: gain, shades: gainShades, lineWidth: lineWidth)
+                        GradientArcsView(value: loss, shades: lossShades, lineWidth: lineWidth * 0.5)
+                            .scaleEffect(x: -1, y: 1)
+                            .rotationEffect(.degrees(gainEnd * 360))
+                    } else {
+                        GradientArcsView(value: loss, shades: lossShades, lineWidth: lineWidth)
+                            .scaleEffect(x: -1, y: 1)
+                            .rotationEffect(.degrees(gainEnd * 360))
+                        GradientArcsView(value: gain, shades: gainShades, lineWidth: lineWidth * 0.5)
+                    }
                 } else {
                     let lossEnd = min(loss, 5.0).truncatingRemainder(dividingBy: 1.0)
-                    let lossWide = loss >= gain
-                    GradientArcsView(value: loss, shades: lossShades,
-                                     lineWidth: lossWide ? lineWidth : lineWidth * 0.5)
-                        .scaleEffect(x: -1, y: 1)
-                    GradientArcsView(value: gain, shades: gainShades,
-                                     lineWidth: lossWide ? lineWidth * 0.5 : lineWidth)
-                        .rotationEffect(.degrees(-lossEnd * 360))
+                    if loss >= gain {
+                        GradientArcsView(value: loss, shades: lossShades, lineWidth: lineWidth)
+                            .scaleEffect(x: -1, y: 1)
+                        GradientArcsView(value: gain, shades: gainShades, lineWidth: lineWidth * 0.5)
+                            .rotationEffect(.degrees(-lossEnd * 360))
+                    } else {
+                        GradientArcsView(value: gain, shades: gainShades, lineWidth: lineWidth)
+                            .rotationEffect(.degrees(-lossEnd * 360))
+                        GradientArcsView(value: loss, shades: lossShades, lineWidth: lineWidth * 0.5)
+                            .scaleEffect(x: -1, y: 1)
+                    }
                 }
             }
             .frame(width: diameter, height: diameter)
