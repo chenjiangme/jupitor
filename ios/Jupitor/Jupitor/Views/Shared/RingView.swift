@@ -23,6 +23,7 @@ struct GradientArcsView: View {
     let shades: [Color]
     let lineWidth: CGFloat
     var cornerRadius: CGFloat = 0
+    var offset: Double = 0  // start position in revolutions (0 = 12 o'clock)
 
     var body: some View {
         let capped = min(value, 5.0)
@@ -30,16 +31,17 @@ struct GradientArcsView: View {
         ForEach(Array(shades.indices), id: \.self) { band in
             let frac = min(max(capped - Double(band), 0), 1.0)
             if frac > 0 {
+                let rotation = -90.0 + 360.0 * (offset + Double(band))
                 if cornerRadius > 0 {
                     RoundedRectangle(cornerRadius: cornerRadius)
                         .trim(from: 0, to: frac)
                         .stroke(shades[band], style: style)
-                        .rotationEffect(.degrees(-90))
+                        .rotationEffect(.degrees(rotation))
                 } else {
                     Circle()
                         .trim(from: 0, to: frac)
                         .stroke(shades[band], style: style)
-                        .rotationEffect(.degrees(-90))
+                        .rotationEffect(.degrees(rotation))
                 }
             }
         }
@@ -71,10 +73,10 @@ struct SessionRingView: View {
 
                 if gain >= loss {
                     GradientArcsView(value: gain, shades: gainShades, lineWidth: lineWidth, cornerRadius: cornerRadius)
-                    GradientArcsView(value: loss, shades: lossShades, lineWidth: lineWidth * 0.5, cornerRadius: cornerRadius)
+                    GradientArcsView(value: loss, shades: lossShades, lineWidth: lineWidth * 0.5, cornerRadius: cornerRadius, offset: gain)
                 } else {
                     GradientArcsView(value: loss, shades: lossShades, lineWidth: lineWidth, cornerRadius: cornerRadius)
-                    GradientArcsView(value: gain, shades: gainShades, lineWidth: lineWidth * 0.5, cornerRadius: cornerRadius)
+                    GradientArcsView(value: gain, shades: gainShades, lineWidth: lineWidth * 0.5, cornerRadius: cornerRadius, offset: loss)
                 }
             }
             .frame(width: diameter, height: diameter)
