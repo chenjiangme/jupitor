@@ -198,23 +198,22 @@ struct BubbleChartView: View {
                 )
             }
 
-            // Close gain markers (green line across ring).
-            let closeGainColor = Color(hue: 0.33, saturation: 1.0, brightness: 0.7)
+            // Close gain markers (color by close fraction: red at low, green at high).
             if dualRing {
-                if let cg = bubble.combined.reg?.closeGain, cg > 0 {
+                if let reg = bubble.combined.reg, let cg = reg.closeGain, cg > 0 {
                     TargetMarkerCanvas(gain: cg, ringRadius: outerDia / 2, lineWidth: ringWidth,
-                                       color: closeGainColor)
+                                       color: Self.dialColor(for: reg))
                         .frame(width: diameter, height: diameter)
                 }
-                if let cg = bubble.combined.pre?.closeGain, cg > 0 {
+                if let pre = bubble.combined.pre, let cg = pre.closeGain, cg > 0 {
                     TargetMarkerCanvas(gain: cg, ringRadius: innerDia / 2, lineWidth: ringWidth,
-                                       color: closeGainColor)
+                                       color: Self.dialColor(for: pre))
                         .frame(width: diameter, height: diameter)
                 }
             } else {
                 if let stats = sessionStats(bubble.combined), let cg = stats.closeGain, cg > 0 {
                     TargetMarkerCanvas(gain: cg, ringRadius: outerDia / 2, lineWidth: ringWidth,
-                                       color: closeGainColor)
+                                       color: Self.dialColor(for: stats))
                         .frame(width: diameter, height: diameter)
                 }
             }
@@ -396,6 +395,13 @@ struct BubbleChartView: View {
         case .reg: return c.reg?.gainFirst ?? true
         case .day: return c.pre?.gainFirst ?? c.reg?.gainFirst ?? true
         }
+    }
+
+    /// Dial-style color: red (hue 0) at low, green (hue 0.33) at high.
+    private static func dialColor(for stats: SymbolStatsJSON) -> Color {
+        let cf = stats.high > stats.low ? (stats.close - stats.low) / (stats.high - stats.low) : 0.5
+        let clamped = min(max(cf, 0), 1)
+        return Color(hue: 0.33 * clamped, saturation: 0.9, brightness: 0.9)
     }
 
     // MARK: - Physics Simulation

@@ -367,9 +367,11 @@ private struct TargetRingView: View {
                     gainFirst: stats.gainFirst ?? true
                 )
 
-                // Close gain marker (green line across ring).
+                // Close gain marker (color by close fraction: red at low, green at high).
                 if let cg = stats.closeGain, cg > 0 {
-                    CloseGainMarkerCanvas(gain: cg, ringRadius: outerDia / 2, lineWidth: ringWidth)
+                    let cf = stats.high > stats.low ? min(max((stats.close - stats.low) / (stats.high - stats.low), 0), 1) : 0.5
+                    CloseGainMarkerCanvas(gain: cg, ringRadius: outerDia / 2, lineWidth: ringWidth,
+                                          color: Color(hue: 0.33 * cf, saturation: 0.9, brightness: 0.9))
                 }
 
                 // Max drawdown marker (cyan line — where price dropped to after peak).
