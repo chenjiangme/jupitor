@@ -345,6 +345,7 @@ struct BubbleChartView: View {
                 turnover: pre.turnover + reg.turnover,
                 maxGain: max(pre.maxGain, reg.maxGain),
                 maxLoss: max(pre.maxLoss, reg.maxLoss),
+                gainFirst: pre.gainFirst ?? reg.gainFirst ?? true,
                 closeGain: max(pre.closeGain ?? 0, reg.closeGain ?? 0),
                 maxDrawdown: max(pre.maxDrawdown ?? 0, reg.maxDrawdown ?? 0)
             )
