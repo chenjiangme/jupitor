@@ -384,7 +384,6 @@ private struct TargetRingView: View {
                         lineWidth: max(1.5, ringWidth * 0.4)
                     )
                     .frame(width: dia, height: dia)
-                    .hidden()
                 }
 
                 // Target line overlay.
