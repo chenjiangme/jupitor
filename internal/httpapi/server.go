@@ -1265,8 +1265,16 @@ func (s *DashboardServer) handleReplay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	open930 := open930ET(date, s.loc)
+	// Load news counts (live from cache, history from parquet).
+	var newsCounts map[string]*SymbolNewsCounts
+	if date == today {
+		newsCounts = s.computeNewsCounts(date)
+	} else {
+		newsCounts = s.loadNewsCounts(date)
+	}
+
 	data := dashboard.ComputeDayData(date, filtered, tierMap, open930, sortMode)
-	todayJSON := convertDayData(data, nil)
+	todayJSON := convertDayData(data, newsCounts)
 	todayJSON.Date = date
 
 	resp := DashboardResponse{
