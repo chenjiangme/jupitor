@@ -380,15 +380,6 @@ private struct TargetRingView: View {
                                           color: .cyan.opacity(0.9))
                 }
 
-                if stats.high > stats.low {
-                    CloseDialView(
-                        fraction: (stats.close - stats.low) / (stats.high - stats.low),
-                        needleRadius: outerDia / 2,
-                        lineWidth: max(1.5, ringWidth * 0.4)
-                    )
-                    .frame(width: dia, height: dia)
-                }
-
                 // Target line overlay.
                 if let t = target, t > 0 {
                     TargetArrowCanvas(
@@ -550,7 +541,7 @@ private struct CloseGainMarkerCanvas: View {
             line.move(to: p1)
             line.addLine(to: p2)
             context.stroke(line, with: .color(color),
-                          style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                          style: StrokeStyle(lineWidth: 4, lineCap: .round))
         }
     }
 }
