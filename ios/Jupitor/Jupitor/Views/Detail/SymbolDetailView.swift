@@ -374,11 +374,11 @@ private struct TargetRingView: View {
                                           color: Color(hue: 0.33 * cf, saturation: 0.9, brightness: 0.9))
                 }
 
-                // Max drawdown marker (cyan line — where price dropped to after peak).
-                if let dd = stats.maxDrawdown, dd > 0 {
-                    CloseGainMarkerCanvas(gain: stats.maxGain - dd, ringRadius: outerDia / 2, lineWidth: ringWidth,
-                                          color: .cyan.opacity(0.9))
-                }
+                // Max drawdown marker (cyan line — hidden but logic preserved).
+                // if let dd = stats.maxDrawdown, dd > 0 {
+                //     CloseGainMarkerCanvas(gain: stats.maxGain - dd, ringRadius: outerDia / 2, lineWidth: ringWidth,
+                //                           color: .cyan.opacity(0.9))
+                // }
 
                 // Target line overlay.
                 if let t = target, t > 0 {
