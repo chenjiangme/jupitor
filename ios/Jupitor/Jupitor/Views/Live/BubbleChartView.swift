@@ -154,13 +154,8 @@ struct BubbleChartView: View {
             let hasPre_ = bubble.combined.pre != nil
             let hasReg_ = bubble.combined.reg != nil
             let bgOpacity = (sessionMode == .day && hasPre_ && hasReg_) ? 0.08 : 0.04
-            if isWatchlist {
-                RoundedRectangle(cornerRadius: diameter * 0.15)
-                    .fill(Color.white.opacity(bgOpacity))
-            } else {
-                Circle()
-                    .fill(Color.white.opacity(bgOpacity))
-            }
+            Circle()
+                .fill(Color.white.opacity(bgOpacity))
 
             let hasPre = bubble.combined.pre != nil
             let hasReg = bubble.combined.reg != nil
@@ -173,20 +168,13 @@ struct BubbleChartView: View {
                     loss: bubble.combined.reg?.maxLoss ?? 0,
                     hasData: true,
                     diameter: outerDia,
-                    lineWidth: ringWidth,
-                    isSquare: isWatchlist
+                    lineWidth: ringWidth
                 )
 
                 // Black fill covers inner ring area for clean separation.
-                if isWatchlist {
-                    RoundedRectangle(cornerRadius: blackFillDia * 0.15)
-                        .fill(Color.black)
-                        .frame(width: blackFillDia, height: blackFillDia)
-                } else {
-                    Circle()
-                        .fill(Color.black)
-                        .frame(width: blackFillDia, height: blackFillDia)
-                }
+                Circle()
+                    .fill(Color.black)
+                    .frame(width: blackFillDia, height: blackFillDia)
 
                 // Inner ring (pre-market session).
                 SessionRingView(
@@ -194,8 +182,7 @@ struct BubbleChartView: View {
                     loss: bubble.combined.pre?.maxLoss ?? 0,
                     hasData: true,
                     diameter: innerDia,
-                    lineWidth: ringWidth,
-                    isSquare: isWatchlist
+                    lineWidth: ringWidth
                 )
             } else {
                 // Single ring for the relevant session.
@@ -204,8 +191,7 @@ struct BubbleChartView: View {
                     loss: singleRingLoss(bubble.combined),
                     hasData: hasPre || hasReg,
                     diameter: outerDia,
-                    lineWidth: ringWidth,
-                    isSquare: isWatchlist
+                    lineWidth: ringWidth
                 )
             }
 
@@ -214,18 +200,18 @@ struct BubbleChartView: View {
             if dualRing {
                 if let cg = bubble.combined.reg?.closeGain, cg > 0 {
                     TargetMarkerCanvas(gain: cg, ringRadius: outerDia / 2, lineWidth: ringWidth,
-                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15, color: closeGainColor)
+                                       color: closeGainColor)
                         .frame(width: diameter, height: diameter)
                 }
                 if let cg = bubble.combined.pre?.closeGain, cg > 0 {
                     TargetMarkerCanvas(gain: cg, ringRadius: innerDia / 2, lineWidth: ringWidth,
-                                       isSquare: isWatchlist, cornerRadius: innerDia * 0.15, color: closeGainColor)
+                                       color: closeGainColor)
                         .frame(width: diameter, height: diameter)
                 }
             } else {
                 if let stats = sessionStats(bubble.combined), let cg = stats.closeGain, cg > 0 {
                     TargetMarkerCanvas(gain: cg, ringRadius: outerDia / 2, lineWidth: ringWidth,
-                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15, color: closeGainColor)
+                                       color: closeGainColor)
                         .frame(width: diameter, height: diameter)
                 }
             }
@@ -234,18 +220,18 @@ struct BubbleChartView: View {
             if dualRing {
                 if let reg = bubble.combined.reg, let dd = reg.maxDrawdown, dd > 0 {
                     TargetMarkerCanvas(gain: reg.maxGain - dd, ringRadius: outerDia / 2, lineWidth: ringWidth,
-                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15, color: .cyan.opacity(0.9))
+                                       color: .cyan.opacity(0.9))
                         .frame(width: diameter, height: diameter)
                 }
                 if let pre = bubble.combined.pre, let dd = pre.maxDrawdown, dd > 0 {
                     TargetMarkerCanvas(gain: pre.maxGain - dd, ringRadius: innerDia / 2, lineWidth: ringWidth,
-                                       isSquare: isWatchlist, cornerRadius: innerDia * 0.15, color: .cyan.opacity(0.9))
+                                       color: .cyan.opacity(0.9))
                         .frame(width: diameter, height: diameter)
                 }
             } else {
                 if let stats = sessionStats(bubble.combined), let dd = stats.maxDrawdown, dd > 0 {
                     TargetMarkerCanvas(gain: stats.maxGain - dd, ringRadius: outerDia / 2, lineWidth: ringWidth,
-                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15, color: .cyan.opacity(0.9))
+                                       color: .cyan.opacity(0.9))
                         .frame(width: diameter, height: diameter)
                 }
             }
@@ -253,13 +239,11 @@ struct BubbleChartView: View {
             // Target gain markers (yellow line across ring).
             if dualRing {
                 if let t = tp.targets[date]?["\(bubble.id):REG"], t > 0 {
-                    TargetMarkerCanvas(gain: t, ringRadius: outerDia / 2, lineWidth: ringWidth,
-                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15)
+                    TargetMarkerCanvas(gain: t, ringRadius: outerDia / 2, lineWidth: ringWidth)
                         .frame(width: diameter, height: diameter)
                 }
                 if let t = tp.targets[date]?["\(bubble.id):PRE"], t > 0 {
-                    TargetMarkerCanvas(gain: t, ringRadius: innerDia / 2, lineWidth: ringWidth,
-                                       isSquare: isWatchlist, cornerRadius: innerDia * 0.15)
+                    TargetMarkerCanvas(gain: t, ringRadius: innerDia / 2, lineWidth: ringWidth)
                         .frame(width: diameter, height: diameter)
                 }
             } else {
@@ -271,13 +255,12 @@ struct BubbleChartView: View {
                     }
                 }()
                 if let t = tp.targets[date]?[targetKey], t > 0 {
-                    TargetMarkerCanvas(gain: t, ringRadius: outerDia / 2, lineWidth: ringWidth,
-                                       isSquare: isWatchlist, cornerRadius: outerDia * 0.15)
+                    TargetMarkerCanvas(gain: t, ringRadius: outerDia / 2, lineWidth: ringWidth)
                         .frame(width: diameter, height: diameter)
                 }
             }
 
-            // Close-position needle (center → outer ring edge).
+            // Close-position needle (center → outer ring edge) — hidden but logic preserved.
             if let stats = sessionStats(bubble.combined), stats.high > stats.low {
                 CloseDialView(
                     fraction: (stats.close - stats.low) / (stats.high - stats.low),
@@ -285,6 +268,7 @@ struct BubbleChartView: View {
                     lineWidth: max(1.5, ringWidth * 0.4)
                 )
                 .frame(width: diameter, height: diameter)
+                .hidden()
             }
 
             // Symbol label + counts + price.
@@ -431,7 +415,9 @@ struct BubbleChartView: View {
             }
 
             // Vertical bias: high close fraction → top, low → bottom.
-            let targetY = viewSize.height * (1 - bubbles[i].closeFraction)
+            // Watchlist symbols always float to top.
+            let cf = vm.watchlistSymbols.contains(bubbles[i].id) ? 1.0 : bubbles[i].closeFraction
+            let targetY = viewSize.height * (1 - cf)
             fy += (targetY - bubbles[i].position.y) * 0.03
 
             // Boundary forces.
@@ -603,8 +589,6 @@ private struct TargetMarkerCanvas: View {
     let gain: Double        // 0-5 (1.0 = 100%)
     let ringRadius: CGFloat // center of the ring stroke
     let lineWidth: CGFloat  // ring stroke width
-    var isSquare: Bool = false
-    var cornerRadius: CGFloat = 0
     var color: Color = .yellow.opacity(0.9)
 
     var body: some View {
@@ -614,22 +598,10 @@ private struct TargetMarkerCanvas: View {
             let adjustedFrac = gain >= 1.0 && frac == 0 ? 1.0 : frac
             let rad = -Double.pi / 2 + 2 * Double.pi * adjustedFrac
 
-            let p1: CGPoint
-            let p2: CGPoint
-
-            if isSquare && cornerRadius > 0 {
-                let innerHalf = ringRadius - lineWidth / 2
-                let outerHalf = ringRadius + lineWidth / 2
-                let innerCR = max(0, cornerRadius - lineWidth / 2)
-                let outerCR = cornerRadius + lineWidth / 2
-                p1 = Self.pointOnRoundedRect(angle: rad, halfSize: innerHalf, cr: innerCR, center: center)
-                p2 = Self.pointOnRoundedRect(angle: rad, halfSize: outerHalf, cr: outerCR, center: center)
-            } else {
-                let innerR = ringRadius - lineWidth / 2
-                let outerR = ringRadius + lineWidth / 2
-                p1 = CGPoint(x: center.x + cos(rad) * innerR, y: center.y + sin(rad) * innerR)
-                p2 = CGPoint(x: center.x + cos(rad) * outerR, y: center.y + sin(rad) * outerR)
-            }
+            let innerR = ringRadius - lineWidth / 2
+            let outerR = ringRadius + lineWidth / 2
+            let p1 = CGPoint(x: center.x + cos(rad) * innerR, y: center.y + sin(rad) * innerR)
+            let p2 = CGPoint(x: center.x + cos(rad) * outerR, y: center.y + sin(rad) * outerR)
 
             var line = Path()
             line.move(to: p1)
@@ -637,43 +609,6 @@ private struct TargetMarkerCanvas: View {
             context.stroke(line, with: .color(color),
                           style: StrokeStyle(lineWidth: 2, lineCap: .round))
         }
-    }
-
-    /// Ray-rounded-rectangle intersection: returns the point on the perimeter
-    /// of a rounded rectangle where a ray from center at `angle` exits.
-    private static func pointOnRoundedRect(angle: Double, halfSize: CGFloat, cr: CGFloat, center: CGPoint) -> CGPoint {
-        let s = Double(halfSize)
-        let r = min(Double(cr), s)
-        let straight = s - r // where corner arcs begin
-
-        let dx = cos(angle)
-        let dy = sin(angle)
-
-        // Ray-box intersection.
-        let tX = dx != 0 ? s / abs(dx) : Double.infinity
-        let tY = dy != 0 ? s / abs(dy) : Double.infinity
-        let t = min(tX, tY)
-        let px = dx * t
-        let py = dy * t
-
-        // Check if ray exits through a corner region.
-        if abs(px) > straight + 0.001 && abs(py) > straight + 0.001 && r > 0 {
-            let ccx = (px > 0 ? 1.0 : -1.0) * straight
-            let ccy = (py > 0 ? 1.0 : -1.0) * straight
-
-            // Solve |(dx*t - ccx, dy*t - ccy)| = r
-            let b = -2.0 * (dx * ccx + dy * ccy)
-            let c = ccx * ccx + ccy * ccy - r * r
-            let disc = b * b - 4.0 * c
-            if disc >= 0 {
-                let t1 = (-b + sqrt(disc)) / 2.0
-                let t2 = (-b - sqrt(disc)) / 2.0
-                let tc = max(t1, t2)
-                return CGPoint(x: center.x + CGFloat(dx * tc), y: center.y + CGFloat(dy * tc))
-            }
-        }
-
-        return CGPoint(x: center.x + CGFloat(px), y: center.y + CGFloat(py))
     }
 }
 
