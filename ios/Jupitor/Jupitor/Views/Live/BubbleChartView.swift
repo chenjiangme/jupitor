@@ -218,25 +218,25 @@ struct BubbleChartView: View {
                 }
             }
 
-            // Max drawdown markers (cyan line — where price dropped to after peak).
-            if dualRing {
-                if let reg = bubble.combined.reg, let dd = reg.maxDrawdown, dd > 0 {
-                    TargetMarkerCanvas(gain: reg.maxGain - dd, ringRadius: outerDia / 2, lineWidth: ringWidth,
-                                       color: .cyan.opacity(0.9))
-                        .frame(width: diameter, height: diameter)
-                }
-                if let pre = bubble.combined.pre, let dd = pre.maxDrawdown, dd > 0 {
-                    TargetMarkerCanvas(gain: pre.maxGain - dd, ringRadius: innerDia / 2, lineWidth: ringWidth,
-                                       color: .cyan.opacity(0.9))
-                        .frame(width: diameter, height: diameter)
-                }
-            } else {
-                if let stats = sessionStats(bubble.combined), let dd = stats.maxDrawdown, dd > 0 {
-                    TargetMarkerCanvas(gain: stats.maxGain - dd, ringRadius: outerDia / 2, lineWidth: ringWidth,
-                                       color: .cyan.opacity(0.9))
-                        .frame(width: diameter, height: diameter)
-                }
-            }
+            // Max drawdown markers (cyan line — hidden but logic preserved).
+            // if dualRing {
+            //     if let reg = bubble.combined.reg, let dd = reg.maxDrawdown, dd > 0 {
+            //         TargetMarkerCanvas(gain: reg.maxGain - dd, ringRadius: outerDia / 2, lineWidth: ringWidth,
+            //                            color: .cyan.opacity(0.9))
+            //             .frame(width: diameter, height: diameter)
+            //     }
+            //     if let pre = bubble.combined.pre, let dd = pre.maxDrawdown, dd > 0 {
+            //         TargetMarkerCanvas(gain: pre.maxGain - dd, ringRadius: innerDia / 2, lineWidth: ringWidth,
+            //                            color: .cyan.opacity(0.9))
+            //             .frame(width: diameter, height: diameter)
+            //     }
+            // } else {
+            //     if let stats = sessionStats(bubble.combined), let dd = stats.maxDrawdown, dd > 0 {
+            //         TargetMarkerCanvas(gain: stats.maxGain - dd, ringRadius: outerDia / 2, lineWidth: ringWidth,
+            //                            color: .cyan.opacity(0.9))
+            //             .frame(width: diameter, height: diameter)
+            //     }
+            // }
 
             // Target gain markers (yellow line across ring).
             if dualRing {
@@ -625,7 +625,7 @@ private struct TargetMarkerCanvas: View {
             line.move(to: p1)
             line.addLine(to: p2)
             context.stroke(line, with: .color(color),
-                          style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                          style: StrokeStyle(lineWidth: 4, lineCap: .round))
         }
     }
 }
