@@ -70,13 +70,17 @@ struct SessionRingView: View {
                 }
 
                 if gain >= loss {
+                    let gainEnd = min(gain, 5.0).truncatingRemainder(dividingBy: 1.0)
                     GradientArcsView(value: gain, shades: gainShades, lineWidth: lineWidth, cornerRadius: cornerRadius)
                     GradientArcsView(value: loss, shades: lossShades, lineWidth: lineWidth * 0.5, cornerRadius: cornerRadius)
                         .scaleEffect(x: -1, y: 1)
+                        .rotationEffect(.degrees(gainEnd * 360))
                 } else {
+                    let lossEnd = min(loss, 5.0).truncatingRemainder(dividingBy: 1.0)
                     GradientArcsView(value: loss, shades: lossShades, lineWidth: lineWidth, cornerRadius: cornerRadius)
                         .scaleEffect(x: -1, y: 1)
                     GradientArcsView(value: gain, shades: gainShades, lineWidth: lineWidth * 0.5, cornerRadius: cornerRadius)
+                        .rotationEffect(.degrees(-lossEnd * 360))
                 }
             }
             .frame(width: diameter, height: diameter)
