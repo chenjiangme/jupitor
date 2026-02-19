@@ -48,6 +48,9 @@ final class DashboardViewModel {
     private var historyCache: [String: (today: DayDataJSON, next: DayDataJSON?)] = [:]
     private var preloadTask: Task<Void, Never>?
     private var replayDebounceTask: Task<Void, Never>?
+    private var replayTimer: AnyCancellable?
+    private var replayDate: String = ""
+    private var replaySessionMode: SessionMode = .pre
 
     // MARK: - Init
 
@@ -273,20 +276,63 @@ final class DashboardViewModel {
             replayDayData = nil
             replayDebounceTask?.cancel()
             replayDebounceTask = nil
+            replayTimer?.cancel()
+            replayTimer = nil
         }
     }
 
-    func startReplay(date: String) async {
+    func startReplay(date: String, sessionMode: SessionMode) async {
         isReplaying = true
+        replayDate = date
+        replaySessionMode = sessionMode
         // Fetch with max timestamp to get full timeRange.
         await fetchReplayData(date: date, until: Int64.max)
-        // Set scrub position to end of time range.
+        // Start at the beginning of the session.
+        let (sessionStart, _) = sessionBounds(date: date, sessionMode: sessionMode)
         if let tr = replayTimeRange {
-            replayTime = tr.end
+            replayTime = max(sessionStart, tr.start)
+        } else {
+            replayTime = sessionStart
         }
+        // Fetch data at starting position.
+        if let rt = replayTime {
+            await fetchReplayData(date: date, until: rt)
+        }
+        startReplayTimer()
+    }
+
+    /// Auto-advance replay: 1 real second = 5 seconds of market time.
+    private func startReplayTimer() {
+        replayTimer?.cancel()
+        replayTimer = Timer.publish(every: 1, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                guard let self, self.isReplaying, let rt = self.replayTime else { return }
+                let advance: Int64 = 5000 // 5 seconds in ms
+                let (sessionStart, sessionEnd) = self.sessionBounds(date: self.replayDate, sessionMode: self.replaySessionMode)
+                let rangeEnd: Int64
+                if let tr = self.replayTimeRange {
+                    rangeEnd = min(sessionEnd, tr.end)
+                } else {
+                    rangeEnd = sessionEnd
+                }
+                let newTime = min(rt + advance, rangeEnd)
+                self.replayTime = newTime
+                // Fetch updated data.
+                self.replayDebounceTask?.cancel()
+                self.replayDebounceTask = Task {
+                    await self.fetchReplayData(date: self.replayDate, until: newTime)
+                }
+            }
     }
 
     func scrubTo(fraction: Double, date: String, sessionMode: SessionMode) {
+        // Pause auto-advance while scrubbing.
+        replayTimer?.cancel()
+        replayTimer = nil
+        replayDate = date
+        replaySessionMode = sessionMode
+
         let clamped = min(max(fraction, 0), 1)
         let (sessionStart, sessionEnd) = sessionBounds(date: date, sessionMode: sessionMode)
 
@@ -314,8 +360,14 @@ final class DashboardViewModel {
         }
     }
 
+    func scrubEnded() {
+        startReplayTimer()
+    }
+
     func replaySessionChanged(date: String, sessionMode: SessionMode) {
         guard isReplaying, let rt = replayTime else { return }
+        replayDate = date
+        replaySessionMode = sessionMode
         let (sessionStart, sessionEnd) = sessionBounds(date: date, sessionMode: sessionMode)
         let rangeStart: Int64
         let rangeEnd: Int64
@@ -346,9 +398,7 @@ final class DashboardViewModel {
         }
     }
 
-    /// Returns (start, end) ET-shifted timestamps in Unix ms for the given session mode.
-    /// The backend uses "ET-shifted" convention: ET clock time stored as if it were UTC.
-    /// So 9:30 AM ET is stored as date 09:30:00 UTC milliseconds.
+    /// Returns (start, end) real Unix timestamps in ms for the given session mode on a date.
     private func sessionBounds(date: String, sessionMode: SessionMode) -> (Int64, Int64) {
         let parts = date.split(separator: "-")
         guard parts.count == 3,
@@ -357,7 +407,7 @@ final class DashboardViewModel {
         }
 
         var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(abbreviation: "UTC")!
+        cal.timeZone = TimeZone(identifier: "America/New_York")!
         var comps = DateComponents()
         comps.year = y
         comps.month = m

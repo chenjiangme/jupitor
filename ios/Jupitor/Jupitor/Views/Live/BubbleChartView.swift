@@ -313,13 +313,16 @@ struct BubbleChartView: View {
         .frame(width: diameter, height: diameter)
         .position(bubble.position)
         .onTapGesture(count: 2) {
+            guard !vm.isReplaying else { return }
             Task { await vm.toggleWatchlist(symbol: bubble.id, date: wlDate) }
         }
         .onTapGesture(count: 1) {
+            guard !vm.isReplaying else { return }
             detailCombined = bubble.combined
             showDetail = true
         }
         .onLongPressGesture {
+            guard !vm.isReplaying else { return }
             historySymbol = bubble.id
             showHistory = true
         }

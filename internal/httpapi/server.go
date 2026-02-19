@@ -1193,6 +1193,13 @@ func (s *DashboardServer) handleReplay(w http.ResponseWriter, r *http.Request) {
 	}
 	sortMode := parseSortMode(r)
 
+	// Determine ET offset for this date to convert between real Unix ms and
+	// the internal ET-shifted convention (ET clock time stored as UTC).
+	dateTime, _ := time.ParseInLocation("2006-01-02", date, s.loc)
+	_, etOff := dateTime.Zone()             // e.g. -18000 for EST
+	etOffMs := int64(etOff) * 1000          // e.g. -18000000
+	untilET := until + etOffMs              // convert real → ET-shifted
+
 	// Load trades + tier map (from live model or replay cache).
 	today := time.Now().In(s.loc).Format("2006-01-02")
 	var trades []store.TradeRecord
@@ -1225,7 +1232,7 @@ func (s *DashboardServer) handleReplay(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Compute time range from full trades.
+	// Compute time range from full trades (ET-shifted), then convert to real Unix ms.
 	var timeRange *TimeRange
 	if len(trades) > 0 {
 		minTS, maxTS := trades[0].Timestamp, trades[0].Timestamp
@@ -1237,22 +1244,22 @@ func (s *DashboardServer) handleReplay(w http.ResponseWriter, r *http.Request) {
 				maxTS = trades[i].Timestamp
 			}
 		}
-		timeRange = &TimeRange{Start: minTS, End: maxTS}
+		timeRange = &TimeRange{Start: minTS - etOffMs, End: maxTS - etOffMs}
 	}
 
-	// Filter trades to timestamp <= until.
+	// Filter trades to timestamp <= untilET (ET-shifted comparison).
 	var filtered []store.TradeRecord
 	if date == today {
 		// Live trades may not be sorted; do linear scan.
 		for i := range trades {
-			if trades[i].Timestamp <= until {
+			if trades[i].Timestamp <= untilET {
 				filtered = append(filtered, trades[i])
 			}
 		}
 	} else {
 		// History trades are sorted — binary search.
 		idx := sort.Search(len(trades), func(i int) bool {
-			return trades[i].Timestamp > until
+			return trades[i].Timestamp > untilET
 		})
 		filtered = trades[:idx]
 	}

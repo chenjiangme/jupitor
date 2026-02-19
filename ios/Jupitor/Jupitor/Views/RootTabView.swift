@@ -58,10 +58,9 @@ struct RootTabView: View {
 
     private var replayTimeLabel: String {
         guard let ts = vm.replayTime else { return "" }
-        // Timestamps are ET-shifted (ET clock time stored as UTC), so format with UTC.
         let date = Date(timeIntervalSince1970: Double(ts) / 1000.0)
         let fmt = DateFormatter()
-        fmt.timeZone = TimeZone(abbreviation: "UTC")
+        fmt.timeZone = TimeZone(identifier: "America/New_York")
         fmt.dateFormat = "h:mm:ss a"
         return fmt.string(from: date)
     }
@@ -222,7 +221,7 @@ struct RootTabView: View {
                             if vm.isReplaying {
                                 vm.toggleReplay()
                             } else {
-                                Task { await vm.startReplay(date: currentDate) }
+                                Task { await vm.startReplay(date: currentDate, sessionMode: sessionMode) }
                             }
                         } label: {
                             Image(systemName: vm.isReplaying ? "stop.circle.fill" : "play.circle")
@@ -296,7 +295,9 @@ struct RootTabView: View {
                             return
                         }
                         if vm.isReplaying {
-                            if locked != true {
+                            if locked == true {
+                                vm.scrubEnded()
+                            } else {
                                 commitVerticalSwipe(offset: value.translation.height)
                             }
                         } else {
