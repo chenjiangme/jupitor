@@ -32,6 +32,19 @@ actor APIService {
         return try await fetch(components.url!)
     }
 
+    // MARK: - Replay
+
+    func fetchReplay(date: String, until: Int64, sortMode: Int = 0) async throws -> DashboardResponse {
+        let url = baseURL.appendingPathComponent("api/dashboard/replay")
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "date", value: date),
+            URLQueryItem(name: "until", value: "\(until)"),
+            URLQueryItem(name: "sort", value: "\(sortMode)")
+        ]
+        return try await fetch(components.url!)
+    }
+
     // MARK: - Dates
 
     func fetchDates() async throws -> DatesResponse {

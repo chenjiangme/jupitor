@@ -59,6 +59,12 @@ type DayDataJSON struct {
 	Tiers    []TierGroupJSON `json:"tiers"`
 }
 
+// TimeRange holds the earliest and latest trade timestamps for replay scrubbing.
+type TimeRange struct {
+	Start int64 `json:"start"` // earliest trade timestamp (Unix ms)
+	End   int64 `json:"end"`   // latest trade timestamp (Unix ms)
+}
+
 // DashboardResponse is the top-level JSON response for dashboard endpoints.
 type DashboardResponse struct {
 	Date      string      `json:"date"`
@@ -66,6 +72,7 @@ type DashboardResponse struct {
 	Next      *DayDataJSON `json:"next,omitempty"`
 	SortMode  int         `json:"sortMode"`
 	SortLabel string      `json:"sortLabel"`
+	TimeRange *TimeRange  `json:"timeRange,omitempty"`
 }
 
 // DatesResponse lists available history dates.

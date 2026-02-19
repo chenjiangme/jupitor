@@ -29,6 +29,13 @@ final class DashboardViewModel {
     var watchlistDate: String = "" // date the current watchlist is for
     private var watchlistCache: [String: Set<String>] = [:] // date -> symbols
 
+    // MARK: - Replay
+
+    var isReplaying = false
+    var replayTime: Int64?           // current scrub position (Unix ms)
+    var replayTimeRange: TimeRange?  // full time bounds from API
+    var replayDayData: DayDataJSON?  // snapshot at current scrub time
+
     // MARK: - Status
 
     var isLoading = false
@@ -40,6 +47,7 @@ final class DashboardViewModel {
     private var refreshTimer: AnyCancellable?
     private var historyCache: [String: (today: DayDataJSON, next: DayDataJSON?)] = [:]
     private var preloadTask: Task<Void, Never>?
+    private var replayDebounceTask: Task<Void, Never>?
 
     // MARK: - Init
 
@@ -253,6 +261,127 @@ final class DashboardViewModel {
             }
         }
         watchlistCache[date] = watchlistSymbols
+    }
+
+    // MARK: - Replay
+
+    func toggleReplay() {
+        if isReplaying {
+            isReplaying = false
+            replayTime = nil
+            replayTimeRange = nil
+            replayDayData = nil
+            replayDebounceTask?.cancel()
+            replayDebounceTask = nil
+        }
+    }
+
+    func startReplay(date: String) async {
+        isReplaying = true
+        // Fetch with max timestamp to get full timeRange.
+        await fetchReplayData(date: date, until: Int64.max)
+        // Set scrub position to end of time range.
+        if let tr = replayTimeRange {
+            replayTime = tr.end
+        }
+    }
+
+    func scrubTo(fraction: Double, date: String, sessionMode: SessionMode) {
+        let clamped = min(max(fraction, 0), 1)
+        let (sessionStart, sessionEnd) = sessionBounds(date: date, sessionMode: sessionMode)
+
+        // Clamp session bounds to actual time range if available.
+        let rangeStart: Int64
+        let rangeEnd: Int64
+        if let tr = replayTimeRange {
+            rangeStart = max(sessionStart, tr.start)
+            rangeEnd = min(sessionEnd, tr.end)
+        } else {
+            rangeStart = sessionStart
+            rangeEnd = sessionEnd
+        }
+
+        guard rangeEnd > rangeStart else { return }
+        let ts = rangeStart + Int64(clamped * Double(rangeEnd - rangeStart))
+        replayTime = ts
+
+        // Debounce API call.
+        replayDebounceTask?.cancel()
+        replayDebounceTask = Task {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else { return }
+            await fetchReplayData(date: date, until: ts)
+        }
+    }
+
+    func replaySessionChanged(date: String, sessionMode: SessionMode) {
+        guard isReplaying, let rt = replayTime else { return }
+        let (sessionStart, sessionEnd) = sessionBounds(date: date, sessionMode: sessionMode)
+        let rangeStart: Int64
+        let rangeEnd: Int64
+        if let tr = replayTimeRange {
+            rangeStart = max(sessionStart, tr.start)
+            rangeEnd = min(sessionEnd, tr.end)
+        } else {
+            rangeStart = sessionStart
+            rangeEnd = sessionEnd
+        }
+        let clamped = min(max(rt, rangeStart), rangeEnd)
+        replayTime = clamped
+        replayDebounceTask?.cancel()
+        replayDebounceTask = Task {
+            await fetchReplayData(date: date, until: clamped)
+        }
+    }
+
+    private func fetchReplayData(date: String, until: Int64) async {
+        do {
+            let resp = try await api.fetchReplay(date: date, until: until, sortMode: sortMode.rawValue)
+            replayDayData = resp.today
+            if let tr = resp.timeRange {
+                replayTimeRange = tr
+            }
+        } catch {
+            // Non-fatal.
+        }
+    }
+
+    /// Returns (start, end) timestamps in Unix ms for the given session mode on a date.
+    private func sessionBounds(date: String, sessionMode: SessionMode) -> (Int64, Int64) {
+        // Parse date and compute ET timestamps.
+        // Use a fixed ET offset approach: parse as UTC date, apply ET hour offsets.
+        // The backend uses the same convention for open930ET / postMarketStartET.
+        let parts = date.split(separator: "-")
+        guard parts.count == 3,
+              let y = Int(parts[0]), let m = Int(parts[1]), let d = Int(parts[2]) else {
+            return (0, Int64.max)
+        }
+
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "America/New_York")!
+        var comps = DateComponents()
+        comps.year = y
+        comps.month = m
+        comps.day = d
+
+        func msAt(hour: Int, minute: Int) -> Int64 {
+            comps.hour = hour
+            comps.minute = minute
+            comps.second = 0
+            guard let dt = cal.date(from: comps) else { return 0 }
+            return Int64(dt.timeIntervalSince1970 * 1000)
+        }
+
+        switch sessionMode {
+        case .pre:
+            return (msAt(hour: 4, minute: 0), msAt(hour: 9, minute: 30))
+        case .reg:
+            return (msAt(hour: 9, minute: 30), msAt(hour: 16, minute: 0))
+        case .day:
+            return (msAt(hour: 4, minute: 0), msAt(hour: 16, minute: 0))
+        case .next:
+            return (msAt(hour: 16, minute: 0), msAt(hour: 20, minute: 0))
+        }
     }
 
     // MARK: - Symbol History

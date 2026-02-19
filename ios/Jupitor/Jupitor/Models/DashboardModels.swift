@@ -48,12 +48,18 @@ struct DayDataJSON: Codable, Equatable {
     let tiers: [TierGroupJSON]
 }
 
+struct TimeRange: Codable, Equatable {
+    let start: Int64
+    let end: Int64
+}
+
 struct DashboardResponse: Codable {
     let date: String
     let today: DayDataJSON
     let next: DayDataJSON?
     let sortMode: Int
     let sortLabel: String
+    let timeRange: TimeRange?
 }
 
 struct DatesResponse: Codable {

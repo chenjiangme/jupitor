@@ -75,6 +75,11 @@ type DashboardServer struct {
 
 	// Reference data directory for trade-universe generation.
 	refDir string
+
+	// Replay cache: date -> sorted trades + tier map.
+	replayMu    sync.RWMutex
+	replayCache map[string][]store.TradeRecord
+	replayTier  map[string]map[string]string
 }
 
 // NewDashboardServer creates a new dashboard HTTP server.
@@ -103,6 +108,8 @@ func NewDashboardServer(
 		stLimiter:    time.NewTicker(500 * time.Millisecond),
 		tradeParams:  tradeParams,
 		refDir:       refDir,
+		replayCache:  make(map[string][]store.TradeRecord),
+		replayTier:   make(map[string]map[string]string),
 	}
 
 	return s
@@ -890,6 +897,7 @@ func (s *DashboardServer) pruneOldestWatchlists(lists []alpacaapi.Watchlist, n i
 // RegisterRoutes registers all API routes on the given mux.
 func (s *DashboardServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/dashboard", s.handleDashboard)
+	mux.HandleFunc("GET /api/dashboard/replay", s.handleReplay)
 	mux.HandleFunc("GET /api/dashboard/history/{date}", s.handleHistory)
 	mux.HandleFunc("GET /api/dates", s.handleDates)
 	mux.HandleFunc("GET /api/watchlist", s.handleGetWatchlist)
@@ -1165,6 +1173,136 @@ func (s *DashboardServer) handleHistory(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, resp)
+}
+
+func (s *DashboardServer) handleReplay(w http.ResponseWriter, r *http.Request) {
+	date := r.URL.Query().Get("date")
+	if date == "" {
+		writeError(w, http.StatusBadRequest, "date required")
+		return
+	}
+	untilStr := r.URL.Query().Get("until")
+	if untilStr == "" {
+		writeError(w, http.StatusBadRequest, "until required")
+		return
+	}
+	until, err := strconv.ParseInt(untilStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid until timestamp")
+		return
+	}
+	sortMode := parseSortMode(r)
+
+	// Load trades + tier map (from live model or replay cache).
+	today := time.Now().In(s.loc).Format("2006-01-02")
+	var trades []store.TradeRecord
+	var tierMap map[string]string
+
+	if date == today {
+		_, trades = s.model.TodaySnapshot()
+		tierMap = s.tierMap
+	} else {
+		trades, tierMap = s.getReplayCache(date)
+		if trades == nil {
+			// Load from disk.
+			loaded, loadErr := dashboard.LoadHistoryTrades(s.dataDir, date)
+			if loadErr != nil {
+				writeError(w, http.StatusNotFound, fmt.Sprintf("trades not found for %s", date))
+				return
+			}
+			tm, tmErr := dashboard.LoadTierMapForDate(s.dataDir, date)
+			if tmErr != nil {
+				writeError(w, http.StatusNotFound, fmt.Sprintf("tier map not found for %s", date))
+				return
+			}
+			// Sort by timestamp for binary search.
+			sort.Slice(loaded, func(i, j int) bool {
+				return loaded[i].Timestamp < loaded[j].Timestamp
+			})
+			s.putReplayCache(date, loaded, tm)
+			trades = loaded
+			tierMap = tm
+		}
+	}
+
+	// Compute time range from full trades.
+	var timeRange *TimeRange
+	if len(trades) > 0 {
+		minTS, maxTS := trades[0].Timestamp, trades[0].Timestamp
+		for i := 1; i < len(trades); i++ {
+			if trades[i].Timestamp < minTS {
+				minTS = trades[i].Timestamp
+			}
+			if trades[i].Timestamp > maxTS {
+				maxTS = trades[i].Timestamp
+			}
+		}
+		timeRange = &TimeRange{Start: minTS, End: maxTS}
+	}
+
+	// Filter trades to timestamp <= until.
+	var filtered []store.TradeRecord
+	if date == today {
+		// Live trades may not be sorted; do linear scan.
+		for i := range trades {
+			if trades[i].Timestamp <= until {
+				filtered = append(filtered, trades[i])
+			}
+		}
+	} else {
+		// History trades are sorted — binary search.
+		idx := sort.Search(len(trades), func(i int) bool {
+			return trades[i].Timestamp > until
+		})
+		filtered = trades[:idx]
+	}
+
+	open930 := open930ET(date, s.loc)
+	data := dashboard.ComputeDayData(date, filtered, tierMap, open930, sortMode)
+	todayJSON := convertDayData(data, nil)
+	todayJSON.Date = date
+
+	resp := DashboardResponse{
+		Date:      date,
+		Today:     todayJSON,
+		SortMode:  sortMode,
+		SortLabel: dashboard.SortModeLabel(sortMode),
+		TimeRange: timeRange,
+	}
+
+	writeJSON(w, resp)
+}
+
+// getReplayCache returns cached trades and tier map for a date, or nil if not cached.
+func (s *DashboardServer) getReplayCache(date string) ([]store.TradeRecord, map[string]string) {
+	s.replayMu.RLock()
+	defer s.replayMu.RUnlock()
+	trades, ok := s.replayCache[date]
+	if !ok {
+		return nil, nil
+	}
+	return trades, s.replayTier[date]
+}
+
+// putReplayCache stores trades and tier map in the replay cache, evicting oldest if over 10 entries.
+func (s *DashboardServer) putReplayCache(date string, trades []store.TradeRecord, tierMap map[string]string) {
+	s.replayMu.Lock()
+	defer s.replayMu.Unlock()
+
+	s.replayCache[date] = trades
+	s.replayTier[date] = tierMap
+
+	// Evict oldest if over 10 entries.
+	if len(s.replayCache) > 10 {
+		var oldest string
+		for d := range s.replayCache {
+			if oldest == "" || d < oldest {
+				oldest = d
+			}
+		}
+		delete(s.replayCache, oldest)
+		delete(s.replayTier, oldest)
+	}
 }
 
 func (s *DashboardServer) handleDates(w http.ResponseWriter, r *http.Request) {

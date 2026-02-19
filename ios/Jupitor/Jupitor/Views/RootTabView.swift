@@ -30,7 +30,10 @@ struct RootTabView: View {
 
     // Data for current view.
     private var dayData: DayDataJSON? {
-        isLive ? vm.today : vm.historyDay
+        if vm.isReplaying, let replay = vm.replayDayData {
+            return replay
+        }
+        return isLive ? vm.today : vm.historyDay
     }
     private var nextData: DayDataJSON? {
         isLive ? vm.next : vm.historyNext
@@ -51,6 +54,15 @@ struct RootTabView: View {
         if showDayMode { modes.append(.day) }
         if nextData != nil { modes.append(.next) }
         return modes
+    }
+
+    private var replayTimeLabel: String {
+        guard let ts = vm.replayTime else { return "" }
+        let date = Date(timeIntervalSince1970: Double(ts) / 1000.0)
+        let fmt = DateFormatter()
+        fmt.timeZone = TimeZone(identifier: "America/New_York")
+        fmt.dateFormat = "h:mm:ss a"
+        return fmt.string(from: date)
     }
 
     private func navigate(by delta: Int) {
@@ -159,7 +171,7 @@ struct RootTabView: View {
                         ProgressView()
                             .foregroundStyle(.secondary)
                     } else if let day = dayData {
-                        let displayDay = sessionMode == .next ? (nextData ?? day) : day
+                        let displayDay = vm.isReplaying ? day : (sessionMode == .next ? (nextData ?? day) : day)
                         BubbleChartView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
                     } else if isLive, let error = vm.error {
                         VStack(spacing: 12) {
@@ -183,40 +195,77 @@ struct RootTabView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    if isLive {
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(.green)
-                                .frame(width: 8, height: 8)
-                                .pulseAnimation()
-                            Text("LIVE")
-                                .font(.caption2.bold())
-                                .foregroundStyle(.green)
+                    HStack(spacing: 6) {
+                        if isLive && !vm.isReplaying {
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(.green)
+                                    .frame(width: 8, height: 8)
+                                    .pulseAnimation()
+                                Text("LIVE")
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(.green)
+                            }
+                            .fixedSize()
+                        } else if !vm.isReplaying {
+                            Button {
+                                currentDate = vm.date
+                                sessionMode = .reg
+                            } label: {
+                                Text("LIVE")
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                        .fixedSize()
-                    } else {
                         Button {
-                            currentDate = vm.date
-                            sessionMode = .reg
+                            if vm.isReplaying {
+                                vm.toggleReplay()
+                            } else {
+                                Task { await vm.startReplay(date: currentDate) }
+                            }
                         } label: {
-                            Text("LIVE")
-                                .font(.caption2.bold())
-                                .foregroundStyle(.secondary)
+                            Image(systemName: vm.isReplaying ? "stop.circle.fill" : "play.circle")
+                                .foregroundStyle(vm.isReplaying ? .orange : .secondary)
                         }
                     }
                 }
 
                 ToolbarItem(placement: .principal) {
-                    HStack(spacing: 6) {
-                        Text(currentDate)
-                            .font(.headline)
-                        Text(sessionMode.label)
-                            .font(.caption2.bold())
-                            .foregroundStyle(sessionMode == .day ? Color.secondary : Color.white)
-                        if !vm.watchlistSymbols.isEmpty {
-                            Text("\(vm.watchlistSymbols.count)")
+                    if vm.isReplaying {
+                        VStack(spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(currentDate)
+                                    .font(.headline)
+                                Text(sessionMode.label)
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(sessionMode == .day ? Color.secondary : Color.white)
+                            }
+                            Text(replayTimeLabel)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.orange)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 1)
+                                .onChanged { value in
+                                    let width = UIScreen.main.bounds.width * 0.5 // approximate principal width
+                                    let fraction = Double(value.location.x / width)
+                                    vm.scrubTo(fraction: fraction, date: currentDate, sessionMode: sessionMode)
+                                }
+                        )
+                    } else {
+                        HStack(spacing: 6) {
+                            Text(currentDate)
+                                .font(.headline)
+                            Text(sessionMode.label)
                                 .font(.caption2.bold())
-                                .foregroundStyle(Color.watchlistColor)
+                                .foregroundStyle(sessionMode == .day ? Color.secondary : Color.white)
+                            if !vm.watchlistSymbols.isEmpty {
+                                Text("\(vm.watchlistSymbols.count)")
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(Color.watchlistColor)
+                            }
                         }
                     }
                 }
@@ -230,7 +279,7 @@ struct RootTabView: View {
             .simultaneousGesture(
                 DragGesture(minimumDistance: 30)
                     .onChanged { value in
-                        guard !isTransitioning, !isVerticalTransitioning else { return }
+                        guard !isTransitioning, !isVerticalTransitioning, !vm.isReplaying else { return }
                         let t = value.translation
                         if dragLocked == nil {
                             dragLocked = abs(t.width) > abs(t.height)
@@ -248,7 +297,7 @@ struct RootTabView: View {
                     .onEnded { value in
                         let locked = dragLocked
                         dragLocked = nil
-                        guard !isTransitioning, !isVerticalTransitioning else {
+                        guard !isTransitioning, !isVerticalTransitioning, !vm.isReplaying else {
                             panOffset = 0
                             verticalOffset = 0
                             return
@@ -285,7 +334,13 @@ struct RootTabView: View {
             .onChange(of: showDayMode) { _, show in
                 if !show && sessionMode == .day { sessionMode = .reg }
             }
+            .onChange(of: sessionMode) { _, newMode in
+                if vm.isReplaying {
+                    vm.replaySessionChanged(date: currentDate, sessionMode: newMode)
+                }
+            }
             .task(id: currentDate) {
+                if vm.isReplaying { vm.toggleReplay() }
                 if !currentDate.isEmpty && !isLive {
                     await vm.loadHistory(date: currentDate)
                 }
