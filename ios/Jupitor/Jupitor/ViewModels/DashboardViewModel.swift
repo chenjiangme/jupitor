@@ -346,11 +346,10 @@ final class DashboardViewModel {
         }
     }
 
-    /// Returns (start, end) timestamps in Unix ms for the given session mode on a date.
+    /// Returns (start, end) ET-shifted timestamps in Unix ms for the given session mode.
+    /// The backend uses "ET-shifted" convention: ET clock time stored as if it were UTC.
+    /// So 9:30 AM ET is stored as date 09:30:00 UTC milliseconds.
     private func sessionBounds(date: String, sessionMode: SessionMode) -> (Int64, Int64) {
-        // Parse date and compute ET timestamps.
-        // Use a fixed ET offset approach: parse as UTC date, apply ET hour offsets.
-        // The backend uses the same convention for open930ET / postMarketStartET.
         let parts = date.split(separator: "-")
         guard parts.count == 3,
               let y = Int(parts[0]), let m = Int(parts[1]), let d = Int(parts[2]) else {
@@ -358,7 +357,7 @@ final class DashboardViewModel {
         }
 
         var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(identifier: "America/New_York")!
+        cal.timeZone = TimeZone(abbreviation: "UTC")!
         var comps = DateComponents()
         comps.year = y
         comps.month = m

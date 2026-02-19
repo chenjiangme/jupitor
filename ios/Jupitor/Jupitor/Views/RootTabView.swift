@@ -58,9 +58,10 @@ struct RootTabView: View {
 
     private var replayTimeLabel: String {
         guard let ts = vm.replayTime else { return "" }
+        // Timestamps are ET-shifted (ET clock time stored as UTC), so format with UTC.
         let date = Date(timeIntervalSince1970: Double(ts) / 1000.0)
         let fmt = DateFormatter()
-        fmt.timeZone = TimeZone(identifier: "America/New_York")
+        fmt.timeZone = TimeZone(abbreviation: "UTC")
         fmt.dateFormat = "h:mm:ss a"
         return fmt.string(from: date)
     }
@@ -231,41 +232,23 @@ struct RootTabView: View {
                 }
 
                 ToolbarItem(placement: .principal) {
-                    if vm.isReplaying {
-                        VStack(spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text(currentDate)
-                                    .font(.headline)
-                                Text(sessionMode.label)
-                                    .font(.caption2.bold())
-                                    .foregroundStyle(sessionMode == .day ? Color.secondary : Color.white)
-                            }
-                            Text(replayTimeLabel)
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.orange)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .contentShape(Rectangle())
-                        .gesture(
-                            DragGesture(minimumDistance: 1)
-                                .onChanged { value in
-                                    let width = UIScreen.main.bounds.width * 0.5 // approximate principal width
-                                    let fraction = Double(value.location.x / width)
-                                    vm.scrubTo(fraction: fraction, date: currentDate, sessionMode: sessionMode)
-                                }
-                        )
-                    } else {
+                    VStack(spacing: vm.isReplaying ? 2 : 0) {
                         HStack(spacing: 6) {
                             Text(currentDate)
                                 .font(.headline)
                             Text(sessionMode.label)
                                 .font(.caption2.bold())
                                 .foregroundStyle(sessionMode == .day ? Color.secondary : Color.white)
-                            if !vm.watchlistSymbols.isEmpty {
+                            if !vm.isReplaying && !vm.watchlistSymbols.isEmpty {
                                 Text("\(vm.watchlistSymbols.count)")
                                     .font(.caption2.bold())
                                     .foregroundStyle(Color.watchlistColor)
                             }
+                        }
+                        if vm.isReplaying {
+                            Text(replayTimeLabel)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.orange)
                         }
                     }
                 }
@@ -279,33 +262,49 @@ struct RootTabView: View {
             .simultaneousGesture(
                 DragGesture(minimumDistance: 30)
                     .onChanged { value in
-                        guard !isTransitioning, !isVerticalTransitioning, !vm.isReplaying else { return }
+                        guard !isTransitioning, !isVerticalTransitioning else { return }
                         let t = value.translation
                         if dragLocked == nil {
                             dragLocked = abs(t.width) > abs(t.height)
                         }
-                        if dragLocked == true {
-                            if (t.width < 0 && canGoForward) || (t.width > 0 && canGoBack) {
-                                panOffset = t.width
+                        if vm.isReplaying {
+                            if dragLocked == true {
+                                let width = UIScreen.main.bounds.width
+                                let fraction = Double(value.location.x / width)
+                                vm.scrubTo(fraction: fraction, date: currentDate, sessionMode: sessionMode)
                             } else {
-                                panOffset = 0
+                                verticalOffset = t.height
                             }
                         } else {
-                            verticalOffset = t.height
+                            if dragLocked == true {
+                                if (t.width < 0 && canGoForward) || (t.width > 0 && canGoBack) {
+                                    panOffset = t.width
+                                } else {
+                                    panOffset = 0
+                                }
+                            } else {
+                                verticalOffset = t.height
+                            }
                         }
                     }
                     .onEnded { value in
                         let locked = dragLocked
                         dragLocked = nil
-                        guard !isTransitioning, !isVerticalTransitioning, !vm.isReplaying else {
+                        guard !isTransitioning, !isVerticalTransitioning else {
                             panOffset = 0
                             verticalOffset = 0
                             return
                         }
-                        if locked == true {
-                            commitSwipe(offset: value.translation.width)
+                        if vm.isReplaying {
+                            if locked != true {
+                                commitVerticalSwipe(offset: value.translation.height)
+                            }
                         } else {
-                            commitVerticalSwipe(offset: value.translation.height)
+                            if locked == true {
+                                commitSwipe(offset: value.translation.width)
+                            } else {
+                                commitVerticalSwipe(offset: value.translation.height)
+                            }
                         }
                     }
             )
