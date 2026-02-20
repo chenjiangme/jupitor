@@ -3,6 +3,7 @@ import SwiftUI
 struct RootTabView: View {
     @Environment(DashboardViewModel.self) private var vm
     @AppStorage("showDayMode") private var showDayMode = false
+    @AppStorage("useConcentricView") private var useConcentricView = false
     @State private var currentDate: String = ""
     @State private var sessionMode: SessionMode = .pre
     @State private var showingSettings = false
@@ -172,7 +173,11 @@ struct RootTabView: View {
                             .foregroundStyle(.secondary)
                     } else if let day = dayData {
                         let displayDay = vm.isReplaying ? day : (sessionMode == .next ? (nextData ?? day) : day)
-                        BubbleChartView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
+                        if useConcentricView {
+                            ConcentricRingView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
+                        } else {
+                            BubbleChartView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
+                        }
                     } else if isLive, let error = vm.error {
                         VStack(spacing: 12) {
                             Image(systemName: "wifi.slash")
