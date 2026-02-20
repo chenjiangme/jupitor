@@ -175,9 +175,6 @@ struct RootTabView: View {
                         let displayDay = vm.isReplaying ? day : (sessionMode == .next ? (nextData ?? day) : day)
                         switch chartViewMode {
                         case 1:
-                            ConcentricRingView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
-                                .transition(.opacity)
-                        case 2:
                             SymbolBarListView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
                                 .transition(.opacity)
                         default:
@@ -266,9 +263,9 @@ struct RootTabView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 12) {
                         Button {
-                            withAnimation(.easeInOut(duration: 0.3)) { chartViewMode = (chartViewMode + 1) % 3 }
+                            withAnimation(.easeInOut(duration: 0.3)) { chartViewMode = (chartViewMode + 1) % 2 }
                         } label: {
-                            Image(systemName: chartViewMode == 1 ? "circle.circle" : chartViewMode == 2 ? "list.bullet" : "bubbles.and.sparkles")
+                            Image(systemName: chartViewMode == 1 ? "list.bullet" : "bubbles.and.sparkles")
                                 .foregroundStyle(.secondary)
                         }
                         Button { showingSettings = true } label: {

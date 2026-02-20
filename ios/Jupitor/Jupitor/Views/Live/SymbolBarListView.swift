@@ -60,6 +60,14 @@ struct SymbolBarListView: View {
         (s.pre?.turnover ?? 0) + (s.reg?.turnover ?? 0)
     }
 
+    private func sessionTurnover(_ c: CombinedStatsJSON) -> Double {
+        switch sessionMode {
+        case .pre, .next: return c.pre?.turnover ?? 0
+        case .reg: return c.reg?.turnover ?? 0
+        case .day: return (c.pre?.turnover ?? 0) + (c.reg?.turnover ?? 0)
+        }
+    }
+
     private func sessionStats(_ c: CombinedStatsJSON) -> SymbolStatsJSON? {
         switch sessionMode {
         case .pre, .next: return c.pre
@@ -165,10 +173,17 @@ struct SymbolBarListView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(symbolData.map(\.combined)) { combined in
-                            symbolRow(combined)
+                GeometryReader { geo in
+                    let items = symbolData.map(\.combined)
+                    let total = items.reduce(0.0) { $0 + sessionTurnover($1) }
+                    VStack(spacing: 0) {
+                        ForEach(items) { combined in
+                            let t = sessionTurnover(combined)
+                            let h = total > 0
+                                ? geo.size.height * CGFloat(t / total)
+                                : geo.size.height / max(CGFloat(items.count), 1)
+                            symbolRow(combined, height: h)
+                                .frame(height: h)
                         }
                     }
                 }
@@ -209,97 +224,104 @@ struct SymbolBarListView: View {
     // MARK: - Symbol Row
 
     @ViewBuilder
-    private func symbolRow(_ combined: CombinedStatsJSON) -> some View {
+    private func symbolRow(_ combined: CombinedStatsJSON, height: CGFloat) -> some View {
         let isWatchlist = vm.watchlistSymbols.contains(combined.symbol)
         let hasPre = combined.pre != nil
         let hasReg = combined.reg != nil
         let dualMode = sessionMode == .day && hasPre && hasReg
 
-        HStack(spacing: 4) {
-            // Left column: symbol name + counts
-            VStack(alignment: .leading, spacing: 1) {
-                let counts = newsCounts(for: combined)
-                let closePriceBelowDollar = (sessionStats(combined)?.close ?? 1) < 1
-                Text(combined.symbol)
-                    .font(.system(size: 13, weight: .heavy))
-                    .italic(closePriceBelowDollar)
-                    .foregroundStyle(isWatchlist ? Color.watchlistColor : Color.tierColor(for: combined.tier))
-                    .lineLimit(1)
-                if counts.st > 0 || counts.news > 0 {
-                    HStack(spacing: 2) {
-                        if counts.st > 0 {
-                            Text("\(counts.st)")
-                                .foregroundStyle(counts.stColor.opacity(0.6))
-                        }
-                        if counts.news > 0 {
-                            Text("\(counts.news)")
-                                .foregroundStyle(Color.blue.opacity(0.6))
-                        }
-                    }
-                    .font(.system(size: 9))
-                    .lineLimit(1)
-                }
-            }
-            .frame(width: 70, alignment: .leading)
+        if height >= 8 {
+            let fontSize = height < 28 ? min(13, max(7, height * 0.5)) : 13.0
+            let showCounts = height >= 24
 
-            // Right column: session bar(s)
-            if dualMode {
-                VStack(spacing: 1) {
+            HStack(spacing: 4) {
+                // Left column: symbol name + counts
+                VStack(alignment: .leading, spacing: 1) {
+                    let counts = newsCounts(for: combined)
+                    let closePriceBelowDollar = (sessionStats(combined)?.close ?? 1) < 1
+                    Text(combined.symbol)
+                        .font(.system(size: fontSize, weight: .heavy))
+                        .italic(closePriceBelowDollar)
+                        .foregroundStyle(isWatchlist ? Color.watchlistColor : Color.tierColor(for: combined.tier))
+                        .lineLimit(1)
+                    if showCounts && (counts.st > 0 || counts.news > 0) {
+                        HStack(spacing: 2) {
+                            if counts.st > 0 {
+                                Text("\(counts.st)")
+                                    .foregroundStyle(counts.stColor.opacity(0.6))
+                            }
+                            if counts.news > 0 {
+                                Text("\(counts.news)")
+                                    .foregroundStyle(Color.blue.opacity(0.6))
+                            }
+                        }
+                        .font(.system(size: 9))
+                        .lineLimit(1)
+                    }
+                }
+                .frame(width: 70, alignment: .leading)
+
+                // Right column: session bar(s)
+                if dualMode {
+                    VStack(spacing: 1) {
+                        SessionBarCanvas(
+                            gain: combined.reg?.maxGain ?? 0,
+                            loss: combined.reg?.maxLoss ?? 0,
+                            gainFirst: combined.reg?.gainFirst ?? true,
+                            profile: combined.reg?.tradeProfile,
+                            closeGain: combined.reg?.closeGain,
+                            closeDialColor: combined.reg.map { $0.dialColor },
+                            maxDrawdown: combined.reg?.maxDrawdown,
+                            targetGain: tp.targets[date]?["\(combined.symbol):REG"]
+                        )
+                        SessionBarCanvas(
+                            gain: combined.pre?.maxGain ?? 0,
+                            loss: combined.pre?.maxLoss ?? 0,
+                            gainFirst: combined.pre?.gainFirst ?? true,
+                            profile: combined.pre?.tradeProfile,
+                            closeGain: combined.pre?.closeGain,
+                            closeDialColor: combined.pre.map { $0.dialColor },
+                            maxDrawdown: combined.pre?.maxDrawdown,
+                            targetGain: tp.targets[date]?["\(combined.symbol):PRE"]
+                        )
+                    }
+                } else {
+                    let stats = sessionStats(combined)
+                    let targetKey: String = {
+                        switch sessionMode {
+                        case .pre, .next: return "\(combined.symbol):PRE"
+                        case .reg: return "\(combined.symbol):REG"
+                        case .day: return "\(combined.symbol):PRE"
+                        }
+                    }()
                     SessionBarCanvas(
-                        gain: combined.reg?.maxGain ?? 0,
-                        loss: combined.reg?.maxLoss ?? 0,
-                        gainFirst: combined.reg?.gainFirst ?? true,
-                        profile: combined.reg?.tradeProfile,
-                        closeGain: combined.reg?.closeGain,
-                        closeDialColor: combined.reg.map { $0.dialColor },
-                        targetGain: tp.targets[date]?["\(combined.symbol):REG"]
-                    )
-                    SessionBarCanvas(
-                        gain: combined.pre?.maxGain ?? 0,
-                        loss: combined.pre?.maxLoss ?? 0,
-                        gainFirst: combined.pre?.gainFirst ?? true,
-                        profile: combined.pre?.tradeProfile,
-                        closeGain: combined.pre?.closeGain,
-                        closeDialColor: combined.pre.map { $0.dialColor },
-                        targetGain: tp.targets[date]?["\(combined.symbol):PRE"]
+                        gain: singleRingGain(combined),
+                        loss: singleRingLoss(combined),
+                        gainFirst: singleRingGainFirst(combined),
+                        profile: stats?.tradeProfile,
+                        closeGain: stats?.closeGain,
+                        closeDialColor: stats.map { $0.dialColor },
+                        maxDrawdown: stats?.maxDrawdown,
+                        targetGain: tp.targets[date]?[targetKey]
                     )
                 }
-            } else {
-                let stats = sessionStats(combined)
-                let targetKey: String = {
-                    switch sessionMode {
-                    case .pre, .next: return "\(combined.symbol):PRE"
-                    case .reg: return "\(combined.symbol):REG"
-                    case .day: return "\(combined.symbol):PRE"
-                    }
-                }()
-                SessionBarCanvas(
-                    gain: singleRingGain(combined),
-                    loss: singleRingLoss(combined),
-                    gainFirst: singleRingGainFirst(combined),
-                    profile: stats?.tradeProfile,
-                    closeGain: stats?.closeGain,
-                    closeDialColor: stats.map { $0.dialColor },
-                    targetGain: tp.targets[date]?[targetKey]
-                )
             }
-        }
-        .frame(height: dualMode ? 44 : 28)
-        .padding(.horizontal, 4)
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            guard !vm.isReplaying else { return }
-            Task { await vm.toggleWatchlist(symbol: combined.symbol, date: wlDate) }
-        }
-        .onTapGesture(count: 1) {
-            guard !vm.isReplaying else { return }
-            detailCombined = combined
-            showDetail = true
-        }
-        .onLongPressGesture {
-            guard !vm.isReplaying else { return }
-            historySymbol = combined.symbol
-            showHistory = true
+            .padding(.horizontal, 4)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) {
+                guard !vm.isReplaying else { return }
+                Task { await vm.toggleWatchlist(symbol: combined.symbol, date: wlDate) }
+            }
+            .onTapGesture(count: 1) {
+                guard !vm.isReplaying else { return }
+                detailCombined = combined
+                showDetail = true
+            }
+            .onLongPressGesture {
+                guard !vm.isReplaying else { return }
+                historySymbol = combined.symbol
+                showHistory = true
+            }
         }
     }
 }
@@ -313,87 +335,65 @@ private struct SessionBarCanvas: View {
     var profile: [Int]?
     var closeGain: Double?
     var closeDialColor: Color?
+    var maxDrawdown: Double?
     var targetGain: Double?
 
     var body: some View {
         Canvas { context, size in
-            let halfW = size.width / 2
+            let fullW = size.width
             let fullH = size.height
-            let centerX = halfW
-            let scale = halfW / max(gain, loss, 0.2)
+            let scale = fullW / max(gain, loss, 1.0)
+            let gainDominant = gain >= loss
 
-            let gainH = gainFirst ? fullH : fullH * 0.5
-            let lossH = gainFirst ? fullH * 0.5 : fullH
-            let gainY = (fullH - gainH) / 2
-            let lossY = (fullH - lossH) / 2
+            // Drawdown cutoff: gain - maxDrawdown = where the drawdown bottomed
+            let drawdownCutoff = gain - (maxDrawdown ?? 0)
 
-            // 1. Background bars (white 5% opacity)
-            context.fill(Path(CGRect(x: 0, y: 0, width: size.width, height: fullH)),
+            // 1. Background bar (white 5% opacity)
+            context.fill(Path(CGRect(x: 0, y: 0, width: fullW, height: fullH)),
                         with: .color(.white.opacity(0.05)))
 
-            // 2. Gain gradient bands (right from center, 5 bands)
-            let cappedGain = min(gain, 5.0)
-            for band in 0..<5 {
-                let bandStart = Double(band)
-                let bandEnd = min(Double(band + 1), cappedGain)
-                guard bandEnd > bandStart else { continue }
-                let x0 = centerX + CGFloat(bandStart) * scale
-                let x1 = centerX + CGFloat(bandEnd) * scale
-                context.fill(Path(CGRect(x: x0, y: gainY, width: x1 - x0, height: gainH)),
-                            with: .color(gainShades[band]))
-            }
-
-            // 3. Loss gradient bands (left from center, 5 bands)
-            let cappedLoss = min(loss, 5.0)
-            for band in 0..<5 {
-                let bandStart = Double(band)
-                let bandEnd = min(Double(band + 1), cappedLoss)
-                guard bandEnd > bandStart else { continue }
-                let x0 = centerX - CGFloat(bandEnd) * scale
-                let x1 = centerX - CGFloat(bandStart) * scale
-                context.fill(Path(CGRect(x: x0, y: lossY, width: x1 - x0, height: lossH)),
-                            with: .color(lossShades[band]))
-            }
-
-            // 4. Center line (white 20% opacity, 0.5pt)
-            var centerLine = Path()
-            centerLine.move(to: CGPoint(x: centerX, y: 0))
-            centerLine.addLine(to: CGPoint(x: centerX, y: fullH))
-            context.stroke(centerLine, with: .color(.white.opacity(0.2)),
-                          style: StrokeStyle(lineWidth: 0.5))
-
-            // 5. Volume profile spikes (downward from top)
+            // 2. Volume profile (upward from bottom, green below drawdown / red in drawdown zone)
             if let profile = profile, !profile.isEmpty, let maxCount = profile.max(), maxCount > 0 {
-                let gainSide = gain >= loss
-                let maxSpikeH = fullH * 0.4
-                var spikes = Path()
+                let maxSpikeH = fullH * 0.9
+                let closeIdx = closeGain.map { Int(round($0 * 100)) } ?? -1
+                // 11 buckets: 5 gain shades + 5 loss shades + 1 close color
+                var paths = [Path](repeating: Path(), count: 11)
                 for i in 0..<profile.count {
                     guard profile[i] > 0 else { continue }
                     let pct = Double(i) / 100.0
-                    let x: CGFloat = gainSide
-                        ? centerX + CGFloat(pct) * scale
-                        : centerX - CGFloat(pct) * scale
+                    let band = min(Int(pct), 4)
+                    let idx: Int
+                    if i == closeIdx {
+                        idx = 10 // close-colored bucket
+                    } else if pct <= drawdownCutoff {
+                        idx = band
+                    } else {
+                        idx = band + 5
+                    }
+                    let x: CGFloat = gainDominant
+                        ? CGFloat(pct) * scale
+                        : fullW - CGFloat(pct) * scale
                     let spikeH = maxSpikeH * CGFloat(profile[i]) / CGFloat(maxCount)
-                    spikes.move(to: CGPoint(x: x, y: 0))
-                    spikes.addLine(to: CGPoint(x: x, y: spikeH))
+                    paths[idx].move(to: CGPoint(x: x, y: fullH))
+                    paths[idx].addLine(to: CGPoint(x: x, y: fullH - spikeH))
                 }
-                context.stroke(spikes, with: .color(.white.opacity(0.25)),
-                              style: StrokeStyle(lineWidth: 1, lineCap: .round))
+                let style = StrokeStyle(lineWidth: 1, lineCap: .round)
+                for i in 0..<10 {
+                    if !paths[i].isEmpty {
+                        let color = i < 5 ? gainShades[i] : lossShades[i - 5]
+                        context.stroke(paths[i], with: .color(color), style: style)
+                    }
+                }
+                // Draw close bar on top with dial color
+                if !paths[10].isEmpty {
+                    context.stroke(paths[10], with: .color(closeDialColor ?? .white),
+                                  style: style)
+                }
             }
 
-            // 6. Close gain marker (colored vertical line)
-            if let cg = closeGain, cg > 0 {
-                let x = centerX + CGFloat(cg) * scale
-                var line = Path()
-                line.move(to: CGPoint(x: x, y: 0))
-                line.addLine(to: CGPoint(x: x, y: fullH))
-                context.stroke(line, with: .color(closeDialColor ?? .white),
-                              style: StrokeStyle(lineWidth: 2, lineCap: .round))
-            }
-
-            // 7. Target marker (yellow vertical line)
+            // 4. Target marker (yellow vertical line)
             if let tg = targetGain, tg > 0 {
-                let x = centerX + CGFloat(tg) * scale
+                let x = CGFloat(tg) * scale
                 var line = Path()
                 line.move(to: CGPoint(x: x, y: 0))
                 line.addLine(to: CGPoint(x: x, y: fullH))
