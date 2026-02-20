@@ -765,37 +765,27 @@ private struct VolumeProfileCanvas: View {
                 }
             }
 
-            // Mountain ridge path: trace peaks, then back along ring center
-            // (hidden behind the ring stroke so no visible base arc).
-            var mountain = Path()
-            let baseR = ringRadius  // center of ring stroke — hidden by ring
+            // Draw only the mountain ridge line (no fill) so the ring stays solid.
+            var ridge = Path()
             let firstAngle = bucketAngle(0)
-            mountain.move(to: CGPoint(
-                x: center.x + cos(firstAngle) * baseR,
-                y: center.y + sin(firstAngle) * baseR
+            let firstBarLen = maxBarLen * CGFloat(profile[0]) / CGFloat(maxCount)
+            ridge.move(to: CGPoint(
+                x: center.x + cos(firstAngle) * (outerEdge + firstBarLen),
+                y: center.y + sin(firstAngle) * (outerEdge + firstBarLen)
             ))
 
-            for i in 0..<profile.count {
+            for i in 1..<profile.count {
                 let angle = bucketAngle(i)
                 let barLen = maxBarLen * CGFloat(profile[i]) / CGFloat(maxCount)
                 let r = outerEdge + barLen
-                mountain.addLine(to: CGPoint(
+                ridge.addLine(to: CGPoint(
                     x: center.x + cos(angle) * r,
                     y: center.y + sin(angle) * r
                 ))
             }
 
-            // Trace back along ring center to close (hidden by ring stroke).
-            for i in stride(from: profile.count - 1, through: 0, by: -1) {
-                let angle = bucketAngle(i)
-                mountain.addLine(to: CGPoint(
-                    x: center.x + cos(angle) * baseR,
-                    y: center.y + sin(angle) * baseR
-                ))
-            }
-            mountain.closeSubpath()
-
-            context.fill(mountain, with: .color(.white.opacity(0.15)))
+            context.stroke(ridge, with: .color(.white.opacity(0.3)),
+                          style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
         }
     }
 }
