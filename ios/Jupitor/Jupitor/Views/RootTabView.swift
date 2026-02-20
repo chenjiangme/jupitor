@@ -196,6 +196,9 @@ struct RootTabView: View {
                     }
                 }
                 .offset(x: panOffset, y: verticalOffset)
+                .overlay {
+                    TwoFingerTapOverlay { useConcentricView.toggle() }
+                }
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -354,5 +357,28 @@ struct RootTabView: View {
                 }
             }
         }
+    }
+}
+
+private struct TwoFingerTapOverlay: UIViewRepresentable {
+    let action: () -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap))
+        tap.numberOfTouchesRequired = 2
+        view.addGestureRecognizer(tap)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(action: action) }
+
+    class Coordinator: NSObject {
+        let action: () -> Void
+        init(action: @escaping () -> Void) { self.action = action }
+        @objc func handleTap() { action() }
     }
 }

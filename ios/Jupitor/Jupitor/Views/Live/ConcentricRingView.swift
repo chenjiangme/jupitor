@@ -674,18 +674,36 @@ struct ConcentricRingView: View {
                 .padding(2)
             } else {
                 // Parent: label at 12 o'clock with dark pill
-                let closePriceBelowDollar = (sessionStats(node.combined)?.close ?? 1) < 1
-                Text(node.symbol)
-                    .font(.system(size: max(7, node.radius * 0.13), weight: .heavy))
-                    .italic(closePriceBelowDollar)
-                    .foregroundStyle((isWatchlist ? Color.watchlistColor : Color.tierColor(for: node.combined.tier)).opacity(0.7))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(Color.black.opacity(0.65))
-                    .clipShape(Capsule())
-                    .offset(y: -(node.radius - node.lineWidth * 1.5))
+                VStack(spacing: 0) {
+                    let counts = newsCounts(for: node.combined)
+                    if counts.st > 0 || counts.news > 0 {
+                        HStack(spacing: 2) {
+                            if counts.st > 0 {
+                                Text("\(counts.st)")
+                                    .foregroundStyle(counts.stColor.opacity(0.5))
+                            }
+                            if counts.news > 0 {
+                                Text("\(counts.news)")
+                                    .foregroundStyle(Color.blue.opacity(0.5))
+                            }
+                        }
+                        .font(.system(size: max(5, node.radius * 0.1)))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                    }
+                    let closePriceBelowDollar = (sessionStats(node.combined)?.close ?? 1) < 1
+                    Text(node.symbol)
+                        .font(.system(size: max(7, node.radius * 0.13), weight: .heavy))
+                        .italic(closePriceBelowDollar)
+                        .foregroundStyle((isWatchlist ? Color.watchlistColor : Color.tierColor(for: node.combined.tier)).opacity(0.7))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                }
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(Color.black.opacity(0.65))
+                .clipShape(Capsule())
+                .offset(y: -(node.radius - node.lineWidth * 1.5))
             }
         }
         .frame(width: diameter + node.lineWidth * 3, height: diameter + node.lineWidth * 3)
