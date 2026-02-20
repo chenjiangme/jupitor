@@ -5,6 +5,7 @@ struct SettingsView: View {
     @AppStorage("showDayMode") private var showDayMode = false
     @AppStorage("hidePennyStocks") private var hidePennyStocks = false
     @AppStorage("gainOverLossOnly") private var gainOverLossOnly = false
+    @AppStorage("replaySpeed") private var replaySpeed = 60000
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -24,6 +25,14 @@ struct SettingsView: View {
                 Section("Filters") {
                     Toggle("Hide Below $1", isOn: $hidePennyStocks)
                     Toggle("Gain > Loss Only", isOn: $gainOverLossOnly)
+                }
+
+                Section("Replay") {
+                    Picker("1 second =", selection: $replaySpeed) {
+                        Text("5 seconds").tag(5000)
+                        Text("15 seconds").tag(15000)
+                        Text("1 minute").tag(60000)
+                    }
                 }
 
                 Section {

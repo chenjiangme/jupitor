@@ -303,7 +303,7 @@ final class DashboardViewModel {
         startReplayTimer()
     }
 
-    /// Auto-advance replay: 1 real second = 5 seconds of market time.
+    /// Auto-advance replay: 1 real second = replaySpeed ms of market time.
     private func startReplayTimer() {
         replayTimer?.cancel()
         replayTimer = Timer.publish(every: 1, on: .main, in: .common)
@@ -312,7 +312,8 @@ final class DashboardViewModel {
                 guard let self, self.isReplaying, let rt = self.replayTime else { return }
                 // Skip if a fetch is still in progress.
                 guard !self.replayFetching else { return }
-                let advance: Int64 = 5000 // 5 seconds in ms
+                let stored = UserDefaults.standard.integer(forKey: "replaySpeed")
+                let advance = Int64(stored > 0 ? stored : 60000)
                 let (_, sessionEnd) = self.sessionBounds(date: self.replayDate, sessionMode: self.replaySessionMode)
                 let rangeEnd: Int64
                 if let tr = self.replayTimeRange {
