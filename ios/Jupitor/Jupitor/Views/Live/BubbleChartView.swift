@@ -221,6 +221,8 @@ struct BubbleChartView: View {
             }
 
             // Volume profile (trade count histogram on outer ring).
+            let profileOverflow = ringWidth * 1.5
+            let profileSize = diameter + profileOverflow * 2
             if dualRing {
                 if let profile = bubble.combined.reg?.tradeProfile, !profile.isEmpty {
                     VolumeProfileCanvas(
@@ -231,7 +233,7 @@ struct BubbleChartView: View {
                         ringRadius: outerDia / 2,
                         lineWidth: ringWidth
                     )
-                    .frame(width: diameter, height: diameter)
+                    .frame(width: profileSize, height: profileSize)
                 }
             } else {
                 if let stats = sessionStats(bubble.combined), let profile = stats.tradeProfile, !profile.isEmpty {
@@ -243,7 +245,7 @@ struct BubbleChartView: View {
                         ringRadius: outerDia / 2,
                         lineWidth: ringWidth
                     )
-                    .frame(width: diameter, height: diameter)
+                    .frame(width: profileSize, height: profileSize)
                 }
             }
 
@@ -495,12 +497,16 @@ struct BubbleChartView: View {
             var fx: CGFloat = 0
             var fy: CGFloat = 0
 
-            // Collision avoidance.
+            // Collision avoidance (include profile bar overflow in radius).
+            let ri = bubbles[i].radius
+            let profileI = max(4, ri * 0.18) * 1.5
             for j in bubbles.indices where j != i {
                 let dx = bubbles[i].position.x - bubbles[j].position.x
                 let dy = bubbles[i].position.y - bubbles[j].position.y
                 let dist = hypot(dx, dy)
-                let minDist = bubbles[i].radius + bubbles[j].radius + pad
+                let rj = bubbles[j].radius
+                let profileJ = max(4, rj * 0.18) * 1.5
+                let minDist = (ri + profileI) + (rj + profileJ) + pad
                 if dist < minDist && dist > 0.01 {
                     let overlap = minDist - dist
                     let strength: CGFloat = 0.4
@@ -515,15 +521,16 @@ struct BubbleChartView: View {
             let targetY = viewSize.height * (1 - cf)
             fy += (targetY - bubbles[i].position.y) * 0.03
 
-            // Boundary forces.
+            // Boundary forces (extra margin for volume profile bars).
             let r = bubbles[i].radius
-            let margin: CGFloat = 2
+            let profileMargin = max(4, r * 0.18) * 1.5
+            let edgeR = r + profileMargin
             let bx = bubbles[i].position.x
             let by = bubbles[i].position.y
-            if bx - r < margin { fx += (margin - (bx - r)) * 0.5 }
-            if bx + r > viewSize.width - margin { fx -= ((bx + r) - (viewSize.width - margin)) * 0.5 }
-            if by - r < margin { fy += (margin - (by - r)) * 0.5 }
-            if by + r > viewSize.height - margin { fy -= ((by + r) - (viewSize.height - margin)) * 0.5 }
+            if bx - edgeR < 0 { fx += (0 - (bx - edgeR)) * 0.5 }
+            if bx + edgeR > viewSize.width { fx -= ((bx + edgeR) - viewSize.width) * 0.5 }
+            if by - edgeR < 0 { fy += (0 - (by - edgeR)) * 0.5 }
+            if by + edgeR > viewSize.height { fy -= ((by + edgeR) - viewSize.height) * 0.5 }
 
             // Apply forces.
             bubbles[i].velocity.x += fx
@@ -547,9 +554,9 @@ struct BubbleChartView: View {
             bubbles[i].position.x += bubbles[i].velocity.x
             bubbles[i].position.y += bubbles[i].velocity.y
 
-            // Hard clamp to bounds.
-            bubbles[i].position.x = max(r, min(viewSize.width - r, bubbles[i].position.x))
-            bubbles[i].position.y = max(r, min(viewSize.height - r, bubbles[i].position.y))
+            // Hard clamp to bounds (with profile margin).
+            bubbles[i].position.x = max(edgeR, min(viewSize.width - edgeR, bubbles[i].position.x))
+            bubbles[i].position.y = max(edgeR, min(viewSize.height - edgeR, bubbles[i].position.y))
         }
 
         // Stop simulation once settled or after max frames.
@@ -725,50 +732,58 @@ private struct VolumeProfileCanvas: View {
 
             let center = CGPoint(x: size.width / 2, y: size.height / 2)
             let outerEdge = ringRadius + lineWidth / 2
-            let maxBarLen = lineWidth * 0.8
-            let barWidth: CGFloat = 1.0
+            let maxBarLen = lineWidth * 1.5
 
-            // Determine direction: profile goes along the larger arc.
             let gainSide = gain >= loss
-            // When gainFirst: gain starts at 12 o'clock CW, loss offset by gainEnd.
-            // When !gainFirst: loss starts at 12 o'clock CCW, gain offset by lossEnd.
-            // The larger arc always has full lineWidth.
-            let startAngle = -Double.pi / 2 // 12 o'clock
+            let startAngle = -Double.pi / 2
 
-            for (i, count) in profile.enumerated() {
-                guard count > 0 else { continue }
+            // Build angle+radius pairs for the filled mountain shape.
+            func bucketAngle(_ i: Int) -> Double {
                 let pct = Double(i) / 100.0
-                let angle: Double
                 if gainSide {
-                    // Clockwise from 12 o'clock.
-                    angle = startAngle + 2 * Double.pi * pct
+                    return startAngle + 2 * Double.pi * pct
                 } else {
-                    // Counter-clockwise: reverse bucket order so high price near 12.
                     let reversePct = Double(profile.count - 1 - i) / 100.0
                     if gainFirst {
                         let gainEnd = gain.truncatingRemainder(dividingBy: 1.0)
-                        angle = startAngle + Double(gainEnd) * 2 * Double.pi - 2 * Double.pi * reversePct
+                        return startAngle + Double(gainEnd) * 2 * Double.pi - 2 * Double.pi * reversePct
                     } else {
-                        angle = startAngle - 2 * Double.pi * reversePct
+                        return startAngle - 2 * Double.pi * reversePct
                     }
                 }
+            }
 
-                let barLen = maxBarLen * CGFloat(count) / CGFloat(maxCount)
-                let p1 = CGPoint(
+            // Outer profile path (mountain ridge), then inner base path (ring edge).
+            var mountain = Path()
+            let firstAngle = bucketAngle(0)
+            mountain.move(to: CGPoint(
+                x: center.x + cos(firstAngle) * outerEdge,
+                y: center.y + sin(firstAngle) * outerEdge
+            ))
+
+            for i in 0..<profile.count {
+                let angle = bucketAngle(i)
+                let barLen = maxBarLen * CGFloat(profile[i]) / CGFloat(maxCount)
+                let r = outerEdge + barLen
+                mountain.addLine(to: CGPoint(
+                    x: center.x + cos(angle) * r,
+                    y: center.y + sin(angle) * r
+                ))
+            }
+
+            // Trace back along the ring outer edge to close the shape.
+            for i in stride(from: profile.count - 1, through: 0, by: -1) {
+                let angle = bucketAngle(i)
+                mountain.addLine(to: CGPoint(
                     x: center.x + cos(angle) * outerEdge,
                     y: center.y + sin(angle) * outerEdge
-                )
-                let p2 = CGPoint(
-                    x: center.x + cos(angle) * (outerEdge + barLen),
-                    y: center.y + sin(angle) * (outerEdge + barLen)
-                )
-
-                var path = Path()
-                path.move(to: p1)
-                path.addLine(to: p2)
-                context.stroke(path, with: .color(.white.opacity(0.35)),
-                              style: StrokeStyle(lineWidth: barWidth, lineCap: .butt))
+                ))
             }
+            mountain.closeSubpath()
+
+            context.fill(mountain, with: .color(.white.opacity(0.15)))
+            context.stroke(mountain, with: .color(.white.opacity(0.3)),
+                          style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round))
         }
     }
 }
