@@ -169,7 +169,7 @@ struct ConcentricRingView: View {
                 Spacer()
             } else {
                 GeometryReader { geo in
-                    let nodes = buildPackedRings(in: geo.size)
+                    let nodes = buildNestedRings(in: geo.size)
                     ZStack {
                         Color.clear.contentShape(Rectangle())
                         ForEach(nodes, id: \.symbol) { node in
@@ -221,10 +221,11 @@ struct ConcentricRingView: View {
         let center: CGPoint
         let radius: CGFloat
         let lineWidth: CGFloat
+        let children: [RingNode]
     }
 
-    /// Build packed ring nodes using D3-style circle packing (packSiblings).
-    private func buildPackedRings(in size: CGSize) -> [RingNode] {
+    /// Build nested ring tree using recursive split & pack.
+    private func buildNestedRings(in size: CGSize) -> [RingNode] {
         let items: [(CombinedStatsJSON, String, Double)] = symbolData.compactMap { combined, tier in
             let turnover: Double
             switch sessionMode {
@@ -237,63 +238,127 @@ struct ConcentricRingView: View {
         }
         guard !items.isEmpty else { return [] }
 
-        // Sort by turnover descending.
         let sorted = items.sorted { $0.2 > $1.2 }
+        let viewR = min(size.width, size.height) / 2
+        let containerR = max(minRingRadius, (viewR - 4) / 1.18)
+        let containerCenter = CGPoint(x: size.width / 2, y: size.height / 2)
 
-        // Radii proportional to sqrt(turnover) — preserves relative area.
-        let weights = sorted.map { sqrt(CGFloat($0.2)) }
+        let root = buildNode(
+            item: sorted[0],
+            remaining: Array(sorted.dropFirst()),
+            containerR: containerR,
+            containerCenter: containerCenter
+        )
 
-        // Pack circles (positions in arbitrary coordinate space).
-        var px = [CGFloat](repeating: 0, count: sorted.count)
-        var py = [CGFloat](repeating: 0, count: sorted.count)
+        return flattenNodes(root)
+    }
+
+    /// Recursive tree builder: item fills containerR, children packed inside.
+    private func buildNode(
+        item: (CombinedStatsJSON, String, Double),
+        remaining: [(CombinedStatsJSON, String, Double)],
+        containerR: CGFloat,
+        containerCenter: CGPoint
+    ) -> RingNode {
+        let lw = max(4, containerR * 0.12)
+        let profileOverflow = lw * 1.5
+        let innerR = containerR - lw / 2 - profileOverflow - 2
+
+        // Base case: no children or inner area too small
+        if remaining.isEmpty || innerR < minRingRadius {
+            return RingNode(
+                symbol: item.0.symbol, combined: item.0, tier: item.1,
+                center: containerCenter, radius: containerR, lineWidth: lw,
+                children: []
+            )
+        }
+
+        // Branching: sqrt(n) direct children, rest distributed among them
+        let numDirect = min(remaining.count, max(1, Int(ceil(sqrt(Double(remaining.count))))))
+        let directItems = Array(remaining.prefix(numDirect))
+        let subItems = Array(remaining.dropFirst(numDirect))
+
+        // Pack direct children using D3 circle packing
+        let weights = directItems.map { sqrt(CGFloat($0.2)) }
+        var px = [CGFloat](repeating: 0, count: numDirect)
+        var py = [CGFloat](repeating: 0, count: numDirect)
         packSiblings(weights, px: &px, py: &py)
 
-        // Compute bounding box including profile overflow padding.
-        let pad: CGFloat = 1.2 // ~20% extra for ring stroke + volume profile bars
-        var minX = CGFloat.infinity, maxX = -CGFloat.infinity
-        var minY = CGFloat.infinity, maxY = -CGFloat.infinity
-        for i in 0..<sorted.count {
-            let r = weights[i] * pad
-            minX = min(minX, px[i] - r)
-            maxX = max(maxX, px[i] + r)
-            minY = min(minY, py[i] - r)
-            maxY = max(maxY, py[i] + r)
+        // Center the packed arrangement at origin
+        if numDirect > 1 {
+            let cx = px.reduce(0, +) / CGFloat(numDirect)
+            let cy = py.reduce(0, +) / CGFloat(numDirect)
+            for i in 0..<numDirect { px[i] -= cx; py[i] -= cy }
         }
 
-        let packW = maxX - minX
-        let packH = maxY - minY
-        guard packW > 0 && packH > 0 else { return [] }
+        // Compute enclosing radius and scale to fit inside innerR
+        let encR = (0..<numDirect).map { hypot(px[$0], py[$0]) + weights[$0] }.max() ?? 1
+        let scale = encR > 0 ? innerR / encR : 1
+        let scaledWeights = weights.map { $0 * scale }
 
-        let margin: CGFloat = 4
-        let scaleX = (size.width - 2 * margin) / packW
-        let scaleY = (size.height - 2 * margin) / packH
-        let scale = min(scaleX, scaleY)
+        // Distribute sub-items among direct children proportional to area
+        let distributed = distributeItems(subItems, proportionalTo: scaledWeights)
 
-        let packCX = (minX + maxX) / 2
-        let packCY = (minY + maxY) / 2
-        let viewCX = size.width / 2
-        let viewCY = size.height / 2
-
-        var nodes: [RingNode] = []
-        for (i, item) in sorted.enumerated() {
-            let r = weights[i] * scale
-            if r < minRingRadius { continue }
-            let center = CGPoint(
-                x: (px[i] - packCX) * scale + viewCX,
-                y: (py[i] - packCY) * scale + viewCY
+        // Recurse for each direct child
+        var childNodes: [RingNode] = []
+        for i in 0..<numDirect {
+            let childR = scaledWeights[i]
+            guard childR >= minRingRadius else { continue }
+            let childCenter = CGPoint(
+                x: containerCenter.x + px[i] * scale,
+                y: containerCenter.y + py[i] * scale
             )
-            let lw = max(4, r * 0.12)
-            nodes.append(RingNode(
-                symbol: item.0.symbol,
-                combined: item.0,
-                tier: item.1,
-                center: center,
-                radius: r,
-                lineWidth: lw
-            ))
+            let childNode = buildNode(
+                item: directItems[i],
+                remaining: distributed[i],
+                containerR: childR,
+                containerCenter: childCenter
+            )
+            childNodes.append(childNode)
         }
 
-        return nodes
+        return RingNode(
+            symbol: item.0.symbol, combined: item.0, tier: item.1,
+            center: containerCenter, radius: containerR, lineWidth: lw,
+            children: childNodes
+        )
+    }
+
+    /// Distribute items among buckets proportional to each bucket's area (r²).
+    private func distributeItems(
+        _ items: [(CombinedStatsJSON, String, Double)],
+        proportionalTo radii: [CGFloat]
+    ) -> [[(CombinedStatsJSON, String, Double)]] {
+        let n = radii.count
+        guard n > 0, !items.isEmpty else { return Array(repeating: [], count: max(n, 1)) }
+
+        let areas = radii.map { $0 * $0 }
+        let total = areas.reduce(0, +)
+        guard total > 0 else { return Array(repeating: [], count: n) }
+
+        // Floor-based counts; remainder goes to largest child (index 0)
+        var counts = areas.map { Int(floor(CGFloat(items.count) * $0 / total)) }
+        let assigned = counts.reduce(0, +)
+        counts[0] += items.count - assigned
+
+        var result: [[(CombinedStatsJSON, String, Double)]] = []
+        var offset = 0
+        for count in counts {
+            let end = min(offset + max(0, count), items.count)
+            result.append(offset < end ? Array(items[offset..<end]) : [])
+            offset = end
+        }
+
+        return result
+    }
+
+    /// Flatten tree depth-first (parent before children) for rendering.
+    private func flattenNodes(_ node: RingNode) -> [RingNode] {
+        var result = [node]
+        for child in node.children {
+            result += flattenNodes(child)
+        }
+        return result
     }
 
     // MARK: - D3 packSiblings Algorithm
@@ -570,41 +635,58 @@ struct ConcentricRingView: View {
                 .hidden()
             }
 
-            // Symbol label (centered).
-            VStack(spacing: 0) {
-                let counts = newsCounts(for: node.combined)
-                if counts.st > 0 || counts.news > 0 {
-                    HStack(spacing: 2) {
-                        if counts.st > 0 {
-                            Text("\(counts.st)")
-                                .foregroundStyle(counts.stColor.opacity(0.5))
+            // Symbol label
+            if node.children.isEmpty {
+                // Leaf: centered label
+                VStack(spacing: 0) {
+                    let counts = newsCounts(for: node.combined)
+                    if counts.st > 0 || counts.news > 0 {
+                        HStack(spacing: 2) {
+                            if counts.st > 0 {
+                                Text("\(counts.st)")
+                                    .foregroundStyle(counts.stColor.opacity(0.5))
+                            }
+                            if counts.news > 0 {
+                                Text("\(counts.news)")
+                                    .foregroundStyle(Color.blue.opacity(0.5))
+                            }
                         }
-                        if counts.news > 0 {
-                            Text("\(counts.news)")
-                                .foregroundStyle(Color.blue.opacity(0.5))
-                        }
-                    }
-                    .font(.system(size: max(5, node.radius * 0.18)))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-                }
-
-                let closePriceBelowDollar = (sessionStats(node.combined)?.close ?? 1) < 1
-                Text(node.symbol)
-                    .font(.system(size: max(7, node.radius * 0.3), weight: .heavy))
-                    .italic(closePriceBelowDollar)
-                    .foregroundStyle((isWatchlist ? Color.watchlistColor : Color.tierColor(for: node.combined.tier)).opacity(0.5))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-                if isWatchlist, let stats = sessionStats(node.combined) {
-                    Text("\(Fmt.compactPrice(stats.open)) \(Fmt.compactPrice(stats.low)) \(Fmt.compactPrice(stats.high)) \(Fmt.compactPrice(stats.close))")
-                        .font(.system(size: max(5, node.radius * 0.16)))
-                        .foregroundStyle(Color.watchlistPriceColor.opacity(0.4))
+                        .font(.system(size: max(5, node.radius * 0.18)))
                         .lineLimit(1)
                         .minimumScaleFactor(0.5)
+                    }
+
+                    let closePriceBelowDollar = (sessionStats(node.combined)?.close ?? 1) < 1
+                    Text(node.symbol)
+                        .font(.system(size: max(7, node.radius * 0.3), weight: .heavy))
+                        .italic(closePriceBelowDollar)
+                        .foregroundStyle((isWatchlist ? Color.watchlistColor : Color.tierColor(for: node.combined.tier)).opacity(0.5))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                    if isWatchlist, let stats = sessionStats(node.combined) {
+                        Text("\(Fmt.compactPrice(stats.open)) \(Fmt.compactPrice(stats.low)) \(Fmt.compactPrice(stats.high)) \(Fmt.compactPrice(stats.close))")
+                            .font(.system(size: max(5, node.radius * 0.16)))
+                            .foregroundStyle(Color.watchlistPriceColor.opacity(0.4))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.5)
+                    }
                 }
+                .padding(2)
+            } else {
+                // Parent: label at 12 o'clock with dark pill
+                let closePriceBelowDollar = (sessionStats(node.combined)?.close ?? 1) < 1
+                Text(node.symbol)
+                    .font(.system(size: max(7, node.radius * 0.13), weight: .heavy))
+                    .italic(closePriceBelowDollar)
+                    .foregroundStyle((isWatchlist ? Color.watchlistColor : Color.tierColor(for: node.combined.tier)).opacity(0.7))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.65))
+                    .clipShape(Capsule())
+                    .offset(y: -(node.radius - node.lineWidth * 1.5))
             }
-            .padding(2)
         }
         .frame(width: diameter + node.lineWidth * 3, height: diameter + node.lineWidth * 3)
         .position(node.center)
