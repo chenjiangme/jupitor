@@ -162,6 +162,11 @@ struct SymbolBarListView: View {
         }
     }
 
+    private static func computeCloseLoss(_ s: SymbolStatsJSON) -> Double? {
+        guard s.open > 0, s.close < s.open else { return nil }
+        return (s.open - s.close) / s.open
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -176,14 +181,26 @@ struct SymbolBarListView: View {
                 GeometryReader { geo in
                     let items = symbolData.map(\.combined)
                     let total = items.reduce(0.0) { $0 + sessionTurnover($1) }
+                    let heights: [CGFloat] = items.map { c in
+                        let t = sessionTurnover(c)
+                        return total > 0
+                            ? geo.size.height * CGFloat(t / total)
+                            : geo.size.height / max(CGFloat(items.count), 1)
+                    }
+                    // Compute visible index for even/odd alternation (skip hidden rows < 8pt)
+                    let visibleIndices: [Int] = {
+                        var vis = [Int](repeating: 0, count: items.count)
+                        var counter = 0
+                        for i in 0..<items.count {
+                            vis[i] = counter
+                            if heights[i] >= 8 { counter += 1 }
+                        }
+                        return vis
+                    }()
                     VStack(spacing: 0) {
-                        ForEach(items) { combined in
-                            let t = sessionTurnover(combined)
-                            let h = total > 0
-                                ? geo.size.height * CGFloat(t / total)
-                                : geo.size.height / max(CGFloat(items.count), 1)
-                            symbolRow(combined, height: h)
-                                .frame(height: h)
+                        ForEach(Array(items.enumerated()), id: \.element.id) { idx, combined in
+                            symbolRow(combined, height: heights[idx], isEven: visibleIndices[idx].isMultiple(of: 2))
+                                .frame(height: heights[idx])
                         }
                     }
                 }
@@ -224,7 +241,7 @@ struct SymbolBarListView: View {
     // MARK: - Symbol Row
 
     @ViewBuilder
-    private func symbolRow(_ combined: CombinedStatsJSON, height: CGFloat) -> some View {
+    private func symbolRow(_ combined: CombinedStatsJSON, height: CGFloat, isEven: Bool = true) -> some View {
         let isWatchlist = vm.watchlistSymbols.contains(combined.symbol)
         let hasPre = combined.pre != nil
         let hasReg = combined.reg != nil
@@ -272,7 +289,9 @@ struct SymbolBarListView: View {
                             closeGain: combined.reg?.closeGain,
                             closeDialColor: combined.reg.map { $0.dialColor },
                             maxDrawdown: combined.reg?.maxDrawdown,
-                            targetGain: tp.targets[date]?["\(combined.symbol):REG"]
+                            closeLoss: combined.reg.flatMap { Self.computeCloseLoss($0) },
+                            targetGain: tp.targets[date]?["\(combined.symbol):REG"],
+                            isEven: isEven
                         )
                         SessionBarCanvas(
                             gain: combined.pre?.maxGain ?? 0,
@@ -282,7 +301,9 @@ struct SymbolBarListView: View {
                             closeGain: combined.pre?.closeGain,
                             closeDialColor: combined.pre.map { $0.dialColor },
                             maxDrawdown: combined.pre?.maxDrawdown,
-                            targetGain: tp.targets[date]?["\(combined.symbol):PRE"]
+                            closeLoss: combined.pre.flatMap { Self.computeCloseLoss($0) },
+                            targetGain: tp.targets[date]?["\(combined.symbol):PRE"],
+                            isEven: isEven
                         )
                     }
                 } else {
@@ -302,7 +323,9 @@ struct SymbolBarListView: View {
                         closeGain: stats?.closeGain,
                         closeDialColor: stats.map { $0.dialColor },
                         maxDrawdown: stats?.maxDrawdown,
-                        targetGain: tp.targets[date]?[targetKey]
+                        closeLoss: stats.flatMap { Self.computeCloseLoss($0) },
+                        targetGain: tp.targets[date]?[targetKey],
+                        isEven: isEven
                     )
                 }
             }
@@ -336,7 +359,9 @@ private struct SessionBarCanvas: View {
     var closeGain: Double?
     var closeDialColor: Color?
     var maxDrawdown: Double?
+    var closeLoss: Double?
     var targetGain: Double?
+    var isEven: Bool = true
 
     var body: some View {
         Canvas { context, size in
@@ -345,60 +370,107 @@ private struct SessionBarCanvas: View {
             let scale = fullW / max(gain, loss, 1.0)
             let gainDominant = gain >= loss
 
-            // Drawdown cutoff: gain - maxDrawdown = where the drawdown bottomed
-            let drawdownCutoff = gain - (maxDrawdown ?? 0)
-
-            // 1. Background bar (white 5% opacity)
+            // 1. Background bar (alternating opacity for even/odd rows)
             context.fill(Path(CGRect(x: 0, y: 0, width: fullW, height: fullH)),
-                        with: .color(.white.opacity(0.05)))
+                        with: .color(.white.opacity(isEven ? 0.03 : 0.07)))
 
-            // 2. Volume profile (upward from bottom, green below drawdown / red in drawdown zone)
-            if let profile = profile, !profile.isEmpty, let maxCount = profile.max(), maxCount > 0 {
-                let maxSpikeH = fullH * 0.9
-                let closeIdx = closeGain.map { Int(round($0 * 100)) } ?? -1
-                // 11 buckets: 5 gain shades + 5 loss shades + 1 close color
-                var paths = [Path](repeating: Path(), count: 11)
-                for i in 0..<profile.count {
-                    guard profile[i] > 0 else { continue }
-                    let pct = Double(i) / 100.0
-                    let band = min(Int(pct), 4)
-                    let idx: Int
-                    if i == closeIdx {
-                        idx = 10 // close-colored bucket
-                    } else if pct <= drawdownCutoff {
-                        idx = band
-                    } else {
-                        idx = band + 5
-                    }
-                    let x: CGFloat = gainDominant
-                        ? CGFloat(pct) * scale
-                        : fullW - CGFloat(pct) * scale
-                    let spikeH = maxSpikeH * CGFloat(profile[i]) / CGFloat(maxCount)
-                    paths[idx].move(to: CGPoint(x: x, y: fullH))
-                    paths[idx].addLine(to: CGPoint(x: x, y: fullH - spikeH))
-                }
-                let style = StrokeStyle(lineWidth: 1, lineCap: .round)
-                for i in 0..<10 {
-                    if !paths[i].isEmpty {
-                        let color = i < 5 ? gainShades[i] : lossShades[i - 5]
-                        context.stroke(paths[i], with: .color(color), style: style)
-                    }
-                }
-                // Draw close bar on top with dial color
-                if !paths[10].isEmpty {
-                    context.stroke(paths[10], with: .color(closeDialColor ?? .white),
-                                  style: style)
-                }
-            }
+            if gainDominant {
+                // Gain dominant: profile left→right, green below drawdown cutoff, red above
+                let drawdownCutoff = gain - (maxDrawdown ?? 0)
 
-            // 4. Target marker (yellow vertical line)
-            if let tg = targetGain, tg > 0 {
-                let x = CGFloat(tg) * scale
-                var line = Path()
-                line.move(to: CGPoint(x: x, y: 0))
-                line.addLine(to: CGPoint(x: x, y: fullH))
-                context.stroke(line, with: .color(.yellow.opacity(0.9)),
-                              style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                if let profile = profile, !profile.isEmpty, let maxCount = profile.max(), maxCount > 0 {
+                    let maxSpikeH = fullH * 0.9
+                    let closeIdx = closeGain.map { Int(round($0 * 100)) } ?? -1
+                    var paths = [Path](repeating: Path(), count: 11)
+                    for i in 0..<profile.count {
+                        guard profile[i] > 0 else { continue }
+                        let pct = Double(i) / 100.0
+                        let band = min(Int(pct), 4)
+                        let idx: Int
+                        if i == closeIdx {
+                            idx = 10
+                        } else if pct <= drawdownCutoff {
+                            idx = band
+                        } else {
+                            idx = band + 5
+                        }
+                        let x = CGFloat(pct) * scale
+                        let spikeH = maxSpikeH * CGFloat(profile[i]) / CGFloat(maxCount)
+                        paths[idx].move(to: CGPoint(x: x, y: fullH))
+                        paths[idx].addLine(to: CGPoint(x: x, y: fullH - spikeH))
+                    }
+                    let style = StrokeStyle(lineWidth: 1, lineCap: .round)
+                    for i in 0..<10 {
+                        if !paths[i].isEmpty {
+                            let color = i < 5 ? gainShades[i] : lossShades[i - 5]
+                            context.stroke(paths[i], with: .color(color), style: style)
+                        }
+                    }
+                    if !paths[10].isEmpty {
+                        context.stroke(paths[10], with: .color(closeDialColor ?? .white),
+                                      style: style)
+                    }
+                }
+
+                // Target marker (yellow vertical line, from left)
+                if let tg = targetGain, tg > 0 {
+                    let x = CGFloat(tg) * scale
+                    var line = Path()
+                    line.move(to: CGPoint(x: x, y: 0))
+                    line.addLine(to: CGPoint(x: x, y: fullH))
+                    context.stroke(line, with: .color(.yellow.opacity(0.9)),
+                                  style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                }
+            } else {
+                // Loss dominant: mirror of gain-dominant, from right→left
+                // Gain recovery profile from loss-end going right
+                let drawdownCutoff = gain - (maxDrawdown ?? 0)
+                let cappedLoss = min(loss, 5.0)
+                let lossLeft = fullW - cappedLoss * scale
+                if let profile = profile, !profile.isEmpty, let maxCount = profile.max(), maxCount > 0 {
+                    let maxSpikeH = fullH * 0.9
+                    let closeIdx = closeLoss.map { Int(round($0 * 100)) } ?? -1
+                    var paths = [Path](repeating: Path(), count: 11)
+                    for i in 0..<profile.count {
+                        guard profile[i] > 0 else { continue }
+                        let pct = Double(i) / 100.0
+                        let band = min(Int(pct), 4)
+                        let idx: Int
+                        if i == closeIdx {
+                            idx = 10
+                        } else if pct <= drawdownCutoff {
+                            idx = band
+                        } else {
+                            idx = band + 5
+                        }
+                        let x = lossLeft + CGFloat(pct) * scale
+                        guard x >= 0 && x <= fullW else { continue }
+                        let spikeH = maxSpikeH * CGFloat(profile[i]) / CGFloat(maxCount)
+                        paths[idx].move(to: CGPoint(x: x, y: fullH))
+                        paths[idx].addLine(to: CGPoint(x: x, y: fullH - spikeH))
+                    }
+                    let style = StrokeStyle(lineWidth: 1, lineCap: .round)
+                    for i in 0..<10 {
+                        if !paths[i].isEmpty {
+                            let color = i < 5 ? gainShades[i] : lossShades[i - 5]
+                            context.stroke(paths[i], with: .color(color), style: style)
+                        }
+                    }
+                    if !paths[10].isEmpty {
+                        context.stroke(paths[10], with: .color(closeDialColor ?? .white),
+                                      style: style)
+                    }
+                }
+
+                // Close loss marker from right
+                if let cl = closeLoss, cl > 0 {
+                    let x = fullW - CGFloat(cl) * scale
+                    var line = Path()
+                    line.move(to: CGPoint(x: x, y: 0))
+                    line.addLine(to: CGPoint(x: x, y: fullH))
+                    context.stroke(line, with: .color(closeDialColor ?? .white),
+                                  style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                }
             }
         }
     }
