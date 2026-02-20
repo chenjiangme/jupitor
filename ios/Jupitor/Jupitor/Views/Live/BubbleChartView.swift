@@ -184,16 +184,23 @@ struct BubbleChartView: View {
             let hasReg = bubble.combined.reg != nil
             let dualRing = sessionMode == .day && hasPre && hasReg
 
+            // Hide ring when volume profile bars replace it.
+            let hasOuterProfile = dualRing
+                ? (bubble.combined.reg?.tradeProfile ?? []).isEmpty == false
+                : (sessionStats(bubble.combined)?.tradeProfile ?? []).isEmpty == false
+
             if dualRing {
-                // Outer ring (regular session).
-                SessionRingView(
-                    gain: bubble.combined.reg?.maxGain ?? 0,
-                    loss: bubble.combined.reg?.maxLoss ?? 0,
-                    hasData: true,
-                    diameter: outerDia,
-                    lineWidth: ringWidth,
-                    gainFirst: bubble.combined.reg?.gainFirst ?? true
-                )
+                if !hasOuterProfile {
+                    // Outer ring (regular session).
+                    SessionRingView(
+                        gain: bubble.combined.reg?.maxGain ?? 0,
+                        loss: bubble.combined.reg?.maxLoss ?? 0,
+                        hasData: true,
+                        diameter: outerDia,
+                        lineWidth: ringWidth,
+                        gainFirst: bubble.combined.reg?.gainFirst ?? true
+                    )
+                }
 
                 // Black fill covers inner ring area for clean separation.
                 Circle()
@@ -210,15 +217,17 @@ struct BubbleChartView: View {
                     gainFirst: bubble.combined.pre?.gainFirst ?? true
                 )
             } else {
-                // Single ring for the relevant session.
-                SessionRingView(
-                    gain: singleRingGain(bubble.combined),
-                    loss: singleRingLoss(bubble.combined),
-                    hasData: hasPre || hasReg,
-                    diameter: outerDia,
-                    lineWidth: ringWidth,
-                    gainFirst: singleRingGainFirst(bubble.combined)
-                )
+                if !hasOuterProfile {
+                    // Single ring for the relevant session.
+                    SessionRingView(
+                        gain: singleRingGain(bubble.combined),
+                        loss: singleRingLoss(bubble.combined),
+                        hasData: hasPre || hasReg,
+                        diameter: outerDia,
+                        lineWidth: ringWidth,
+                        gainFirst: singleRingGainFirst(bubble.combined)
+                    )
+                }
             }
 
             // Volume profile (trade count histogram on outer ring).
