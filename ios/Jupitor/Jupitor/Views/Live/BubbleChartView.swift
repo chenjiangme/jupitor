@@ -765,44 +765,24 @@ private struct VolumeProfileCanvas: View {
                 }
             }
 
-            // Clip out the ring circle so the filled mountain base arc is hidden.
-            // Only the peaks extending beyond the ring are visible.
-            var clipPath = Path()
-            clipPath.addRect(CGRect(origin: .zero, size: size))
-            clipPath.addEllipse(in: CGRect(
-                x: center.x - outerEdge, y: center.y - outerEdge,
-                width: outerEdge * 2, height: outerEdge * 2
-            ))
-            context.clip(to: clipPath, style: FillStyle(eoFill: true))
-
-            // Filled mountain polygon (base at ring edge, peaks outward).
-            var mountain = Path()
-            let firstAngle = bucketAngle(0)
-            mountain.move(to: CGPoint(
-                x: center.x + cos(firstAngle) * outerEdge,
-                y: center.y + sin(firstAngle) * outerEdge
-            ))
-
+            // Individual radial bars from ring edge outward — no connected
+            // shape, so no visible circle/band around the ring.
+            var bars = Path()
             for i in 0..<profile.count {
+                guard profile[i] > 0 else { continue }
                 let angle = bucketAngle(i)
                 let barLen = maxBarLen * CGFloat(profile[i]) / CGFloat(maxCount)
-                let r = outerEdge + barLen
-                mountain.addLine(to: CGPoint(
-                    x: center.x + cos(angle) * r,
-                    y: center.y + sin(angle) * r
-                ))
-            }
-
-            for i in stride(from: profile.count - 1, through: 0, by: -1) {
-                let angle = bucketAngle(i)
-                mountain.addLine(to: CGPoint(
+                bars.move(to: CGPoint(
                     x: center.x + cos(angle) * outerEdge,
                     y: center.y + sin(angle) * outerEdge
                 ))
+                bars.addLine(to: CGPoint(
+                    x: center.x + cos(angle) * (outerEdge + barLen),
+                    y: center.y + sin(angle) * (outerEdge + barLen)
+                ))
             }
-            mountain.closeSubpath()
-
-            context.fill(mountain, with: .color(.white.opacity(0.15)))
+            context.stroke(bars, with: .color(.white.opacity(0.25)),
+                          style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
         }
     }
 }
