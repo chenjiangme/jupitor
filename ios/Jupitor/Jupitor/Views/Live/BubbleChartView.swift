@@ -497,17 +497,21 @@ struct BubbleChartView: View {
             var fx: CGFloat = 0
             var fy: CGFloat = 0
 
-            // Collision avoidance (small buffer for profile bars).
+            // Collision avoidance: effective radius = ring + max profile bar height.
             let ri = bubbles[i].radius
+            let profileHi = max(4, ri * 0.18) * 1.5
+            let effI = ri + profileHi
             for j in bubbles.indices where j != i {
                 let dx = bubbles[i].position.x - bubbles[j].position.x
                 let dy = bubbles[i].position.y - bubbles[j].position.y
                 let dist = hypot(dx, dy)
                 let rj = bubbles[j].radius
-                let minDist = ri + rj + pad
+                let profileHj = max(4, rj * 0.18) * 1.5
+                let effJ = rj + profileHj
+                let minDist = effI + effJ + pad
                 if dist < minDist && dist > 0.01 {
                     let overlap = minDist - dist
-                    let strength: CGFloat = 0.4
+                    let strength: CGFloat = 0.5
                     fx += (dx / dist) * overlap * strength
                     fy += (dy / dist) * overlap * strength
                 }
@@ -517,11 +521,11 @@ struct BubbleChartView: View {
             // Watchlist symbols always float to top.
             let cf = vm.watchlistSymbols.contains(bubbles[i].id) ? 1.0 : bubbles[i].closeFraction
             let targetY = viewSize.height * (1 - cf)
-            fy += (targetY - bubbles[i].position.y) * 0.03
+            fy += (targetY - bubbles[i].position.y) * 0.02
 
-            // Boundary forces (small margin for volume profile bars).
+            // Boundary forces (profile peak as edge margin).
             let r = bubbles[i].radius
-            let edgeR = r + max(4, r * 0.18)
+            let edgeR = r + max(4, r * 0.18) * 1.5
             let bx = bubbles[i].position.x
             let by = bubbles[i].position.y
             if bx - edgeR < 0 { fx += (0 - (bx - edgeR)) * 0.5 }
@@ -557,7 +561,7 @@ struct BubbleChartView: View {
         }
 
         // Stop simulation once settled or after max frames.
-        if maxVel < 0.15 || simFrame > 300 {
+        if maxVel < 0.15 || simFrame > 500 {
             isSettled = true
         }
     }
