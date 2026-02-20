@@ -31,6 +31,7 @@
 		A10034 /* TradeParamsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10034 /* TradeParamsModel.swift */; };
 		A10035 /* ConcentricRingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10035 /* ConcentricRingView.swift */; };
 		A10036 /* ChartComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10036 /* ChartComponents.swift */; };
+		A10037 /* ToggleViewIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10037 /* ToggleViewIntent.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -59,6 +60,7 @@
 		B10034 /* TradeParamsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeParamsModel.swift; sourceTree = "<group>"; };
 		B10035 /* ConcentricRingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConcentricRingView.swift; sourceTree = "<group>"; };
 		B10036 /* ChartComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartComponents.swift; sourceTree = "<group>"; };
+		B10037 /* ToggleViewIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToggleViewIntent.swift; sourceTree = "<group>"; };
 		C10001 /* Jupitor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jupitor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -85,6 +87,7 @@
 			isa = PBXGroup;
 			children = (
 				B10001 /* JupitorApp.swift */,
+				B10037 /* ToggleViewIntent.swift */,
 				B10011 /* Info.plist */,
 				B10033 /* Assets.xcassets */,
 				E10003 /* Models */,
@@ -301,6 +304,7 @@
 				A10034 /* TradeParamsModel.swift in Sources */,
 				A10035 /* ConcentricRingView.swift in Sources */,
 				A10036 /* ChartComponents.swift in Sources */,
+				A10037 /* ToggleViewIntent.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

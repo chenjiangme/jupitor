@@ -198,11 +198,7 @@ struct RootTabView: View {
                     }
                 }
                 .offset(x: panOffset, y: verticalOffset)
-                .background {
-                    TwoFingerSwipeDetector {
-                        withAnimation(.easeInOut(duration: 0.3)) { useConcentricView.toggle() }
-                    }
-                }
+                .animation(.easeInOut(duration: 0.3), value: useConcentricView)
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -363,46 +359,3 @@ struct RootTabView: View {
         }
     }
 }
-
-// MARK: - Two-Finger Swipe Detector (window-level, never blocks other gestures)
-
-private struct TwoFingerSwipeDetector: UIViewRepresentable {
-    let action: () -> Void
-
-    func makeUIView(context: Context) -> UIView {
-        let v = UIView(frame: .zero)
-        v.isUserInteractionEnabled = false
-        return v
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        DispatchQueue.main.async {
-            guard let window = uiView.window else { return }
-            if window.gestureRecognizers?.contains(where: { $0 is ViewToggleSwipe }) == true { return }
-
-            for dir: UISwipeGestureRecognizer.Direction in [.up, .down] {
-                let swipe = ViewToggleSwipe(target: context.coordinator, action: #selector(Coordinator.handleSwipe))
-                swipe.direction = dir
-                swipe.numberOfTouchesRequired = 2
-                swipe.cancelsTouchesInView = false
-                swipe.delaysTouchesBegan = false
-                swipe.delaysTouchesEnded = false
-                window.addGestureRecognizer(swipe)
-            }
-        }
-    }
-
-    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
-        uiView.window?.gestureRecognizers?.removeAll { $0 is ViewToggleSwipe }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(action: action) }
-
-    class Coordinator: NSObject {
-        let action: () -> Void
-        init(action: @escaping () -> Void) { self.action = action }
-        @objc func handleSwipe() { action() }
-    }
-}
-
-private class ViewToggleSwipe: UISwipeGestureRecognizer {}
