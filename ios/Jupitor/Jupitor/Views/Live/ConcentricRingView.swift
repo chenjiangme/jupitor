@@ -10,6 +10,8 @@ struct ConcentricRingView: View {
 
     private var wlDate: String { watchlistDate.isEmpty ? date : watchlistDate }
 
+    @State private var rings: [RingState] = []
+    @State private var viewSize: CGSize = .zero
     @State private var showDetail = false
     @State private var detailCombined: CombinedStatsJSON?
     @State private var showHistory = false
@@ -157,6 +159,19 @@ struct ConcentricRingView: View {
         }
     }
 
+    // MARK: - Ring State
+
+    private struct RingState: Identifiable {
+        let id: String          // symbol
+        var combined: CombinedStatsJSON
+        var tier: String
+        var center: CGPoint     // viewport position (animated)
+        var radius: CGFloat     // viewport radius (animated)
+        var lineWidth: CGFloat
+        var hasChildren: Bool
+        var depth: Int          // 0 = top-level, 1 = child, 2 = grandchild...
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -169,14 +184,22 @@ struct ConcentricRingView: View {
                 Spacer()
             } else {
                 GeometryReader { geo in
-                    let nodes = buildNestedRings(in: geo.size)
                     ZStack {
                         Color.clear.contentShape(Rectangle())
-                        ForEach(nodes, id: \.symbol) { node in
-                            ringNodeView(node, viewSize: geo.size)
+                        ForEach(rings) { ring in
+                            ringNodeView(ring, viewSize: geo.size)
+                                .zIndex(Double(ring.depth) * 1000 - Double(ring.radius))
                         }
                     }
                     .frame(width: geo.size.width, height: geo.size.height)
+                    .onAppear {
+                        viewSize = geo.size
+                        syncRings(in: geo.size)
+                    }
+                    .onChange(of: geo.size) { _, new in
+                        viewSize = new
+                        syncRings(in: new)
+                    }
                 }
             }
         }
@@ -196,6 +219,12 @@ struct ConcentricRingView: View {
                     showWatchlistOnly = newValue
                 }
         )
+        .onChange(of: day) { _, _ in if viewSize.width > 0 { syncRings(in: viewSize) } }
+        .onChange(of: sessionMode) { _, _ in if viewSize.width > 0 { syncRings(in: viewSize) } }
+        .onChange(of: vm.watchlistSymbols) { _, _ in if viewSize.width > 0 { syncRings(in: viewSize) } }
+        .onChange(of: hidePennyStocks) { _, _ in if viewSize.width > 0 { syncRings(in: viewSize) } }
+        .onChange(of: gainOverLossOnly) { _, _ in if viewSize.width > 0 { syncRings(in: viewSize) } }
+        .onChange(of: showWatchlistOnly) { _, _ in if viewSize.width > 0 { syncRings(in: viewSize) } }
         .navigationDestination(isPresented: $showDetail) {
             if let combined = detailCombined {
                 SymbolDetailView(symbols: sortedByTurnover, initialSymbol: combined.symbol, date: date, newsDate: sessionMode == .next ? wlDate : "", isNextMode: sessionMode == .next)
@@ -212,20 +241,10 @@ struct ConcentricRingView: View {
         }
     }
 
-    // MARK: - Circle Packing Layout
+    // MARK: - Sync Rings (Global Radii + Containment Tree + Animation)
 
-    private struct RingNode {
-        let symbol: String
-        let combined: CombinedStatsJSON
-        let tier: String
-        let center: CGPoint
-        let radius: CGFloat
-        let lineWidth: CGFloat
-        let children: [RingNode]
-    }
-
-    /// Build nested ring tree using recursive split & pack.
-    private func buildNestedRings(in size: CGSize) -> [RingNode] {
+    private func syncRings(in size: CGSize) {
+        // 1. Build items sorted by turnover descending.
         let items: [(CombinedStatsJSON, String, Double)] = symbolData.compactMap { combined, tier in
             let turnover: Double
             switch sessionMode {
@@ -236,129 +255,182 @@ struct ConcentricRingView: View {
             guard turnover > 0 else { return nil }
             return (combined, tier, turnover)
         }
-        guard !items.isEmpty else { return [] }
-
+        guard !items.isEmpty else {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { rings = [] }
+            return
+        }
         let sorted = items.sorted { $0.2 > $1.2 }
-        let viewR = min(size.width, size.height) / 2
-        let containerR = max(minRingRadius, (viewR - 4) / 1.18)
-        let containerCenter = CGPoint(x: size.width / 2, y: size.height / 2)
+        let n = sorted.count
 
-        let root = buildNode(
-            item: sorted[0],
-            remaining: Array(sorted.dropFirst()),
-            containerR: containerR,
-            containerCenter: containerCenter
-        )
+        // 2. Compute global radii (same formula as BubbleChartView).
+        let radii = computeGlobalRadii(turnovers: sorted.map { $0.2 }, in: size)
 
-        return flattenNodes(root)
-    }
+        // 3. Build containment tree via BFS greedy assignment.
+        var childrenOf: [[Int]] = Array(repeating: [], count: n)
+        var topLevel: [Int] = [0]  // largest item always top-level
+        var depthOf: [Int] = Array(repeating: 0, count: n)
 
-    /// Recursive tree builder: item fills containerR, children packed inside.
-    private func buildNode(
-        item: (CombinedStatsJSON, String, Double),
-        remaining: [(CombinedStatsJSON, String, Double)],
-        containerR: CGFloat,
-        containerCenter: CGPoint
-    ) -> RingNode {
-        let lw = max(4, containerR * 0.12)
-        let profileOverflow = lw * 1.5
-        let innerR = containerR - lw / 2 - profileOverflow - 2
+        for i in 1..<n {
+            if let (parent, parentDepth) = tryNestBFS(item: i, radii: radii, childrenOf: childrenOf, topLevel: topLevel) {
+                childrenOf[parent].append(i)
+                depthOf[i] = parentDepth + 1
+            } else {
+                topLevel.append(i)
+            }
+        }
 
-        // Base case: no children or inner area too small
-        if remaining.isEmpty || innerR < minRingRadius {
-            return RingNode(
-                symbol: item.0.symbol, combined: item.0, tier: item.1,
-                center: containerCenter, radius: containerR, lineWidth: lw,
-                children: []
+        // 4. Pack top-level rings and compute uniform scale factor.
+        var positions = Array(repeating: CGPoint.zero, count: n)
+
+        let topRadii = topLevel.map { radii[$0] }
+        var topPx = [CGFloat](repeating: 0, count: topLevel.count)
+        var topPy = [CGFloat](repeating: 0, count: topLevel.count)
+        if topLevel.count > 1 {
+            packSiblings(topRadii, px: &topPx, py: &topPy)
+        }
+
+        // Center the packing at origin.
+        let avgX = topPx.reduce(0, +) / CGFloat(topLevel.count)
+        let avgY = topPy.reduce(0, +) / CGFloat(topLevel.count)
+        for i in 0..<topLevel.count { topPx[i] -= avgX; topPy[i] -= avgY }
+
+        // Enclosing radius including profile overflow.
+        var encR: CGFloat = 0
+        for i in 0..<topLevel.count {
+            let r = topRadii[i]
+            let lw = max(4, r * 0.12)
+            let effR = r + lw * 1.5
+            encR = max(encR, hypot(topPx[i], topPy[i]) + effR)
+        }
+        if encR < 1 { encR = 1 }
+
+        // Uniform scale: fit into viewport with padding.
+        let fitR = min(size.width, size.height) / 2 * 0.92
+        let S = fitR / encR
+
+        // 5. Position all rings in viewport coordinates.
+        let viewCenter = CGPoint(x: size.width / 2, y: size.height / 2)
+        for (i, idx) in topLevel.enumerated() {
+            positions[idx] = CGPoint(
+                x: viewCenter.x + topPx[i] * S,
+                y: viewCenter.y + topPy[i] * S
             )
         }
 
-        // Branching: sqrt(n) direct children, rest distributed among them
-        let numDirect = min(remaining.count, max(1, Int(ceil(sqrt(Double(remaining.count))))))
-        let directItems = Array(remaining.prefix(numDirect))
-        let subItems = Array(remaining.dropFirst(numDirect))
+        // Recursively position children inside their parents.
+        func positionChildren(of parent: Int) {
+            let children = childrenOf[parent]
+            guard !children.isEmpty else { return }
 
-        // Pack direct children using D3 circle packing
-        let weights = directItems.map { sqrt(CGFloat($0.2)) }
-        var px = [CGFloat](repeating: 0, count: numDirect)
-        var py = [CGFloat](repeating: 0, count: numDirect)
-        packSiblings(weights, px: &px, py: &py)
+            let childRadii = children.map { radii[$0] }
+            var cpx = [CGFloat](repeating: 0, count: children.count)
+            var cpy = [CGFloat](repeating: 0, count: children.count)
+            if children.count > 1 {
+                packSiblings(childRadii, px: &cpx, py: &cpy)
+            }
 
-        // Center the packed arrangement at origin
-        if numDirect > 1 {
-            let cx = px.reduce(0, +) / CGFloat(numDirect)
-            let cy = py.reduce(0, +) / CGFloat(numDirect)
-            for i in 0..<numDirect { px[i] -= cx; py[i] -= cy }
+            let cx = cpx.reduce(0, +) / CGFloat(children.count)
+            let cy = cpy.reduce(0, +) / CGFloat(children.count)
+            for j in 0..<children.count { cpx[j] -= cx; cpy[j] -= cy }
+
+            for (j, childIdx) in children.enumerated() {
+                positions[childIdx] = CGPoint(
+                    x: positions[parent].x + cpx[j] * S,
+                    y: positions[parent].y + cpy[j] * S
+                )
+                positionChildren(of: childIdx)
+            }
         }
 
-        // Compute enclosing radius and scale to fit inside innerR
-        let encR = (0..<numDirect).map { hypot(px[$0], py[$0]) + weights[$0] }.max() ?? 1
-        let scale = encR > 0 ? innerR / encR : 1
-        let scaledWeights = weights.map { $0 * scale }
-
-        // Distribute sub-items among direct children proportional to area
-        let distributed = distributeItems(subItems, proportionalTo: scaledWeights)
-
-        // Recurse for each direct child
-        var childNodes: [RingNode] = []
-        for i in 0..<numDirect {
-            let childR = scaledWeights[i]
-            guard childR >= minRingRadius else { continue }
-            let childCenter = CGPoint(
-                x: containerCenter.x + px[i] * scale,
-                y: containerCenter.y + py[i] * scale
-            )
-            let childNode = buildNode(
-                item: directItems[i],
-                remaining: distributed[i],
-                containerR: childR,
-                containerCenter: childCenter
-            )
-            childNodes.append(childNode)
+        for idx in topLevel {
+            positionChildren(of: idx)
         }
 
-        return RingNode(
-            symbol: item.0.symbol, combined: item.0, tier: item.1,
-            center: containerCenter, radius: containerR, lineWidth: lw,
-            children: childNodes
-        )
+        // 6. Build RingState array and animate.
+        var newRings: [RingState] = []
+        for i in 0..<n {
+            let r = radii[i] * S
+            newRings.append(RingState(
+                id: sorted[i].0.symbol,
+                combined: sorted[i].0,
+                tier: sorted[i].1,
+                center: positions[i],
+                radius: r,
+                lineWidth: max(4, r * 0.12),
+                hasChildren: !childrenOf[i].isEmpty,
+                depth: depthOf[i]
+            ))
+        }
+
+        withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+            rings = newRings
+        }
     }
 
-    /// Distribute items among buckets proportional to each bucket's area (r²).
-    private func distributeItems(
-        _ items: [(CombinedStatsJSON, String, Double)],
-        proportionalTo radii: [CGFloat]
-    ) -> [[(CombinedStatsJSON, String, Double)]] {
-        let n = radii.count
-        guard n > 0, !items.isEmpty else { return Array(repeating: [], count: max(n, 1)) }
+    // MARK: - Global Radii (same formula as BubbleChartView)
 
-        let areas = radii.map { $0 * $0 }
-        let total = areas.reduce(0, +)
-        guard total > 0 else { return Array(repeating: [], count: n) }
-
-        // Floor-based counts; remainder goes to largest child (index 0)
-        var counts = areas.map { Int(floor(CGFloat(items.count) * $0 / total)) }
-        let assigned = counts.reduce(0, +)
-        counts[0] += items.count - assigned
-
-        var result: [[(CombinedStatsJSON, String, Double)]] = []
-        var offset = 0
-        for count in counts {
-            let end = min(offset + max(0, count), items.count)
-            result.append(offset < end ? Array(items[offset..<end]) : [])
-            offset = end
+    private func computeGlobalRadii(turnovers: [Double], in size: CGSize) -> [CGFloat] {
+        let totalArea = size.width * size.height * 0.7
+        let weights = turnovers.map { sqrt(CGFloat($0)) }
+        let totalWeight = weights.reduce(0, +)
+        guard totalWeight > 0 else { return turnovers.map { _ in minRingRadius } }
+        let maxR = min(size.width, size.height) / 2.5
+        return weights.map { w in
+            let area = totalArea * w / totalWeight
+            return max(minRingRadius, min(maxR, sqrt(area / .pi)))
         }
-
-        return result
     }
 
-    /// Flatten tree depth-first (parent before children) for rendering.
-    private func flattenNodes(_ node: RingNode) -> [RingNode] {
-        var result = [node]
-        for child in node.children {
-            result += flattenNodes(child)
+    // MARK: - BFS Containment Test
+
+    /// Try to nest `item` inside an existing ring via breadth-first search.
+    /// Returns (parentIndex, parentDepth) if containment succeeds, nil otherwise.
+    private func tryNestBFS(item: Int, radii: [CGFloat], childrenOf: [[Int]], topLevel: [Int]) -> (parent: Int, depth: Int)? {
+        var queue: [(index: Int, depth: Int)] = topLevel.map { ($0, 0) }
+        var head = 0
+
+        while head < queue.count {
+            let (parent, parentDepth) = queue[head]
+            head += 1
+
+            let innerR = radii[parent] * 0.74
+
+            // Pack existing children + candidate item.
+            let existing = childrenOf[parent]
+            let testRadii = existing.map { radii[$0] } + [radii[item]]
+
+            if testRadii.count == 1 {
+                // Single child: just check radius.
+                if testRadii[0] <= innerR {
+                    return (parent, parentDepth)
+                }
+            } else {
+                var tpx = [CGFloat](repeating: 0, count: testRadii.count)
+                var tpy = [CGFloat](repeating: 0, count: testRadii.count)
+                packSiblings(testRadii, px: &tpx, py: &tpy)
+
+                // Center and compute enclosing radius.
+                let cn = testRadii.count
+                let cx = tpx.reduce(0, +) / CGFloat(cn)
+                let cy = tpy.reduce(0, +) / CGFloat(cn)
+                var encR: CGFloat = 0
+                for j in 0..<cn {
+                    let d = hypot(tpx[j] - cx, tpy[j] - cy) + testRadii[j]
+                    encR = max(encR, d)
+                }
+
+                if encR <= innerR {
+                    return (parent, parentDepth)
+                }
+            }
+
+            // Enqueue children for deeper nesting attempts.
+            for child in existing {
+                queue.append((child, parentDepth + 1))
+            }
         }
-        return result
+
+        return nil
     }
 
     // MARK: - D3 packSiblings Algorithm
@@ -503,51 +575,51 @@ struct ConcentricRingView: View {
     // MARK: - Ring Node View
 
     @ViewBuilder
-    private func ringNodeView(_ node: RingNode, viewSize: CGSize) -> some View {
-        let isWatchlist = vm.watchlistSymbols.contains(node.symbol)
-        let diameter = node.radius * 2
-        let ringWidth = node.lineWidth
+    private func ringNodeView(_ ring: RingState, viewSize: CGSize) -> some View {
+        let isWatchlist = vm.watchlistSymbols.contains(ring.id)
+        let diameter = ring.radius * 2
+        let ringWidth = ring.lineWidth
         let outerDia = diameter - ringWidth
-        let preTurnover = node.combined.pre?.turnover ?? 0
-        let regTurnover = node.combined.reg?.turnover ?? 0
+        let preTurnover = ring.combined.pre?.turnover ?? 0
+        let regTurnover = ring.combined.reg?.turnover ?? 0
         let total = preTurnover + regTurnover
         let preRatio = total > 0 ? sqrt(CGFloat(preTurnover / total)) : 0
         let innerDia = min(outerDia - 3 * ringWidth, outerDia * max(minInnerRatio, preRatio))
         let blackFillDia = innerDia + ringWidth
 
         ZStack {
-            let hasPre = node.combined.pre != nil
-            let hasReg = node.combined.reg != nil
+            let hasPre = ring.combined.pre != nil
+            let hasReg = ring.combined.reg != nil
             let dualRing = sessionMode == .day && hasPre && hasReg
 
             if dualRing {
                 SessionRingView(
-                    gain: node.combined.reg?.maxGain ?? 0,
-                    loss: node.combined.reg?.maxLoss ?? 0,
+                    gain: ring.combined.reg?.maxGain ?? 0,
+                    loss: ring.combined.reg?.maxLoss ?? 0,
                     hasData: true,
                     diameter: outerDia,
                     lineWidth: ringWidth,
-                    gainFirst: node.combined.reg?.gainFirst ?? true
+                    gainFirst: ring.combined.reg?.gainFirst ?? true
                 )
                 Circle()
                     .fill(Color.black)
                     .frame(width: blackFillDia, height: blackFillDia)
                 SessionRingView(
-                    gain: node.combined.pre?.maxGain ?? 0,
-                    loss: node.combined.pre?.maxLoss ?? 0,
+                    gain: ring.combined.pre?.maxGain ?? 0,
+                    loss: ring.combined.pre?.maxLoss ?? 0,
                     hasData: true,
                     diameter: innerDia,
                     lineWidth: ringWidth,
-                    gainFirst: node.combined.pre?.gainFirst ?? true
+                    gainFirst: ring.combined.pre?.gainFirst ?? true
                 )
             } else {
                 SessionRingView(
-                    gain: singleRingGain(node.combined),
-                    loss: singleRingLoss(node.combined),
+                    gain: singleRingGain(ring.combined),
+                    loss: singleRingLoss(ring.combined),
                     hasData: hasPre || hasReg,
                     diameter: outerDia,
                     lineWidth: ringWidth,
-                    gainFirst: singleRingGainFirst(node.combined)
+                    gainFirst: singleRingGainFirst(ring.combined)
                 )
             }
 
@@ -555,19 +627,19 @@ struct ConcentricRingView: View {
             let profileOverflow = ringWidth * 1.5
             let profileSize = diameter + profileOverflow * 2
             if dualRing {
-                if let profile = node.combined.reg?.tradeProfile, !profile.isEmpty {
+                if let profile = ring.combined.reg?.tradeProfile, !profile.isEmpty {
                     VolumeProfileCanvas(
                         profile: profile,
-                        gain: node.combined.reg?.maxGain ?? 0,
-                        loss: node.combined.reg?.maxLoss ?? 0,
-                        gainFirst: node.combined.reg?.gainFirst ?? true,
+                        gain: ring.combined.reg?.maxGain ?? 0,
+                        loss: ring.combined.reg?.maxLoss ?? 0,
+                        gainFirst: ring.combined.reg?.gainFirst ?? true,
                         ringRadius: outerDia / 2,
                         lineWidth: ringWidth
                     )
                     .frame(width: profileSize, height: profileSize)
                 }
             } else {
-                if let stats = sessionStats(node.combined), let profile = stats.tradeProfile, !profile.isEmpty {
+                if let stats = sessionStats(ring.combined), let profile = stats.tradeProfile, !profile.isEmpty {
                     VolumeProfileCanvas(
                         profile: profile,
                         gain: stats.maxGain,
@@ -582,18 +654,18 @@ struct ConcentricRingView: View {
 
             // Close gain markers.
             if dualRing {
-                if let reg = node.combined.reg, let cg = reg.closeGain, cg > 0 {
+                if let reg = ring.combined.reg, let cg = reg.closeGain, cg > 0 {
                     TargetMarkerCanvas(gain: cg, ringRadius: outerDia / 2, lineWidth: ringWidth,
                                        color: reg.dialColor)
                         .frame(width: diameter, height: diameter)
                 }
-                if let pre = node.combined.pre, let cg = pre.closeGain, cg > 0 {
+                if let pre = ring.combined.pre, let cg = pre.closeGain, cg > 0 {
                     TargetMarkerCanvas(gain: cg, ringRadius: innerDia / 2, lineWidth: ringWidth,
                                        color: pre.dialColor)
                         .frame(width: diameter, height: diameter)
                 }
             } else {
-                if let stats = sessionStats(node.combined), let cg = stats.closeGain, cg > 0 {
+                if let stats = sessionStats(ring.combined), let cg = stats.closeGain, cg > 0 {
                     TargetMarkerCanvas(gain: cg, ringRadius: outerDia / 2, lineWidth: ringWidth,
                                        color: stats.dialColor)
                         .frame(width: diameter, height: diameter)
@@ -602,20 +674,20 @@ struct ConcentricRingView: View {
 
             // Target gain markers.
             if dualRing {
-                if let t = tp.targets[date]?["\(node.symbol):REG"], t > 0 {
+                if let t = tp.targets[date]?["\(ring.id):REG"], t > 0 {
                     TargetMarkerCanvas(gain: t, ringRadius: outerDia / 2, lineWidth: ringWidth)
                         .frame(width: diameter, height: diameter)
                 }
-                if let t = tp.targets[date]?["\(node.symbol):PRE"], t > 0 {
+                if let t = tp.targets[date]?["\(ring.id):PRE"], t > 0 {
                     TargetMarkerCanvas(gain: t, ringRadius: innerDia / 2, lineWidth: ringWidth)
                         .frame(width: diameter, height: diameter)
                 }
             } else {
                 let targetKey: String = {
                     switch sessionMode {
-                    case .pre, .next: return "\(node.symbol):PRE"
-                    case .reg: return "\(node.symbol):REG"
-                    case .day: return "\(node.symbol):PRE"
+                    case .pre, .next: return "\(ring.id):PRE"
+                    case .reg: return "\(ring.id):REG"
+                    case .day: return "\(ring.id):PRE"
                     }
                 }()
                 if let t = tp.targets[date]?[targetKey], t > 0 {
@@ -625,7 +697,7 @@ struct ConcentricRingView: View {
             }
 
             // Close-position needle (hidden but logic preserved).
-            if let stats = sessionStats(node.combined), stats.high > stats.low {
+            if let stats = sessionStats(ring.combined), stats.high > stats.low {
                 CloseDialView(
                     fraction: (stats.close - stats.low) / (stats.high - stats.low),
                     needleRadius: outerDia / 2,
@@ -636,10 +708,10 @@ struct ConcentricRingView: View {
             }
 
             // Symbol label
-            if node.children.isEmpty {
+            if !ring.hasChildren {
                 // Leaf: centered label
                 VStack(spacing: 0) {
-                    let counts = newsCounts(for: node.combined)
+                    let counts = newsCounts(for: ring.combined)
                     if counts.st > 0 || counts.news > 0 {
                         HStack(spacing: 2) {
                             if counts.st > 0 {
@@ -651,21 +723,21 @@ struct ConcentricRingView: View {
                                     .foregroundStyle(Color.blue.opacity(0.5))
                             }
                         }
-                        .font(.system(size: max(5, node.radius * 0.18)))
+                        .font(.system(size: max(5, ring.radius * 0.18)))
                         .lineLimit(1)
                         .minimumScaleFactor(0.5)
                     }
 
-                    let closePriceBelowDollar = (sessionStats(node.combined)?.close ?? 1) < 1
-                    Text(node.symbol)
-                        .font(.system(size: max(7, node.radius * 0.3), weight: .heavy))
+                    let closePriceBelowDollar = (sessionStats(ring.combined)?.close ?? 1) < 1
+                    Text(ring.id)
+                        .font(.system(size: max(7, ring.radius * 0.3), weight: .heavy))
                         .italic(closePriceBelowDollar)
-                        .foregroundStyle((isWatchlist ? Color.watchlistColor : Color.tierColor(for: node.combined.tier)).opacity(0.5))
+                        .foregroundStyle((isWatchlist ? Color.watchlistColor : Color.tierColor(for: ring.combined.tier)).opacity(0.5))
                         .lineLimit(1)
                         .minimumScaleFactor(0.5)
-                    if isWatchlist, let stats = sessionStats(node.combined) {
+                    if isWatchlist, let stats = sessionStats(ring.combined) {
                         Text("\(Fmt.compactPrice(stats.open)) \(Fmt.compactPrice(stats.low)) \(Fmt.compactPrice(stats.high)) \(Fmt.compactPrice(stats.close))")
-                            .font(.system(size: max(5, node.radius * 0.16)))
+                            .font(.system(size: max(5, ring.radius * 0.16)))
                             .foregroundStyle(Color.watchlistPriceColor.opacity(0.4))
                             .lineLimit(1)
                             .minimumScaleFactor(0.5)
@@ -675,7 +747,7 @@ struct ConcentricRingView: View {
             } else {
                 // Parent: label at 12 o'clock with dark pill
                 VStack(spacing: 0) {
-                    let counts = newsCounts(for: node.combined)
+                    let counts = newsCounts(for: ring.combined)
                     if counts.st > 0 || counts.news > 0 {
                         HStack(spacing: 2) {
                             if counts.st > 0 {
@@ -687,15 +759,15 @@ struct ConcentricRingView: View {
                                     .foregroundStyle(Color.blue.opacity(0.5))
                             }
                         }
-                        .font(.system(size: max(5, node.radius * 0.1)))
+                        .font(.system(size: max(5, ring.radius * 0.1)))
                         .lineLimit(1)
                         .minimumScaleFactor(0.5)
                     }
-                    let closePriceBelowDollar = (sessionStats(node.combined)?.close ?? 1) < 1
-                    Text(node.symbol)
-                        .font(.system(size: max(7, node.radius * 0.13), weight: .heavy))
+                    let closePriceBelowDollar = (sessionStats(ring.combined)?.close ?? 1) < 1
+                    Text(ring.id)
+                        .font(.system(size: max(7, ring.radius * 0.13), weight: .heavy))
                         .italic(closePriceBelowDollar)
-                        .foregroundStyle((isWatchlist ? Color.watchlistColor : Color.tierColor(for: node.combined.tier)).opacity(0.7))
+                        .foregroundStyle((isWatchlist ? Color.watchlistColor : Color.tierColor(for: ring.combined.tier)).opacity(0.7))
                         .lineLimit(1)
                         .minimumScaleFactor(0.5)
                 }
@@ -703,23 +775,23 @@ struct ConcentricRingView: View {
                 .padding(.vertical, 2)
                 .background(Color.black.opacity(0.65))
                 .clipShape(Capsule())
-                .offset(y: -(node.radius - node.lineWidth * 1.5))
+                .offset(y: -(ring.radius - ring.lineWidth * 1.5))
             }
         }
-        .frame(width: diameter + node.lineWidth * 3, height: diameter + node.lineWidth * 3)
-        .position(node.center)
+        .frame(width: diameter + ring.lineWidth * 3, height: diameter + ring.lineWidth * 3)
+        .position(ring.center)
         .onTapGesture(count: 2) {
             guard !vm.isReplaying else { return }
-            Task { await vm.toggleWatchlist(symbol: node.symbol, date: wlDate) }
+            Task { await vm.toggleWatchlist(symbol: ring.id, date: wlDate) }
         }
         .onTapGesture(count: 1) {
             guard !vm.isReplaying else { return }
-            detailCombined = node.combined
+            detailCombined = ring.combined
             showDetail = true
         }
         .onLongPressGesture {
             guard !vm.isReplaying else { return }
-            historySymbol = node.symbol
+            historySymbol = ring.id
             showHistory = true
         }
     }
