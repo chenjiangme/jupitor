@@ -25,6 +25,7 @@ type SymbolStats struct {
 	GainFirst    bool    // true if max gain was reached before max loss
 	CloseGain    float64 // (close - low) / vwap using same VWAP logic as MaxGain
 	MaxDrawdown  float64 // (peakPrice - minAfterPeak) / vwap — drawdown from max gain point
+	TradeProfile []int   // trade count per 1% VWAP bucket from low to high
 }
 
 // CombinedStats pairs pre-market and regular stats for a single symbol.
@@ -190,6 +191,8 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 
 		// Compute VWAP between the max-gain and max-loss time points,
 		// then express gain/loss as percentages relative to that center.
+		// effectiveVwap is reused for the trade profile below.
+		effectiveVwap := vwap
 		if gainIdx >= 0 && lossIdx >= 0 && gainIdx != lossIdx {
 			lo, hi := gainIdx, lossIdx
 			if lo > hi {
@@ -208,6 +211,7 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 			if totalSize > 0 {
 				windowVwap := totalValue / float64(totalSize)
 				if windowVwap > 0 {
+					effectiveVwap = windowVwap
 					s.MaxGain = bestGain / windowVwap
 					s.MaxLoss = bestLoss / windowVwap
 					if s.Close > s.Low {
@@ -227,6 +231,29 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 			if peakPrice > minAfterPeak {
 				s.MaxDrawdown = (peakPrice - minAfterPeak) / vwap
 			}
+		}
+
+		// Compute trade profile: 1% buckets using the same VWAP as gain/loss.
+		if effectiveVwap > 0 && s.High > s.Low {
+			nBuckets := int(math.Ceil((s.High - s.Low) / effectiveVwap * 100))
+			if nBuckets > 500 {
+				nBuckets = 500
+			}
+			profile := make([]int, nBuckets)
+			scale := 100.0 / effectiveVwap
+			for j, idx := range indices {
+				if outlier[j] {
+					continue
+				}
+				bucket := int((records[idx].Price - s.Low) * scale)
+				if bucket >= nBuckets {
+					bucket = nBuckets - 1
+				}
+				if bucket >= 0 {
+					profile[bucket]++
+				}
+			}
+			s.TradeProfile = profile
 		}
 
 		m[sym] = s

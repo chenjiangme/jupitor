@@ -49,6 +49,7 @@ final class DashboardViewModel {
     private var preloadTask: Task<Void, Never>?
     private var replayDebounceTask: Task<Void, Never>?
     private var replayTimer: AnyCancellable?
+    private var replayFetching = false
     private var replayDate: String = ""
     private var replaySessionMode: SessionMode = .pre
 
@@ -276,6 +277,7 @@ final class DashboardViewModel {
             replayDayData = nil
             replayDebounceTask?.cancel()
             replayDebounceTask = nil
+            replayFetching = false
             replayTimer?.cancel()
             replayTimer = nil
         }
@@ -308,8 +310,10 @@ final class DashboardViewModel {
             .autoconnect()
             .sink { [weak self] _ in
                 guard let self, self.isReplaying, let rt = self.replayTime else { return }
+                // Skip if a fetch is still in progress.
+                guard !self.replayFetching else { return }
                 let advance: Int64 = 5000 // 5 seconds in ms
-                let (sessionStart, sessionEnd) = self.sessionBounds(date: self.replayDate, sessionMode: self.replaySessionMode)
+                let (_, sessionEnd) = self.sessionBounds(date: self.replayDate, sessionMode: self.replaySessionMode)
                 let rangeEnd: Int64
                 if let tr = self.replayTimeRange {
                     rangeEnd = min(sessionEnd, tr.end)
@@ -318,10 +322,11 @@ final class DashboardViewModel {
                 }
                 let newTime = min(rt + advance, rangeEnd)
                 self.replayTime = newTime
-                // Fetch updated data.
+                self.replayFetching = true
                 self.replayDebounceTask?.cancel()
                 self.replayDebounceTask = Task {
                     await self.fetchReplayData(date: self.replayDate, until: newTime)
+                    self.replayFetching = false
                 }
             }
     }

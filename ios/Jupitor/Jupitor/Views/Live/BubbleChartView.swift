@@ -20,6 +20,8 @@ struct BubbleChartView: View {
     @State private var isSettled = false
     @State private var simFrame = 0
     @State private var showWatchlistOnly = false
+    @AppStorage("hidePennyStocks") private var hidePennyStocks = false
+    @AppStorage("gainOverLossOnly") private var gainOverLossOnly = false
 
     private let minInnerRatio: CGFloat = 0.15
 
@@ -33,6 +35,20 @@ struct BubbleChartView: View {
                 case .reg: return item.combined.reg != nil
                 case .day: return true
                 }
+            }
+            .filter { item in
+                // Watchlist symbols bypass all filters.
+                if vm.watchlistSymbols.contains(item.combined.symbol) { return true }
+                if hidePennyStocks {
+                    let close = sessionClose(item.combined)
+                    if close > 0 && close < 1 { return false }
+                }
+                if gainOverLossOnly {
+                    let gain = sessionGain(item.combined)
+                    let loss = sessionLoss(item.combined)
+                    if gain <= loss { return false }
+                }
+                return true
             }
         let watchlist = all.filter { vm.watchlistSymbols.contains($0.combined.symbol) }
         if showWatchlistOnly { return watchlist }
@@ -109,6 +125,12 @@ struct BubbleChartView: View {
             if viewSize.width > 0 { syncBubbles(in: viewSize) }
         }
         .onChange(of: sessionMode) { _, _ in
+            if viewSize.width > 0 { syncBubbles(in: viewSize) }
+        }
+        .onChange(of: hidePennyStocks) { _, _ in
+            if viewSize.width > 0 { syncBubbles(in: viewSize) }
+        }
+        .onChange(of: gainOverLossOnly) { _, _ in
             if viewSize.width > 0 { syncBubbles(in: viewSize) }
         }
         .onChange(of: vm.watchlistSymbols) { old, new in
@@ -196,6 +218,33 @@ struct BubbleChartView: View {
                     lineWidth: ringWidth,
                     gainFirst: singleRingGainFirst(bubble.combined)
                 )
+            }
+
+            // Volume profile (trade count histogram on outer ring).
+            if dualRing {
+                if let profile = bubble.combined.reg?.tradeProfile, !profile.isEmpty {
+                    VolumeProfileCanvas(
+                        profile: profile,
+                        gain: bubble.combined.reg?.maxGain ?? 0,
+                        loss: bubble.combined.reg?.maxLoss ?? 0,
+                        gainFirst: bubble.combined.reg?.gainFirst ?? true,
+                        ringRadius: outerDia / 2,
+                        lineWidth: ringWidth
+                    )
+                    .frame(width: diameter, height: diameter)
+                }
+            } else {
+                if let stats = sessionStats(bubble.combined), let profile = stats.tradeProfile, !profile.isEmpty {
+                    VolumeProfileCanvas(
+                        profile: profile,
+                        gain: stats.maxGain,
+                        loss: stats.maxLoss,
+                        gainFirst: stats.gainFirst ?? true,
+                        ringRadius: outerDia / 2,
+                        lineWidth: ringWidth
+                    )
+                    .frame(width: diameter, height: diameter)
+                }
             }
 
             // Close gain markers (color by close fraction: red at low, green at high).
@@ -375,6 +424,30 @@ struct BubbleChartView: View {
             color = .orange
         }
         return (st, color, c.news ?? 0)
+    }
+
+    private func sessionClose(_ c: CombinedStatsJSON) -> Double {
+        switch sessionMode {
+        case .pre, .next: return c.pre?.close ?? 0
+        case .reg: return c.reg?.close ?? 0
+        case .day: return c.reg?.close ?? c.pre?.close ?? 0
+        }
+    }
+
+    private func sessionGain(_ c: CombinedStatsJSON) -> Double {
+        switch sessionMode {
+        case .pre, .next: return c.pre?.maxGain ?? 0
+        case .reg: return c.reg?.maxGain ?? 0
+        case .day: return max(c.pre?.maxGain ?? 0, c.reg?.maxGain ?? 0)
+        }
+    }
+
+    private func sessionLoss(_ c: CombinedStatsJSON) -> Double {
+        switch sessionMode {
+        case .pre, .next: return c.pre?.maxLoss ?? 0
+        case .reg: return c.reg?.maxLoss ?? 0
+        case .day: return max(c.pre?.maxLoss ?? 0, c.reg?.maxLoss ?? 0)
+        }
     }
 
     private func singleRingGain(_ c: CombinedStatsJSON) -> Double {
@@ -629,6 +702,72 @@ private struct TargetMarkerCanvas: View {
             line.addLine(to: p2)
             context.stroke(line, with: .color(color),
                           style: StrokeStyle(lineWidth: 4, lineCap: .round))
+        }
+    }
+}
+
+// MARK: - Volume Profile (trade count histogram on outer ring)
+
+private struct VolumeProfileCanvas: View {
+    let profile: [Int]      // trade count per 1% VWAP bucket (low→high)
+    let gain: Double         // maxGain for this session
+    let loss: Double         // maxLoss for this session
+    let gainFirst: Bool
+    let ringRadius: CGFloat  // center of the ring stroke
+    let lineWidth: CGFloat   // ring stroke width
+
+    var body: some View {
+        Canvas { context, size in
+            guard !profile.isEmpty else { return }
+            let maxCount = profile.max() ?? 1
+            guard maxCount > 0 else { return }
+
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let outerEdge = ringRadius + lineWidth / 2
+            let maxBarLen = lineWidth * 0.8
+            let barWidth: CGFloat = 1.0
+
+            // Determine direction: profile goes along the larger arc.
+            let gainSide = gain >= loss
+            // When gainFirst: gain starts at 12 o'clock CW, loss offset by gainEnd.
+            // When !gainFirst: loss starts at 12 o'clock CCW, gain offset by lossEnd.
+            // The larger arc always has full lineWidth.
+            let startAngle = -Double.pi / 2 // 12 o'clock
+
+            for (i, count) in profile.enumerated() {
+                guard count > 0 else { continue }
+                let pct = Double(i) / 100.0
+                let angle: Double
+                if gainSide {
+                    // Clockwise from 12 o'clock.
+                    angle = startAngle + 2 * Double.pi * pct
+                } else {
+                    // Counter-clockwise: reverse bucket order so high price near 12.
+                    let reversePct = Double(profile.count - 1 - i) / 100.0
+                    if gainFirst {
+                        let gainEnd = gain.truncatingRemainder(dividingBy: 1.0)
+                        angle = startAngle + Double(gainEnd) * 2 * Double.pi - 2 * Double.pi * reversePct
+                    } else {
+                        angle = startAngle - 2 * Double.pi * reversePct
+                    }
+                }
+
+                let barLen = maxBarLen * CGFloat(count) / CGFloat(maxCount)
+                let p1 = CGPoint(
+                    x: center.x + cos(angle) * outerEdge,
+                    y: center.y + sin(angle) * outerEdge
+                )
+                let p2 = CGPoint(
+                    x: center.x + cos(angle) * (outerEdge + barLen),
+                    y: center.y + sin(angle) * (outerEdge + barLen)
+                )
+
+                var path = Path()
+                path.move(to: p1)
+                path.addLine(to: p2)
+                context.stroke(path, with: .color(.white.opacity(0.35)),
+                              style: StrokeStyle(lineWidth: barWidth, lineCap: .butt))
+            }
         }
     }
 }
