@@ -794,8 +794,6 @@ private struct VolumeProfileCanvas: View {
             mountain.closeSubpath()
 
             context.fill(mountain, with: .color(.white.opacity(0.15)))
-            context.stroke(mountain, with: .color(.white.opacity(0.3)),
-                          style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round))
         }
     }
 }
