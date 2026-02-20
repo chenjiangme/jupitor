@@ -31,6 +31,7 @@
 		A10034 /* TradeParamsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10034 /* TradeParamsModel.swift */; };
 		A10035 /* ConcentricRingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10035 /* ConcentricRingView.swift */; };
 		A10036 /* ChartComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10036 /* ChartComponents.swift */; };
+		A10037 /* SymbolBarListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10037 /* SymbolBarListView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -59,6 +60,7 @@
 		B10034 /* TradeParamsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeParamsModel.swift; sourceTree = "<group>"; };
 		B10035 /* ConcentricRingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConcentricRingView.swift; sourceTree = "<group>"; };
 		B10036 /* ChartComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartComponents.swift; sourceTree = "<group>"; };
+		B10037 /* SymbolBarListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SymbolBarListView.swift; sourceTree = "<group>"; };
 		C10001 /* Jupitor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jupitor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -161,6 +163,7 @@
 				B10023 /* SymbolListView.swift */,
 				B10030 /* BubbleChartView.swift */,
 				B10035 /* ConcentricRingView.swift */,
+				B10037 /* SymbolBarListView.swift */,
 			);
 			path = Live;
 			sourceTree = "<group>";
@@ -301,6 +304,7 @@
 				A10034 /* TradeParamsModel.swift in Sources */,
 				A10035 /* ConcentricRingView.swift in Sources */,
 				A10036 /* ChartComponents.swift in Sources */,
+				A10037 /* SymbolBarListView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

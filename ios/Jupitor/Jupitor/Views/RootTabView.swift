@@ -3,7 +3,7 @@ import SwiftUI
 struct RootTabView: View {
     @Environment(DashboardViewModel.self) private var vm
     @AppStorage("showDayMode") private var showDayMode = false
-    @AppStorage("useConcentricView") private var useConcentricView = false
+    @AppStorage("chartViewMode") private var chartViewMode = 0  // 0=bubble, 1=rings, 2=list
     @State private var currentDate: String = ""
     @State private var sessionMode: SessionMode = .pre
     @State private var showingSettings = false
@@ -173,10 +173,14 @@ struct RootTabView: View {
                             .foregroundStyle(.secondary)
                     } else if let day = dayData {
                         let displayDay = vm.isReplaying ? day : (sessionMode == .next ? (nextData ?? day) : day)
-                        if useConcentricView {
+                        switch chartViewMode {
+                        case 1:
                             ConcentricRingView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
                                 .transition(.opacity)
-                        } else {
+                        case 2:
+                            SymbolBarListView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
+                                .transition(.opacity)
+                        default:
                             BubbleChartView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
                                 .transition(.opacity)
                         }
@@ -262,9 +266,9 @@ struct RootTabView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 12) {
                         Button {
-                            withAnimation(.easeInOut(duration: 0.3)) { useConcentricView.toggle() }
+                            withAnimation(.easeInOut(duration: 0.3)) { chartViewMode = (chartViewMode + 1) % 3 }
                         } label: {
-                            Image(systemName: useConcentricView ? "circle.circle" : "bubbles.and.sparkles")
+                            Image(systemName: chartViewMode == 1 ? "circle.circle" : chartViewMode == 2 ? "list.bullet" : "bubbles.and.sparkles")
                                 .foregroundStyle(.secondary)
                         }
                         Button { showingSettings = true } label: {

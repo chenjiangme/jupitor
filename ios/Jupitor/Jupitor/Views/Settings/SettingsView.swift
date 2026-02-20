@@ -3,7 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @AppStorage("serverURL") private var serverURL = "http://mbpro:8080"
     @AppStorage("showDayMode") private var showDayMode = false
-    @AppStorage("useConcentricView") private var useConcentricView = false
+    @AppStorage("chartViewMode") private var chartViewMode = 0
     @AppStorage("hidePennyStocks") private var hidePennyStocks = false
     @AppStorage("gainOverLossOnly") private var gainOverLossOnly = false
     @AppStorage("replaySpeed") private var replaySpeed = 60000
@@ -21,7 +21,11 @@ struct SettingsView: View {
 
                 Section("Display") {
                     Toggle("Show Day Mode", isOn: $showDayMode)
-                    Toggle("Concentric View", isOn: $useConcentricView)
+                    Picker("Chart View", selection: $chartViewMode) {
+                        Text("Bubbles").tag(0)
+                        Text("Rings").tag(1)
+                        Text("List").tag(2)
+                    }
                 }
 
                 Section("Filters") {
