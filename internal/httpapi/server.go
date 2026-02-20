@@ -991,7 +991,7 @@ func (s *DashboardServer) nextDateFor(date string) string {
 // computeNewsCounts returns per-symbol news counts from the in-memory cache.
 // StockTwits messages are bucketed by ET session; other sources counted as news.
 // Only messages whose ET date matches `date` are counted.
-func (s *DashboardServer) computeNewsCounts(date string) map[string]*SymbolNewsCounts {
+func (s *DashboardServer) computeNewsCounts(date string, until int64) map[string]*SymbolNewsCounts {
 	result := make(map[string]*SymbolNewsCounts)
 	suffix := ":" + date
 	s.newsCache.Range(func(k, v any) bool {
@@ -1003,6 +1003,9 @@ func (s *DashboardServer) computeNewsCounts(date string) map[string]*SymbolNewsC
 		articles := v.([]NewsArticleJSON)
 		nc := &SymbolNewsCounts{}
 		for _, a := range articles {
+			if until > 0 && a.Time > until {
+				continue
+			}
 			t := time.UnixMilli(a.Time).In(s.loc)
 			if t.Format("2006-01-02") != date {
 				continue
@@ -1027,7 +1030,7 @@ func (s *DashboardServer) computeNewsCounts(date string) map[string]*SymbolNewsC
 }
 
 // loadNewsCounts reads the news parquet file for a date and returns per-symbol counts.
-func (s *DashboardServer) loadNewsCounts(date string) map[string]*SymbolNewsCounts {
+func (s *DashboardServer) loadNewsCounts(date string, until int64) map[string]*SymbolNewsCounts {
 	path := filepath.Join(s.dataDir, "us", "news", date+".parquet")
 	records, err := parquet.ReadFile[NewsRecord](path)
 	if err != nil {
@@ -1036,6 +1039,9 @@ func (s *DashboardServer) loadNewsCounts(date string) map[string]*SymbolNewsCoun
 	result := make(map[string]*SymbolNewsCounts)
 	for i := range records {
 		r := &records[i]
+		if until > 0 && r.Time > until {
+			continue
+		}
 		nc := result[r.Symbol]
 		if nc == nil {
 			nc = &SymbolNewsCounts{}
@@ -1076,7 +1082,7 @@ func (s *DashboardServer) handleDashboard(w http.ResponseWriter, r *http.Request
 	_, nextExIdx := s.model.NextSnapshot()
 
 	todayData := dashboard.ComputeDayData("TODAY", todayExIdx, s.tierMap, todayOpen930ET, sortMode)
-	newsCounts := s.computeNewsCounts(date)
+	newsCounts := s.computeNewsCounts(date, 0)
 	todayJSON := convertDayData(todayData, newsCounts)
 	todayJSON.Date = date
 
@@ -1120,7 +1126,7 @@ func (s *DashboardServer) handleHistory(w http.ResponseWriter, r *http.Request) 
 
 	open930 := open930ET(date, s.loc)
 	data := dashboard.ComputeDayData(date, trades, tierMap, open930, sortMode)
-	newsCounts := s.loadNewsCounts(date)
+	newsCounts := s.loadNewsCounts(date, 0)
 	todayJSON := convertDayData(data, newsCounts)
 	todayJSON.Date = date
 
@@ -1265,12 +1271,12 @@ func (s *DashboardServer) handleReplay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	open930 := open930ET(date, s.loc)
-	// Load news counts (live from cache, history from parquet).
+	// Load news counts filtered by replay time.
 	var newsCounts map[string]*SymbolNewsCounts
 	if date == today {
-		newsCounts = s.computeNewsCounts(date)
+		newsCounts = s.computeNewsCounts(date, untilET)
 	} else {
-		newsCounts = s.loadNewsCounts(date)
+		newsCounts = s.loadNewsCounts(date, untilET)
 	}
 
 	data := dashboard.ComputeDayData(date, filtered, tierMap, open930, sortMode)
