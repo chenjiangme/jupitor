@@ -198,7 +198,6 @@ struct RootTabView: View {
                     }
                 }
                 .offset(x: panOffset, y: verticalOffset)
-                .animation(.easeInOut(duration: 0.3), value: useConcentricView)
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -261,8 +260,16 @@ struct RootTabView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showingSettings = true } label: {
-                        Image(systemName: "gear")
+                    HStack(spacing: 12) {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.3)) { useConcentricView.toggle() }
+                        } label: {
+                            Image(systemName: useConcentricView ? "circle.circle" : "bubbles.and.sparkles")
+                                .foregroundStyle(.secondary)
+                        }
+                        Button { showingSettings = true } label: {
+                            Image(systemName: "gear")
+                        }
                     }
                 }
             }
