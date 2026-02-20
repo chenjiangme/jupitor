@@ -173,13 +173,6 @@ struct BubbleChartView: View {
         let blackFillDia = innerDia + ringWidth
 
         ZStack {
-            // Subtle background.
-            let hasPre_ = bubble.combined.pre != nil
-            let hasReg_ = bubble.combined.reg != nil
-            let bgOpacity = (sessionMode == .day && hasPre_ && hasReg_) ? 0.08 : 0.04
-            Circle()
-                .fill(Color.white.opacity(bgOpacity))
-
             let hasPre = bubble.combined.pre != nil
             let hasReg = bubble.combined.reg != nil
             let dualRing = sessionMode == .day && hasPre && hasReg
