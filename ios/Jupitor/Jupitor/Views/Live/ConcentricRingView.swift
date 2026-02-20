@@ -294,19 +294,21 @@ struct ConcentricRingView: View {
         let avgY = topPy.reduce(0, +) / CGFloat(topLevel.count)
         for i in 0..<topLevel.count { topPx[i] -= avgX; topPy[i] -= avgY }
 
-        // Enclosing radius including profile overflow.
-        var encR: CGFloat = 0
+        // Bounding box including profile overflow.
+        var halfW: CGFloat = 0
+        var halfH: CGFloat = 0
         for i in 0..<topLevel.count {
             let r = topRadii[i]
             let lw = max(4, r * 0.12)
             let effR = r + lw * 1.5
-            encR = max(encR, hypot(topPx[i], topPy[i]) + effR)
+            halfW = max(halfW, abs(topPx[i]) + effR)
+            halfH = max(halfH, abs(topPy[i]) + effR)
         }
-        if encR < 1 { encR = 1 }
+        if halfW < 1 { halfW = 1 }
+        if halfH < 1 { halfH = 1 }
 
-        // Uniform scale: fit into viewport with padding.
-        let fitR = min(size.width, size.height) / 2 * 0.92
-        let S = fitR / encR
+        // Uniform scale: fit bounding box into full viewport rectangle.
+        let S = min(size.width / 2 * 0.96 / halfW, size.height / 2 * 0.96 / halfH)
 
         // 5. Position all rings in viewport coordinates.
         let viewCenter = CGPoint(x: size.width / 2, y: size.height / 2)
