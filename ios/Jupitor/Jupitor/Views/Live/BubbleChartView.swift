@@ -497,16 +497,14 @@ struct BubbleChartView: View {
             var fx: CGFloat = 0
             var fy: CGFloat = 0
 
-            // Collision avoidance (include profile bar overflow in radius).
+            // Collision avoidance (small buffer for profile bars).
             let ri = bubbles[i].radius
-            let profileI = max(4, ri * 0.18) * 1.5
             for j in bubbles.indices where j != i {
                 let dx = bubbles[i].position.x - bubbles[j].position.x
                 let dy = bubbles[i].position.y - bubbles[j].position.y
                 let dist = hypot(dx, dy)
                 let rj = bubbles[j].radius
-                let profileJ = max(4, rj * 0.18) * 1.5
-                let minDist = (ri + profileI) + (rj + profileJ) + pad
+                let minDist = ri + rj + pad
                 if dist < minDist && dist > 0.01 {
                     let overlap = minDist - dist
                     let strength: CGFloat = 0.4
@@ -521,10 +519,9 @@ struct BubbleChartView: View {
             let targetY = viewSize.height * (1 - cf)
             fy += (targetY - bubbles[i].position.y) * 0.03
 
-            // Boundary forces (extra margin for volume profile bars).
+            // Boundary forces (small margin for volume profile bars).
             let r = bubbles[i].radius
-            let profileMargin = max(4, r * 0.18) * 1.5
-            let edgeR = r + profileMargin
+            let edgeR = r + max(4, r * 0.18)
             let bx = bubbles[i].position.x
             let by = bubbles[i].position.y
             if bx - edgeR < 0 { fx += (0 - (bx - edgeR)) * 0.5 }
