@@ -1271,12 +1271,12 @@ func (s *DashboardServer) handleReplay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	open930 := open930ET(date, s.loc)
-	// Load news counts filtered by replay time.
+	// Load news counts filtered by replay time (real Unix ms, not ET-shifted).
 	var newsCounts map[string]*SymbolNewsCounts
 	if date == today {
-		newsCounts = s.computeNewsCounts(date, untilET)
+		newsCounts = s.computeNewsCounts(date, until)
 	} else {
-		newsCounts = s.loadNewsCounts(date, untilET)
+		newsCounts = s.loadNewsCounts(date, until)
 	}
 
 	data := dashboard.ComputeDayData(date, filtered, tierMap, open930, sortMode)
