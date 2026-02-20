@@ -29,6 +29,8 @@
 		A10032 /* SymbolHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10032; };
 		A10033 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10033; };
 		A10034 /* TradeParamsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10034; };
+		A10035 /* ConcentricRingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10035; };
+		A10036 /* ChartComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10036; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -55,6 +57,8 @@
 		B10032 /* SymbolHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SymbolHistoryView.swift; sourceTree = "<group>"; };
 		B10033 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B10034 /* TradeParamsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeParamsModel.swift; sourceTree = "<group>"; };
+		B10035 /* ConcentricRingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConcentricRingView.swift; sourceTree = "<group>"; };
+		B10036 /* ChartComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartComponents.swift; sourceTree = "<group>"; };
 		C10001 /* Jupitor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jupitor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -156,6 +160,7 @@
 				B10022 /* SymbolCardView.swift */,
 				B10023 /* SymbolListView.swift */,
 				B10030 /* BubbleChartView.swift */,
+				B10035 /* ConcentricRingView.swift */,
 			);
 			path = Live;
 			sourceTree = "<group>";
@@ -191,6 +196,7 @@
 			isa = PBXGroup;
 			children = (
 				B10031 /* RingView.swift */,
+				B10036 /* ChartComponents.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -293,6 +299,8 @@
 				A10031 /* RingView.swift in Sources */,
 				A10032 /* SymbolHistoryView.swift in Sources */,
 				A10034 /* TradeParamsModel.swift in Sources */,
+				A10035 /* ConcentricRingView.swift in Sources */,
+				A10036 /* ChartComponents.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
