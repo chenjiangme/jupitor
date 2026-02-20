@@ -186,6 +186,7 @@ struct ConcentricRingView: View {
                 GeometryReader { geo in
                     ZStack {
                         Color.clear.contentShape(Rectangle())
+                            .zIndex(-100000)
                         ForEach(rings) { ring in
                             ringNodeView(ring, viewSize: geo.size)
                                 .zIndex(Double(ring.depth) * 1000 - Double(ring.radius))
