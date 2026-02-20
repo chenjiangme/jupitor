@@ -17,6 +17,7 @@ struct ConcentricRingView: View {
     @State private var showHistory = false
     @State private var historySymbol: String = ""
     @State private var showWatchlistOnly = false
+    @State private var hasInitialized = false
     @AppStorage("hidePennyStocks") private var hidePennyStocks = false
     @AppStorage("gainOverLossOnly") private var gainOverLossOnly = false
 
@@ -400,8 +401,13 @@ struct ConcentricRingView: View {
             ))
         }
 
-        withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+        if hasInitialized {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+                rings = newRings
+            }
+        } else {
             rings = newRings
+            hasInitialized = true
         }
     }
 

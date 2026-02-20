@@ -175,8 +175,10 @@ struct RootTabView: View {
                         let displayDay = vm.isReplaying ? day : (sessionMode == .next ? (nextData ?? day) : day)
                         if useConcentricView {
                             ConcentricRingView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
+                                .transition(.opacity)
                         } else {
                             BubbleChartView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
+                                .transition(.opacity)
                         }
                     } else if isLive, let error = vm.error {
                         VStack(spacing: 12) {
@@ -197,7 +199,9 @@ struct RootTabView: View {
                 }
                 .offset(x: panOffset, y: verticalOffset)
                 .background {
-                    TwoFingerSwipeDetector { useConcentricView.toggle() }
+                    TwoFingerSwipeDetector {
+                        withAnimation(.easeInOut(duration: 0.3)) { useConcentricView.toggle() }
+                    }
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -374,16 +378,17 @@ private struct TwoFingerSwipeDetector: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {
         DispatchQueue.main.async {
             guard let window = uiView.window else { return }
-            // Only add once
             if window.gestureRecognizers?.contains(where: { $0 is ViewToggleSwipe }) == true { return }
 
-            let swipe = ViewToggleSwipe(target: context.coordinator, action: #selector(Coordinator.handleSwipe))
-            swipe.numberOfTouchesRequired = 2
-            swipe.direction = .down
-            swipe.cancelsTouchesInView = false
-            swipe.delaysTouchesBegan = false
-            swipe.delaysTouchesEnded = false
-            window.addGestureRecognizer(swipe)
+            for dir: UISwipeGestureRecognizer.Direction in [.up, .down] {
+                let swipe = ViewToggleSwipe(target: context.coordinator, action: #selector(Coordinator.handleSwipe))
+                swipe.direction = dir
+                swipe.numberOfTouchesRequired = 2
+                swipe.cancelsTouchesInView = false
+                swipe.delaysTouchesBegan = false
+                swipe.delaysTouchesEnded = false
+                window.addGestureRecognizer(swipe)
+            }
         }
     }
 

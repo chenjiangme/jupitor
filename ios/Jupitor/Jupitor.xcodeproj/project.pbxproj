@@ -7,30 +7,30 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A10001 /* JupitorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10001; };
-		A10002 /* DashboardModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10002; };
-		A10003 /* APIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10003; };
-		A10004 /* DashboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10004; };
-		A10006 /* TierSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10006; };
-		A10009 /* Formatters.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10009; };
-		A10010 /* Colors.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10010; };
-		A10020 /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10020; };
-		A10021 /* LiveDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10021; };
-		A10022 /* SymbolCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10022; };
-		A10023 /* SymbolListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10023; };
-		A10024 /* HistoryDateListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10024; };
-		A10025 /* WatchlistView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10025; };
-		A10026 /* SymbolDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10026; };
-		A10027 /* SessionCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10027; };
-		A10028 /* MetricCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10028; };
-		A10029 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10029; };
-		A10030 /* BubbleChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10030; };
-		A10031 /* RingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10031; };
-		A10032 /* SymbolHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10032; };
-		A10033 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10033; };
-		A10034 /* TradeParamsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10034; };
-		A10035 /* ConcentricRingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10035; };
-		A10036 /* ChartComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10036; };
+		A10001 /* JupitorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10001 /* JupitorApp.swift */; };
+		A10002 /* DashboardModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10002 /* DashboardModels.swift */; };
+		A10003 /* APIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10003 /* APIService.swift */; };
+		A10004 /* DashboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10004 /* DashboardViewModel.swift */; };
+		A10006 /* TierSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10006 /* TierSectionView.swift */; };
+		A10009 /* Formatters.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10009 /* Formatters.swift */; };
+		A10010 /* Colors.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10010 /* Colors.swift */; };
+		A10020 /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10020 /* RootTabView.swift */; };
+		A10021 /* LiveDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10021 /* LiveDashboardView.swift */; };
+		A10022 /* SymbolCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10022 /* SymbolCardView.swift */; };
+		A10023 /* SymbolListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10023 /* SymbolListView.swift */; };
+		A10024 /* HistoryDateListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10024 /* HistoryDateListView.swift */; };
+		A10025 /* WatchlistView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10025 /* WatchlistView.swift */; };
+		A10026 /* SymbolDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10026 /* SymbolDetailView.swift */; };
+		A10027 /* SessionCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10027 /* SessionCard.swift */; };
+		A10028 /* MetricCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10028 /* MetricCell.swift */; };
+		A10029 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10029 /* SettingsView.swift */; };
+		A10030 /* BubbleChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10030 /* BubbleChartView.swift */; };
+		A10031 /* RingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10031 /* RingView.swift */; };
+		A10032 /* SymbolHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10032 /* SymbolHistoryView.swift */; };
+		A10033 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10033 /* Assets.xcassets */; };
+		A10034 /* TradeParamsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10034 /* TradeParamsModel.swift */; };
+		A10035 /* ConcentricRingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10035 /* ConcentricRingView.swift */; };
+		A10036 /* ChartComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10036 /* ChartComponents.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -192,6 +192,14 @@
 			path = Detail;
 			sourceTree = "<group>";
 		};
+		E10014 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				B10029 /* SettingsView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
 		E10015 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
@@ -201,20 +209,12 @@
 			path = Shared;
 			sourceTree = "<group>";
 		};
-		E10014 /* Settings */ = {
-			isa = PBXGroup;
-			children = (
-				B10029 /* SettingsView.swift */,
-			);
-			path = Settings;
-			sourceTree = "<group>";
-		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
 		F10001 /* Jupitor */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = G10003;
+			buildConfigurationList = G10003 /* Build configuration list for PBXNativeTarget "Jupitor" */;
 			buildPhases = (
 				F10002 /* Sources */,
 				D10001 /* Frameworks */,
@@ -244,7 +244,7 @@
 					};
 				};
 			};
-			buildConfigurationList = G10001;
+			buildConfigurationList = G10001 /* Build configuration list for PBXProject "Jupitor" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
