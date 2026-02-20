@@ -262,8 +262,20 @@ struct ConcentricRingView: View {
         let sorted = items.sorted { $0.2 > $1.2 }
         let n = sorted.count
 
-        // 2. Compute global radii (same formula as BubbleChartView).
-        let radii = computeGlobalRadii(turnovers: sorted.map { $0.2 }, in: size)
+        // 2. Compute global radii (viewport-sized, same formula as BubbleChartView).
+        var radii = computeGlobalRadii(turnovers: sorted.map { $0.2 }, in: size)
+
+        // Scale down if total effective area exceeds viewport (same as BubbleChartView).
+        let canvasArea = size.width * size.height
+        var totalEffArea: CGFloat = 0
+        for r in radii {
+            let effR = r + max(4, r * 0.12) * 1.5
+            totalEffArea += .pi * effR * effR
+        }
+        if totalEffArea > canvasArea * 0.85 {
+            let scale = sqrt(canvasArea * 0.85 / totalEffArea)
+            radii = radii.map { max(minRingRadius, $0 * scale) }
+        }
 
         // 3. Build containment tree via BFS greedy assignment.
         var childrenOf: [[Int]] = Array(repeating: [], count: n)
@@ -279,44 +291,69 @@ struct ConcentricRingView: View {
             }
         }
 
-        // 4. Pack top-level rings and compute uniform scale factor.
+        // 4. Position top-level rings: grid initialization + force-settle.
         var positions = Array(repeating: CGPoint.zero, count: n)
-
+        let topCount = topLevel.count
         let topRadii = topLevel.map { radii[$0] }
-        var topPx = [CGFloat](repeating: 0, count: topLevel.count)
-        var topPy = [CGFloat](repeating: 0, count: topLevel.count)
-        if topLevel.count > 1 {
-            packSiblings(topRadii, px: &topPx, py: &topPy)
-        }
 
-        // Center the packing at origin.
-        let avgX = topPx.reduce(0, +) / CGFloat(topLevel.count)
-        let avgY = topPy.reduce(0, +) / CGFloat(topLevel.count)
-        for i in 0..<topLevel.count { topPx[i] -= avgX; topPy[i] -= avgY }
+        // Grid that fills the viewport rectangle.
+        let cols = max(1, Int(ceil(sqrt(Double(topCount) * Double(size.width) / Double(size.height)))))
+        let rows = max(1, Int(ceil(Double(topCount) / Double(cols))))
+        let cellW = size.width / CGFloat(cols)
+        let cellH = size.height / CGFloat(rows)
 
-        // Bounding box including profile overflow.
-        var halfW: CGFloat = 0
-        var halfH: CGFloat = 0
-        for i in 0..<topLevel.count {
+        var posX = [CGFloat](repeating: 0, count: topCount)
+        var posY = [CGFloat](repeating: 0, count: topCount)
+        for i in 0..<topCount {
+            let col = i % cols
+            let row = i / cols
             let r = topRadii[i]
-            let lw = max(4, r * 0.12)
-            let effR = r + lw * 1.5
-            halfW = max(halfW, abs(topPx[i]) + effR)
-            halfH = max(halfH, abs(topPy[i]) + effR)
+            let effR = r + max(4, r * 0.12) * 1.5
+            posX[i] = max(effR, min(size.width - effR, (CGFloat(col) + 0.5) * cellW))
+            posY[i] = max(effR, min(size.height - effR, (CGFloat(row) + 0.5) * cellH))
         }
-        if halfW < 1 { halfW = 1 }
-        if halfH < 1 { halfH = 1 }
 
-        // Uniform scale: fit bounding box into full viewport rectangle.
-        let S = min(size.width / 2 * 0.96 / halfW, size.height / 2 * 0.96 / halfH)
+        // Force-settle: resolve overlaps while staying within viewport.
+        let pad: CGFloat = 2
+        for _ in 0..<200 {
+            var maxDisp: CGFloat = 0
+            for i in 0..<topCount {
+                var fx: CGFloat = 0, fy: CGFloat = 0
+                let ri = topRadii[i]
+                let effI = ri + max(4, ri * 0.12) * 1.5
 
-        // 5. Position all rings in viewport coordinates.
-        let viewCenter = CGPoint(x: size.width / 2, y: size.height / 2)
+                for j in 0..<topCount where j != i {
+                    let rj = topRadii[j]
+                    let effJ = rj + max(4, rj * 0.12) * 1.5
+                    let dx = posX[i] - posX[j]
+                    let dy = posY[i] - posY[j]
+                    let dist = hypot(dx, dy)
+                    let minDist = effI + effJ + pad
+                    if dist < minDist && dist > 0.01 {
+                        let push = (minDist - dist) * 0.3
+                        fx += (dx / dist) * push
+                        fy += (dy / dist) * push
+                    }
+                }
+
+                // Boundary forces.
+                if posX[i] - effI < 0 { fx += (effI - posX[i]) * 0.5 }
+                if posX[i] + effI > size.width { fx -= (posX[i] + effI - size.width) * 0.5 }
+                if posY[i] - effI < 0 { fy += (effI - posY[i]) * 0.5 }
+                if posY[i] + effI > size.height { fy -= (posY[i] + effI - size.height) * 0.5 }
+
+                posX[i] += fx
+                posY[i] += fy
+                posX[i] = max(effI, min(size.width - effI, posX[i]))
+                posY[i] = max(effI, min(size.height - effI, posY[i]))
+                maxDisp = max(maxDisp, hypot(fx, fy))
+            }
+            if maxDisp < 0.5 { break }
+        }
+
+        // 5. Assign top-level positions.
         for (i, idx) in topLevel.enumerated() {
-            positions[idx] = CGPoint(
-                x: viewCenter.x + topPx[i] * S,
-                y: viewCenter.y + topPy[i] * S
-            )
+            positions[idx] = CGPoint(x: posX[i], y: posY[i])
         }
 
         // Recursively position children inside their parents.
@@ -337,8 +374,8 @@ struct ConcentricRingView: View {
 
             for (j, childIdx) in children.enumerated() {
                 positions[childIdx] = CGPoint(
-                    x: positions[parent].x + cpx[j] * S,
-                    y: positions[parent].y + cpy[j] * S
+                    x: positions[parent].x + cpx[j],
+                    y: positions[parent].y + cpy[j]
                 )
                 positionChildren(of: childIdx)
             }
@@ -351,7 +388,7 @@ struct ConcentricRingView: View {
         // 6. Build RingState array and animate.
         var newRings: [RingState] = []
         for i in 0..<n {
-            let r = radii[i] * S
+            let r = radii[i]
             newRings.append(RingState(
                 id: sorted[i].0.symbol,
                 combined: sorted[i].0,
