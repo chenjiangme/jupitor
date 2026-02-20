@@ -19,6 +19,7 @@ struct BubbleChartView: View {
     @State private var historySymbol: String = ""
     @State private var isSettled = false
     @State private var simFrame = 0
+    @State private var syncFrame = 0   // frame at which last syncBubbles happened
     @State private var showWatchlistOnly = false
     @AppStorage("hidePennyStocks") private var hidePennyStocks = false
     @AppStorage("gainOverLossOnly") private var gainOverLossOnly = false
@@ -490,8 +491,10 @@ struct BubbleChartView: View {
         simFrame += 1
         let pad: CGFloat = 2
         var maxVel: CGFloat = 0
-        // Ramp up damping over time so bubbles converge quickly.
-        let damping: CGFloat = simFrame < 60 ? 0.8 : 0.6
+        // Ramp up damping based on frames since last sync so bubbles get fresh
+        // energy to resolve overlaps after each data update.
+        let framesSinceSync = simFrame - syncFrame
+        let damping: CGFloat = framesSinceSync < 60 ? 0.8 : 0.6
 
         for i in bubbles.indices {
             var fx: CGFloat = 0
@@ -560,8 +563,8 @@ struct BubbleChartView: View {
             bubbles[i].position.y = max(edgeR, min(viewSize.height - edgeR, bubbles[i].position.y))
         }
 
-        // Stop simulation once settled or after max frames.
-        if maxVel < 0.15 || simFrame > 500 {
+        // Stop simulation once settled or after max frames since last sync.
+        if maxVel < 0.15 || framesSinceSync > 500 {
             isSettled = true
         }
     }
@@ -634,8 +637,16 @@ struct BubbleChartView: View {
                 ))
             }
         }
+        // Only reset simFrame when symbols change (add/remove). On data-only
+        // updates (same symbols, new radii/stats), let the simulation continue
+        // so it keeps convergence progress instead of restarting every tick.
+        let oldIDs = Set(bubbles.map(\.id))
+        let newIDs = Set(newBubbles.map(\.id))
         bubbles = newBubbles
-        simFrame = 0
+        if oldIDs != newIDs {
+            simFrame = 0
+        }
+        syncFrame = simFrame
         isSettled = false
     }
 
