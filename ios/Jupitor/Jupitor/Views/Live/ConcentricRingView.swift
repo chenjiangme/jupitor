@@ -186,10 +186,8 @@ struct ConcentricRingView: View {
                 GeometryReader { geo in
                     ZStack {
                         Color.clear.contentShape(Rectangle())
-                            .zIndex(-100000)
                         ForEach(rings) { ring in
                             ringNodeView(ring, viewSize: geo.size)
-                                .zIndex(Double(ring.depth) * 1000 - Double(ring.radius))
                         }
                     }
                     .frame(width: geo.size.width, height: geo.size.height)
@@ -819,7 +817,7 @@ struct ConcentricRingView: View {
             }
         }
         .frame(width: diameter + ring.lineWidth * 3, height: diameter + ring.lineWidth * 3)
-        .position(ring.center)
+        .contentShape(Circle())
         .onTapGesture(count: 2) {
             guard !vm.isReplaying else { return }
             Task { await vm.toggleWatchlist(symbol: ring.id, date: wlDate) }
@@ -834,5 +832,6 @@ struct ConcentricRingView: View {
             historySymbol = ring.id
             showHistory = true
         }
+        .position(ring.center)
     }
 }

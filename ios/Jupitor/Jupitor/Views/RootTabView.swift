@@ -196,8 +196,8 @@ struct RootTabView: View {
                     }
                 }
                 .offset(x: panOffset, y: verticalOffset)
-                .overlay {
-                    TwoFingerTapOverlay { useConcentricView.toggle() }
+                .background {
+                    TwoFingerSwipeDetector { useConcentricView.toggle() }
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -360,25 +360,44 @@ struct RootTabView: View {
     }
 }
 
-private struct TwoFingerTapOverlay: UIViewRepresentable {
+// MARK: - Two-Finger Swipe Detector (window-level, never blocks other gestures)
+
+private struct TwoFingerSwipeDetector: UIViewRepresentable {
     let action: () -> Void
 
     func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .clear
-        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap))
-        tap.numberOfTouchesRequired = 2
-        view.addGestureRecognizer(tap)
-        return view
+        let v = UIView(frame: .zero)
+        v.isUserInteractionEnabled = false
+        return v
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {}
+    func updateUIView(_ uiView: UIView, context: Context) {
+        DispatchQueue.main.async {
+            guard let window = uiView.window else { return }
+            // Only add once
+            if window.gestureRecognizers?.contains(where: { $0 is ViewToggleSwipe }) == true { return }
+
+            let swipe = ViewToggleSwipe(target: context.coordinator, action: #selector(Coordinator.handleSwipe))
+            swipe.numberOfTouchesRequired = 2
+            swipe.direction = .down
+            swipe.cancelsTouchesInView = false
+            swipe.delaysTouchesBegan = false
+            swipe.delaysTouchesEnded = false
+            window.addGestureRecognizer(swipe)
+        }
+    }
+
+    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
+        uiView.window?.gestureRecognizers?.removeAll { $0 is ViewToggleSwipe }
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(action: action) }
 
     class Coordinator: NSObject {
         let action: () -> Void
         init(action: @escaping () -> Void) { self.action = action }
-        @objc func handleTap() { action() }
+        @objc func handleSwipe() { action() }
     }
 }
+
+private class ViewToggleSwipe: UISwipeGestureRecognizer {}
