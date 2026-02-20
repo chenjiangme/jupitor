@@ -765,12 +765,14 @@ private struct VolumeProfileCanvas: View {
                 }
             }
 
-            // Outer profile path (mountain ridge), then inner base path (ring edge).
+            // Mountain ridge path: trace peaks, then back along ring center
+            // (hidden behind the ring stroke so no visible base arc).
             var mountain = Path()
+            let baseR = ringRadius  // center of ring stroke — hidden by ring
             let firstAngle = bucketAngle(0)
             mountain.move(to: CGPoint(
-                x: center.x + cos(firstAngle) * outerEdge,
-                y: center.y + sin(firstAngle) * outerEdge
+                x: center.x + cos(firstAngle) * baseR,
+                y: center.y + sin(firstAngle) * baseR
             ))
 
             for i in 0..<profile.count {
@@ -783,12 +785,12 @@ private struct VolumeProfileCanvas: View {
                 ))
             }
 
-            // Trace back along the ring outer edge to close the shape.
+            // Trace back along ring center to close (hidden by ring stroke).
             for i in stride(from: profile.count - 1, through: 0, by: -1) {
                 let angle = bucketAngle(i)
                 mountain.addLine(to: CGPoint(
-                    x: center.x + cos(angle) * outerEdge,
-                    y: center.y + sin(angle) * outerEdge
+                    x: center.x + cos(angle) * baseR,
+                    y: center.y + sin(angle) * baseR
                 ))
             }
             mountain.closeSubpath()
