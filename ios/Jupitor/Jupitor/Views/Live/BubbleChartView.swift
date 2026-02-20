@@ -17,7 +17,6 @@ struct BubbleChartView: View {
     @State private var detailCombined: CombinedStatsJSON?
     @State private var showHistory = false
     @State private var historySymbol: String = ""
-    @State private var isSettled = false
     @State private var simFrame = 0
     @State private var syncFrame = 0   // frame at which last syncBubbles happened
     @State private var showWatchlistOnly = false
@@ -95,10 +94,11 @@ struct BubbleChartView: View {
                         viewSize = newSize
                     }
                 }
-                .task(id: isSettled) {
-                    guard !isSettled else { return }
+                .task {
+                    // Continuous simulation — never stops, always ready to
+                    // resolve overlaps when data/radii change.
                     while !Task.isCancelled {
-                        if viewSize.width > 0 { simulationStep() }
+                        if viewSize.width > 0 && !bubbles.isEmpty { simulationStep() }
                         try? await Task.sleep(for: .milliseconds(16))
                     }
                 }
@@ -556,9 +556,9 @@ struct BubbleChartView: View {
             bubbles[i].position.y = max(edgeR, min(viewSize.height - edgeR, bubbles[i].position.y))
         }
 
-        // Stop simulation once settled or after max frames since last sync.
-        if maxVel < 0.15 || framesSinceSync > 500 {
-            isSettled = true
+        // After convergence, stop incrementing to avoid overflow.
+        if maxVel < 0.15 && framesSinceSync > 120 {
+            simFrame = syncFrame + 120
         }
     }
 
@@ -577,16 +577,28 @@ struct BubbleChartView: View {
         }
         guard !items.isEmpty else { bubbles = []; return }
 
-        // Area-proportional sizing by turnover: fill ~70% of canvas.
+        // Area-proportional sizing by turnover.
         let totalArea = size.width * size.height * 0.7
         let weights = items.map { sqrt($0.2) }
         let totalWeight = weights.reduce(0, +)
         let minR: CGFloat = 14
         let maxR = min(size.width, size.height) / 2.5
 
-        let radii: [CGFloat] = weights.map { w in
+        var radii: [CGFloat] = weights.map { w in
             let area = totalArea * CGFloat(w / totalWeight)
             return max(minR, min(maxR, sqrt(area / .pi)))
+        }
+
+        // Scale down if total effective area (including profile peaks) exceeds canvas.
+        let canvasArea = size.width * size.height
+        var totalEffArea: CGFloat = 0
+        for r in radii {
+            let effR = r + max(4, r * 0.18) * 1.5
+            totalEffArea += .pi * effR * effR
+        }
+        if totalEffArea > canvasArea * 0.85 {
+            let scale = sqrt(canvasArea * 0.85 / totalEffArea)
+            radii = radii.map { max(minR, $0 * scale) }
         }
 
         let existing = Dictionary(uniqueKeysWithValues: bubbles.map { ($0.id, $0) })
@@ -640,7 +652,6 @@ struct BubbleChartView: View {
             simFrame = 0
         }
         syncFrame = simFrame
-        isSettled = false
     }
 
     // MARK: - Watchlist Change
@@ -654,7 +665,6 @@ struct BubbleChartView: View {
                 bubbles[idx].velocity.y = 3
             }
         }
-        isSettled = false
     }
 
 }
