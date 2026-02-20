@@ -399,7 +399,8 @@ struct BubbleChartView: View {
                 maxLoss: max(pre.maxLoss, reg.maxLoss),
                 gainFirst: pre.gainFirst ?? reg.gainFirst ?? true,
                 closeGain: max(pre.closeGain ?? 0, reg.closeGain ?? 0),
-                maxDrawdown: max(pre.maxDrawdown ?? 0, reg.maxDrawdown ?? 0)
+                maxDrawdown: max(pre.maxDrawdown ?? 0, reg.maxDrawdown ?? 0),
+                tradeProfile: nil
             )
         }
     }
