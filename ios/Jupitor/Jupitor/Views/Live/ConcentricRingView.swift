@@ -169,7 +169,7 @@ struct ConcentricRingView: View {
                 Spacer()
             } else {
                 GeometryReader { geo in
-                    let nodes = buildRingTree(in: geo.size)
+                    let nodes = buildPackedRings(in: geo.size)
                     ZStack {
                         Color.clear.contentShape(Rectangle())
                         ForEach(nodes, id: \.symbol) { node in
@@ -212,7 +212,7 @@ struct ConcentricRingView: View {
         }
     }
 
-    // MARK: - Ring Tree Building
+    // MARK: - Circle Packing Layout
 
     private struct RingNode {
         let symbol: String
@@ -221,11 +221,10 @@ struct ConcentricRingView: View {
         let center: CGPoint
         let radius: CGFloat
         let lineWidth: CGFloat
-        var children: [RingNode]
     }
 
-    /// Build a flat list of ring nodes using hierarchical circle packing.
-    private func buildRingTree(in size: CGSize) -> [RingNode] {
+    /// Build packed ring nodes using D3-style circle packing (packSiblings).
+    private func buildPackedRings(in size: CGSize) -> [RingNode] {
         let items: [(CombinedStatsJSON, String, Double)] = symbolData.compactMap { combined, tier in
             let turnover: Double
             switch sessionMode {
@@ -241,150 +240,199 @@ struct ConcentricRingView: View {
         // Sort by turnover descending.
         let sorted = items.sorted { $0.2 > $1.2 }
 
-        let viewCenter = CGPoint(x: size.width / 2, y: size.height / 2)
-        let maxRadius = min(size.width, size.height) / 2 - 8
+        // Radii proportional to sqrt(turnover) — preserves relative area.
+        let weights = sorted.map { sqrt(CGFloat($0.2)) }
 
-        // Root ring = largest symbol.
-        let rootItem = sorted[0]
-        let rootLineWidth = max(4, maxRadius * 0.12)
-        var rootNode = RingNode(
-            symbol: rootItem.0.symbol,
-            combined: rootItem.0,
-            tier: rootItem.1,
-            center: viewCenter,
-            radius: maxRadius,
-            lineWidth: rootLineWidth,
-            children: []
-        )
+        // Pack circles (positions in arbitrary coordinate space).
+        var px = [CGFloat](repeating: 0, count: sorted.count)
+        var py = [CGFloat](repeating: 0, count: sorted.count)
+        packSiblings(weights, px: &px, py: &py)
 
-        // Pack remaining symbols inside the root.
-        let remaining = Array(sorted.dropFirst())
-        if !remaining.isEmpty {
-            let profileOverflow = rootLineWidth * 1.5
-            let innerSpace = maxRadius - rootLineWidth / 2 - profileOverflow - 2
-            rootNode.children = packChildren(
-                remaining,
-                containerRadius: innerSpace,
-                containerCenter: viewCenter
-            )
+        // Compute bounding box including profile overflow padding.
+        let pad: CGFloat = 1.2 // ~20% extra for ring stroke + volume profile bars
+        var minX = CGFloat.infinity, maxX = -CGFloat.infinity
+        var minY = CGFloat.infinity, maxY = -CGFloat.infinity
+        for i in 0..<sorted.count {
+            let r = weights[i] * pad
+            minX = min(minX, px[i] - r)
+            maxX = max(maxX, px[i] + r)
+            minY = min(minY, py[i] - r)
+            maxY = max(maxY, py[i] + r)
         }
 
-        // Flatten tree to a list (parent first, children after for z-ordering).
-        return flattenNodes(rootNode)
-    }
+        let packW = maxX - minX
+        let packH = maxY - minY
+        guard packW > 0 && packH > 0 else { return [] }
 
-    /// Recursively pack symbols into a circular container.
-    private func packChildren(
-        _ items: [(CombinedStatsJSON, String, Double)],
-        containerRadius: CGFloat,
-        containerCenter: CGPoint
-    ) -> [RingNode] {
-        guard !items.isEmpty, containerRadius >= minRingRadius else { return [] }
+        let margin: CGFloat = 4
+        let scaleX = (size.width - 2 * margin) / packW
+        let scaleY = (size.height - 2 * margin) / packH
+        let scale = min(scaleX, scaleY)
 
-        // Compute child radii proportional to sqrt(turnover).
-        let weights = items.map { sqrt(CGFloat($0.2)) }
-        let totalWeight = weights.reduce(0, +)
-        let containerArea = CGFloat.pi * containerRadius * containerRadius
-        let targetArea = containerArea * 0.65
-
-        var radii: [CGFloat] = weights.map { w in
-            let area = targetArea * CGFloat(w / totalWeight)
-            let r = sqrt(area / .pi)
-            return min(max(r, minRingRadius), containerRadius * 0.8)
-        }
-
-        // Drop children too small.
-        var validItems: [(CombinedStatsJSON, String, Double, CGFloat)] = []
-        for (i, item) in items.enumerated() {
-            if radii[i] >= minRingRadius {
-                validItems.append((item.0, item.1, item.2, radii[i]))
-            }
-        }
-        guard !validItems.isEmpty else { return [] }
-
-        // Scale down if total area exceeds container.
-        let totalChildArea = validItems.reduce(CGFloat(0)) { $0 + .pi * $1.3 * $1.3 }
-        if totalChildArea > containerArea * 0.85 {
-            let scale = sqrt(containerArea * 0.85 / totalChildArea)
-            validItems = validItems.map { ($0.0, $0.1, $0.2, max(minRingRadius, $0.3 * scale)) }
-        }
-
-        // Place children geometrically.
-        let positions = arrangeCircles(validItems.map { $0.3 }, in: containerRadius, center: containerCenter)
+        let packCX = (minX + maxX) / 2
+        let packCY = (minY + maxY) / 2
+        let viewCX = size.width / 2
+        let viewCY = size.height / 2
 
         var nodes: [RingNode] = []
-
-        for (i, item) in validItems.enumerated() {
-            guard i < positions.count else { break }
-            let r = item.3
+        for (i, item) in sorted.enumerated() {
+            let r = weights[i] * scale
+            if r < minRingRadius { continue }
+            let center = CGPoint(
+                x: (px[i] - packCX) * scale + viewCX,
+                y: (py[i] - packCY) * scale + viewCY
+            )
             let lw = max(4, r * 0.12)
-            let node = RingNode(
+            nodes.append(RingNode(
                 symbol: item.0.symbol,
                 combined: item.0,
                 tier: item.1,
-                center: positions[i],
+                center: center,
                 radius: r,
-                lineWidth: lw,
-                children: []
-            )
-            nodes.append(node)
+                lineWidth: lw
+            ))
         }
 
         return nodes
     }
 
-    /// Arrange circles inside a container circle. Returns centers.
-    private func arrangeCircles(_ radii: [CGFloat], in containerR: CGFloat, center: CGPoint) -> [CGPoint] {
-        guard !radii.isEmpty else { return [] }
-        if radii.count == 1 {
-            return [center]
-        }
-        if radii.count == 2 {
-            // Side by side horizontally.
-            let totalWidth = radii[0] + radii[1] + 4
-            let scale = totalWidth > containerR * 2 ? containerR * 2 / totalWidth : 1.0
-            let r0 = radii[0] * scale
-            let r1 = radii[1] * scale
-            let gap: CGFloat = 2
-            return [
-                CGPoint(x: center.x - (r1 + gap / 2), y: center.y),
-                CGPoint(x: center.x + (r0 + gap / 2), y: center.y)
-            ]
-        }
+    // MARK: - D3 packSiblings Algorithm
 
-        // 3+: largest at center, rest in a ring around it.
-        var positions = [CGPoint](repeating: center, count: radii.count)
-        positions[0] = center // largest at center
+    /// Port of D3's packSiblings: places circles with given radii into
+    /// a tight non-overlapping arrangement. Outputs positions into px/py.
+    private func packSiblings(_ radii: [CGFloat], px: inout [CGFloat], py: inout [CGFloat]) {
+        let n = radii.count
+        guard n > 0 else { return }
+        if n == 1 { return } // single circle at origin
 
-        let orbitRadius = max(radii[0] + radii[1] + 2, containerR * 0.45)
-        let remaining = radii.count - 1
-        for i in 1..<radii.count {
-            let angle = 2 * CGFloat.pi * CGFloat(i - 1) / CGFloat(remaining) - CGFloat.pi / 2
-            var cx = center.x + cos(angle) * orbitRadius
-            var cy = center.y + sin(angle) * orbitRadius
+        // Place first two touching.
+        px[0] = -radii[1]
+        px[1] = radii[0]
 
-            // Clamp so child stays within container.
-            let dx = cx - center.x
-            let dy = cy - center.y
-            let dist = hypot(dx, dy)
-            let maxDist = containerR - radii[i] - 2
-            if dist > maxDist && dist > 0 {
-                cx = center.x + dx * maxDist / dist
-                cy = center.y + dy * maxDist / dist
+        guard n > 2 else { return }
+
+        // Place third tangent to first two.
+        d3Place(px: &px, py: &py, r: radii, c: 2, b: 1, a: 0)
+
+        guard n > 3 else { return }
+
+        // Front chain: circular doubly-linked list indexed by circle index.
+        // Chain order: 0 -> 1 -> 2 -> 0 (matching D3's a -> b -> c -> a).
+        var cNext = [Int](repeating: -1, count: n)
+        var cPrev = [Int](repeating: -1, count: n)
+        cNext[0] = 1; cPrev[0] = 2
+        cNext[1] = 2; cPrev[1] = 0
+        cNext[2] = 0; cPrev[2] = 1
+
+        var a0 = 0
+        var b0 = 1
+
+        var i = 3
+        outer: while i < n {
+            // Place circle i tangent to pair (a0, b0).
+            d3Place(px: &px, py: &py, r: radii, c: i, b: a0, a: b0)
+
+            // Scan front chain for intersections.
+            var j = cNext[b0]
+            var k = cPrev[a0]
+            var sj = radii[b0]
+            var sk = radii[a0]
+
+            repeat {
+                if sj <= sk {
+                    if d3Intersects(px: px, py: py, r: radii, a: j, b: i) {
+                        // Remove nodes between a0 and j from chain.
+                        b0 = j
+                        cNext[a0] = b0
+                        cPrev[b0] = a0
+                        continue outer // retry circle i
+                    }
+                    sj += radii[j]
+                    j = cNext[j]
+                } else {
+                    if d3Intersects(px: px, py: py, r: radii, a: k, b: i) {
+                        // Remove nodes between k and b0 from chain.
+                        a0 = k
+                        cNext[a0] = b0
+                        cPrev[b0] = a0
+                        continue outer // retry circle i
+                    }
+                    sk += radii[k]
+                    k = cPrev[k]
+                }
+            } while j != cNext[k]
+
+            // No intersection — insert circle i between a0 and b0.
+            cPrev[i] = a0
+            cNext[i] = b0
+            cNext[a0] = i
+            cPrev[b0] = i
+
+            // b0 advances to the newly inserted node.
+            b0 = i
+
+            // Update a0 to the chain node whose weighted midpoint is closest to origin.
+            var bestScore = d3Score(px: px, py: py, r: radii, node: a0, next: cNext[a0])
+            var scan = cNext[a0]
+            while scan != b0 {
+                let s = d3Score(px: px, py: py, r: radii, node: scan, next: cNext[scan])
+                if s < bestScore {
+                    a0 = scan
+                    bestScore = s
+                }
+                scan = cNext[scan]
             }
-            positions[i] = CGPoint(x: cx, y: cy)
-        }
+            b0 = cNext[a0]
 
-        return positions
+            i += 1
+        }
     }
 
-    /// Flatten a ring node tree into a list (parent before children for z-order).
-    private func flattenNodes(_ node: RingNode) -> [RingNode] {
-        var result = [node]
-        for child in node.children {
-            result.append(contentsOf: flattenNodes(child))
+    /// D3's place(b, a, c): place circle c tangent to b and a.
+    private func d3Place(px: inout [CGFloat], py: inout [CGFloat], r: [CGFloat],
+                         c: Int, b: Int, a: Int) {
+        let dx = px[b] - px[a]
+        let dy = py[b] - py[a]
+        let d2 = dx * dx + dy * dy
+
+        guard d2 > 0 else {
+            px[c] = r[a] + r[c]
+            py[c] = 0
+            return
         }
-        return result
+
+        let a2 = (r[a] + r[c]) * (r[a] + r[c])
+        let b2 = (r[b] + r[c]) * (r[b] + r[c])
+
+        if a2 > b2 {
+            let x = (d2 + b2 - a2) / (2 * d2)
+            let y = sqrt(max(0, b2 / d2 - x * x))
+            px[c] = px[b] - x * dx - y * dy
+            py[c] = py[b] - x * dy + y * dx
+        } else {
+            let x = (d2 + a2 - b2) / (2 * d2)
+            let y = sqrt(max(0, a2 / d2 - x * x))
+            px[c] = px[a] + x * dx - y * dy
+            py[c] = py[a] + x * dy + y * dx
+        }
+    }
+
+    private func d3Intersects(px: [CGFloat], py: [CGFloat], r: [CGFloat],
+                              a: Int, b: Int) -> Bool {
+        let dr = r[a] + r[b] - 1e-6
+        let dx = px[b] - px[a]
+        let dy = py[b] - py[a]
+        return dr > 0 && dr * dr > dx * dx + dy * dy
+    }
+
+    /// Score: squared distance of weighted midpoint between node and its successor.
+    private func d3Score(px: [CGFloat], py: [CGFloat], r: [CGFloat],
+                         node: Int, next: Int) -> CGFloat {
+        let ab = r[node] + r[next]
+        guard ab > 0 else { return 0 }
+        let dx = (px[node] * r[next] + px[next] * r[node]) / ab
+        let dy = (py[node] * r[next] + py[next] * r[node]) / ab
+        return dx * dx + dy * dy
     }
 
     // MARK: - Ring Node View
@@ -522,7 +570,7 @@ struct ConcentricRingView: View {
                 .hidden()
             }
 
-            // Symbol label at 12 o'clock.
+            // Symbol label (centered).
             VStack(spacing: 0) {
                 let counts = newsCounts(for: node.combined)
                 if counts.st > 0 || counts.news > 0 {
@@ -536,30 +584,27 @@ struct ConcentricRingView: View {
                                 .foregroundStyle(Color.blue.opacity(0.5))
                         }
                     }
-                    .font(.system(size: max(5, ringWidth * 0.8)))
+                    .font(.system(size: max(5, node.radius * 0.18)))
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                 }
 
                 let closePriceBelowDollar = (sessionStats(node.combined)?.close ?? 1) < 1
                 Text(node.symbol)
-                    .font(.system(size: max(7, ringWidth * 1.4), weight: .heavy))
+                    .font(.system(size: max(7, node.radius * 0.3), weight: .heavy))
                     .italic(closePriceBelowDollar)
                     .foregroundStyle((isWatchlist ? Color.watchlistColor : Color.tierColor(for: node.combined.tier)).opacity(0.5))
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                 if isWatchlist, let stats = sessionStats(node.combined) {
                     Text("\(Fmt.compactPrice(stats.open)) \(Fmt.compactPrice(stats.low)) \(Fmt.compactPrice(stats.high)) \(Fmt.compactPrice(stats.close))")
-                        .font(.system(size: max(5, ringWidth * 0.7)))
+                        .font(.system(size: max(5, node.radius * 0.16)))
                         .foregroundStyle(Color.watchlistPriceColor.opacity(0.4))
                         .lineLimit(1)
                         .minimumScaleFactor(0.5)
                 }
             }
-            .padding(.horizontal, 4)
-            .padding(.vertical, 2)
-            .background(Color.black.opacity(0.6).clipShape(Capsule()))
-            .offset(y: -node.radius)
+            .padding(2)
         }
         .frame(width: diameter + node.lineWidth * 3, height: diameter + node.lineWidth * 3)
         .position(node.center)
