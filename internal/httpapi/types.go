@@ -21,7 +21,8 @@ type SymbolStatsJSON struct {
 	GainFirst    bool    `json:"gainFirst,omitempty"`
 	CloseGain    float64 `json:"closeGain,omitempty"`
 	MaxDrawdown  float64 `json:"maxDrawdown,omitempty"`
-	TradeProfile []int   `json:"tradeProfile,omitempty"`
+	TradeProfile    []int   `json:"tradeProfile,omitempty"`
+	TradeProfile30m [][]int `json:"tradeProfile30m,omitempty"`
 }
 
 // CombinedStatsJSON pairs pre-market and regular session stats.
@@ -134,7 +135,8 @@ func convertSymbolStats(s *dashboard.SymbolStats) *SymbolStatsJSON {
 		GainFirst:    s.GainFirst,
 		CloseGain:    s.CloseGain,
 		MaxDrawdown:  s.MaxDrawdown,
-		TradeProfile: s.TradeProfile,
+		TradeProfile:    s.TradeProfile,
+		TradeProfile30m: s.TradeProfile30m,
 	}
 }
 

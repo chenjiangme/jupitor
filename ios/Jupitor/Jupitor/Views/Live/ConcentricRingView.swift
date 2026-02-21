@@ -87,7 +87,8 @@ struct ConcentricRingView: View {
                 gainFirst: pre.gainFirst ?? reg.gainFirst ?? true,
                 closeGain: max(pre.closeGain ?? 0, reg.closeGain ?? 0),
                 maxDrawdown: max(pre.maxDrawdown ?? 0, reg.maxDrawdown ?? 0),
-                tradeProfile: nil
+                tradeProfile: nil,
+                tradeProfile30m: nil
             )
         }
     }

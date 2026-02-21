@@ -18,6 +18,7 @@ struct SymbolStatsJSON: Codable, Equatable {
     let closeGain: Double?
     let maxDrawdown: Double?
     let tradeProfile: [Int]?
+    let tradeProfile30m: [[Int]]?
 }
 
 struct CombinedStatsJSON: Codable, Identifiable, Equatable {

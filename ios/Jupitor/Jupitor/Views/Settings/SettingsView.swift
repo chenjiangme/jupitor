@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage("chartViewMode") private var chartViewMode = 0
     @AppStorage("hidePennyStocks") private var hidePennyStocks = false
     @AppStorage("gainOverLossOnly") private var gainOverLossOnly = false
+    @AppStorage("topStocksOnly") private var topStocksOnly = false
     @AppStorage("replaySpeed") private var replaySpeed = 60000
     @Environment(\.dismiss) private var dismiss
 
@@ -23,14 +24,14 @@ struct SettingsView: View {
                     Toggle("Show Day Mode", isOn: $showDayMode)
                     Picker("Chart View", selection: $chartViewMode) {
                         Text("Bubbles").tag(0)
-                        Text("Rings").tag(1)
-                        Text("List").tag(2)
+                        Text("List").tag(1)
                     }
                 }
 
                 Section("Filters") {
                     Toggle("Hide Below $1", isOn: $hidePennyStocks)
                     Toggle("Gain > Loss Only", isOn: $gainOverLossOnly)
+                    Toggle("Top Stocks Only", isOn: $topStocksOnly)
                 }
 
                 Section("Replay") {

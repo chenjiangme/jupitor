@@ -25,7 +25,8 @@ type SymbolStats struct {
 	GainFirst    bool    // true if max gain was reached before max loss
 	CloseGain    float64 // (close - low) / vwap using same VWAP logic as MaxGain
 	MaxDrawdown  float64 // (peakPrice - minAfterPeak) / vwap — drawdown from max gain point
-	TradeProfile []int   // trade count per 1% VWAP bucket from low to high
+	TradeProfile    []int   // trade count per 1% VWAP bucket from low to high
+	TradeProfile30m [][]int // per-30m-period trade count profile (same buckets as TradeProfile)
 }
 
 // CombinedStats pairs pre-market and regular stats for a single symbol.
@@ -52,7 +53,9 @@ type DayData struct {
 
 // AggregateTrades computes per-symbol statistics from a slice of trade records.
 // Records are sorted by timestamp per symbol to compute temporal max gain/loss.
-func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
+// An optional sessionStartMS provides the session start time (Unix ms) for
+// computing per-30-minute trade profiles (TradeProfile30m).
+func AggregateTrades(records []store.TradeRecord, sessionStartMS ...int64) map[string]*SymbolStats {
 	// Group record indices by symbol.
 	groups := make(map[string][]int)
 	for i := range records {
@@ -254,6 +257,43 @@ func AggregateTrades(records []store.TradeRecord) map[string]*SymbolStats {
 				}
 			}
 			s.TradeProfile = profile
+
+			// Compute per-hour trade profiles if session start is provided.
+			// Aligned to clock-hour boundaries for clean hour markers.
+			if len(sessionStartMS) > 0 && sessionStartMS[0] > 0 {
+				const periodHour int64 = 60 * 60 * 1000
+				const maxPeriods = 20
+				// Floor session start to nearest clock hour.
+				hourFloor := (sessionStartMS[0] / periodHour) * periodHour
+				var profileHourly [][]int
+				for j, idx := range indices {
+					if outlier[j] {
+						continue
+					}
+					r := &records[idx]
+					p := int((r.Timestamp - hourFloor) / periodHour)
+					if p < 0 {
+						p = 0
+					}
+					if p >= maxPeriods {
+						p = maxPeriods - 1
+					}
+					// Grow slice as needed.
+					for len(profileHourly) <= p {
+						profileHourly = append(profileHourly, make([]int, nBuckets))
+					}
+					bucket := int((r.Price - s.Low) * scale)
+					if bucket >= nBuckets {
+						bucket = nBuckets - 1
+					}
+					if bucket >= 0 {
+						profileHourly[p][bucket]++
+					}
+				}
+				if len(profileHourly) > 0 {
+					s.TradeProfile30m = profileHourly
+				}
+			}
 		}
 
 		m[sym] = s
@@ -476,8 +516,9 @@ func FilterTradeRecords(trades []store.TradeRecord) []store.TradeRecord {
 // tier, and sorts within each tier.
 func ComputeDayData(label string, trades []store.TradeRecord, tierMap map[string]string, open930ET int64, sortMode int) DayData {
 	pre, reg := SplitBySession(trades, open930ET)
-	preStats := AggregateTrades(pre)
-	regStats := AggregateTrades(reg)
+	preStartET := open930ET - 330*60*1000 // 4:00 AM ET (5.5 hours before 9:30)
+	preStats := AggregateTrades(pre, preStartET)
+	regStats := AggregateTrades(reg, open930ET)
 
 	// Merge into combined stats per symbol.
 	combined := make(map[string]*CombinedStats)
