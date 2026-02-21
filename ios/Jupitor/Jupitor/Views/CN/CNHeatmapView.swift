@@ -43,8 +43,9 @@ struct CNHeatmapView: View {
                     ProgressView()
                         .foregroundStyle(.secondary)
                 } else if let stocks = vm.filteredStocks, !stocks.isEmpty, let stats = vm.heatmapData?.stats {
+                    let currentScale = scale // capture for Canvas redraw
                     Canvas { context, canvasSize in
-                        drawTreemap(context: context, size: canvasSize, stocks: stocks, stats: stats)
+                        drawTreemap(context: context, size: canvasSize, stocks: stocks, stats: stats, zoom: currentScale)
                     } symbols: {
                         // Empty — we draw everything directly.
                     }
@@ -290,28 +291,34 @@ struct CNHeatmapView: View {
 
     // MARK: - Drawing
 
-    private func drawTreemap(context: GraphicsContext, size: CGSize, stocks: [CNHeatmapStock], stats: CNHeatmapStats) {
+    private func drawTreemap(context: GraphicsContext, size: CGSize, stocks: [CNHeatmapStock], stats: CNHeatmapStats, zoom: CGFloat = 1.0) {
         for item in layout {
             let rect = item.rect
             let stock = item.stock
 
-            // Gap between cells.
-            let inset = rect.insetBy(dx: 0.5, dy: 0.5)
+            // Gap between cells — thinner gaps when zoomed so they don't dominate.
+            let gap = max(0.5 / zoom, 0.2)
+            let inset = rect.insetBy(dx: gap, dy: gap)
             guard inset.width > 0, inset.height > 0 else { continue }
 
             // Color by pctChg (CN: red=up, green=down).
             let color = pctChgColor(stock.pctChg)
             context.fill(Path(inset), with: .color(color))
 
-            // Text labels on cells large enough.
-            guard inset.width > 24, inset.height > 16 else { continue }
+            // Effective (visual) size after zoom — use for text visibility thresholds.
+            let effW = inset.width * zoom
+            let effH = inset.height * zoom
+
+            guard effW > 24, effH > 16 else { continue }
 
             let pctText = String(format: "%+.1f%%", stock.pctChg)
-
             let pctColor: Color = stock.pctChg > 0 ? Color(red: 0.1, green: 0.9, blue: 0.3) : (stock.pctChg < 0 ? .red : .white)
 
-            let fontSize: CGFloat = min(inset.width / 5, inset.height / 3.5, 12)
-            guard fontSize >= 5 else { continue }
+            // Compute font size in effective (visual) coords, then scale back to canvas coords.
+            // scaleEffect will magnify canvas → visual, so we draw smaller and let zoom enlarge.
+            let effFontSize: CGFloat = min(effW / 5, effH / 3.5, 12)
+            guard effFontSize >= 5 else { continue }
+            let fontSize = effFontSize / zoom
 
             // Name label (primary).
             let nameLabel = Text(stock.name)
@@ -323,8 +330,8 @@ struct CNHeatmapView: View {
                 anchor: .center
             )
 
-            // PctChg label.
-            if inset.height > 28 {
+            // PctChg label — show when effective height is tall enough.
+            if effH > 28 {
                 let pctLabel = Text(pctText)
                     .font(.system(size: fontSize * 0.85, weight: .semibold))
                     .foregroundColor(pctColor)
@@ -342,7 +349,7 @@ struct CNHeatmapView: View {
             var path = Path()
             path.move(to: CGPoint(x: 0, y: y))
             path.addLine(to: CGPoint(x: size.width, y: y))
-            context.stroke(path, with: .color(.white.opacity(0.3)), lineWidth: 1.5)
+            context.stroke(path, with: .color(.white.opacity(0.3)), lineWidth: 1.5 / zoom)
         }
     }
 
