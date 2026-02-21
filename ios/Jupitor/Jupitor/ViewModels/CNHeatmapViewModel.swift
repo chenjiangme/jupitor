@@ -8,6 +8,14 @@ final class CNHeatmapViewModel {
     var isLoading = false
     var error: String?
     var indexFilter: CNIndexFilter = .all
+    var showDatePicker = false
+    var isZoomed = false
+
+    // Industry filter state.
+    var industries: [String] = []
+    var excludedIndustries: Set<String> = []
+    var selectedIndustries: Set<String> = []
+    var showIndustryFilter = false
 
     enum CNIndexFilter: String, CaseIterable {
         case all = "ALL"
@@ -23,14 +31,42 @@ final class CNHeatmapViewModel {
         }
     }
 
-    /// Stocks filtered by current index filter.
+    /// Stocks filtered by current index and industry filters.
     var filteredStocks: [CNHeatmapStock]? {
-        guard let stocks = heatmapData?.stocks else { return nil }
+        guard var stocks = heatmapData?.stocks else { return nil }
         switch indexFilter {
-        case .all: return stocks
-        case .csi300: return stocks.filter { $0.index == "csi300" }
-        case .csi500: return stocks.filter { $0.index == "csi500" }
+        case .all: break
+        case .csi300: stocks = stocks.filter { $0.index == "csi300" }
+        case .csi500: stocks = stocks.filter { $0.index == "csi500" }
         }
+        if !selectedIndustries.isEmpty {
+            stocks = stocks.filter { selectedIndustries.contains($0.industry) }
+        } else if !excludedIndustries.isEmpty {
+            stocks = stocks.filter { !excludedIndustries.contains($0.industry) }
+        }
+        return stocks
+    }
+
+    /// Whether any industry filter is active.
+    var hasIndustryFilter: Bool {
+        !selectedIndustries.isEmpty || !excludedIndustries.isEmpty
+    }
+
+    /// Industry stock counts from currently index-filtered stocks.
+    var industryCounts: [String: Int] {
+        guard let stocks = heatmapData?.stocks else { return [:] }
+        var filtered: [CNHeatmapStock]
+        switch indexFilter {
+        case .all: filtered = stocks
+        case .csi300: filtered = stocks.filter { $0.index == "csi300" }
+        case .csi500: filtered = stocks.filter { $0.index == "csi500" }
+        }
+        var counts: [String: Int] = [:]
+        for s in filtered {
+            guard !s.industry.isEmpty else { continue }
+            counts[s.industry, default: 0] += 1
+        }
+        return counts
     }
 
     let api: CNAPIService
@@ -63,6 +99,17 @@ final class CNHeatmapViewModel {
         currentDate = date
         Task {
             await loadDate(date)
+            updateIndustries()
+            preloadAdjacent()
+        }
+    }
+
+    func navigateTo(_ date: String) {
+        guard dates.contains(date) else { return }
+        currentDate = date
+        Task {
+            await loadDate(date)
+            updateIndustries()
             preloadAdjacent()
         }
     }
@@ -79,6 +126,7 @@ final class CNHeatmapViewModel {
             if let latest = resp.dates.last {
                 currentDate = latest
                 await loadDate(latest)
+                updateIndustries()
                 preloadAdjacent()
             }
         } catch {
@@ -139,6 +187,34 @@ final class CNHeatmapViewModel {
         }
         for key in sorted.prefix(cache.count - maxCacheSize) {
             cache.removeValue(forKey: key)
+        }
+    }
+
+    // MARK: - Industry Filter
+
+    private func updateIndustries() {
+        guard let stocks = heatmapData?.stocks else {
+            industries = []
+            return
+        }
+        let unique = Set(stocks.compactMap { $0.industry.isEmpty ? nil : $0.industry })
+        industries = unique.sorted()
+    }
+
+    func resetIndustryFilter() {
+        selectedIndustries.removeAll()
+        excludedIndustries.removeAll()
+    }
+
+    /// Three-state cycle: normal → selected → excluded → normal.
+    func toggleIndustry(_ industry: String) {
+        if selectedIndustries.contains(industry) {
+            selectedIndustries.remove(industry)
+            excludedIndustries.insert(industry)
+        } else if excludedIndustries.contains(industry) {
+            excludedIndustries.remove(industry)
+        } else {
+            selectedIndustries.insert(industry)
         }
     }
 }

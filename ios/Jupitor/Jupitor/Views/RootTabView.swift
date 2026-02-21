@@ -302,8 +302,13 @@ struct RootTabView: View {
 
                 ToolbarItem(placement: .principal) {
                     if marketMode == 1 {
-                        Text(cnVM.currentDate.isEmpty ? "Loading..." : cnVM.currentDate)
-                            .font(.headline)
+                        Button {
+                            cnVM.showDatePicker = true
+                        } label: {
+                            Text(cnVM.currentDate.isEmpty ? "Loading..." : cnVM.currentDate)
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                        }
                     } else {
                         VStack(spacing: vm.isReplaying ? 2 : 0) {
                             HStack(spacing: 6) {
@@ -349,6 +354,10 @@ struct RootTabView: View {
                                     .padding(.vertical, 2)
                                     .background(.white.opacity(0.1), in: Capsule())
                             }
+                            Button { cnVM.showIndustryFilter = true } label: {
+                                Image(systemName: "line.3.horizontal.decrease.circle")
+                                    .foregroundStyle(cnVM.hasIndustryFilter ? .orange : .secondary)
+                            }
                         }
                         Button { showingSettings = true } label: {
                             Image(systemName: "gear")
@@ -365,7 +374,8 @@ struct RootTabView: View {
                             dragLocked = abs(t.width) > abs(t.height)
                         }
                         if marketMode == 1 {
-                            // CN mode: horizontal swipe only for date nav.
+                            // CN mode: suppress date swipe when zoomed.
+                            if cnVM.isZoomed { return }
                             if dragLocked == true {
                                 if (t.width < 0 && cnVM.canGoForward) || (t.width > 0 && cnVM.canGoBack) {
                                     panOffset = t.width
@@ -402,7 +412,8 @@ struct RootTabView: View {
                             return
                         }
                         if marketMode == 1 {
-                            // CN mode: commit horizontal date swipe.
+                            // CN mode: suppress date swipe when zoomed.
+                            if cnVM.isZoomed { return }
                             if locked == true {
                                 commitCNSwipe(offset: value.translation.width)
                             }
@@ -423,6 +434,14 @@ struct RootTabView: View {
             )
             .sheet(isPresented: $showingSettings) {
                 SettingsView()
+            }
+            .sheet(isPresented: Bindable(cnVM).showDatePicker) {
+                CNDatePickerSheet()
+                    .environment(cnVM)
+            }
+            .sheet(isPresented: Bindable(cnVM).showIndustryFilter) {
+                CNIndustryFilterView()
+                    .environment(cnVM)
             }
             .onChange(of: vm.date) { oldDate, newDate in
                 let isFirst = currentDate.isEmpty

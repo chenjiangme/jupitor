@@ -18,24 +18,27 @@ import (
 
 // CNServer serves the CN A-share heatmap API.
 type CNServer struct {
-	dataDir string
-	store   *store.ParquetStore
-	log     *slog.Logger
-	cache   sync.Map // date → *CNHeatmapResponse
-	dates   []string // cached date list
-	datesMu sync.RWMutex
+	dataDir      string
+	referenceDir string
+	store        *store.ParquetStore
+	log          *slog.Logger
+	cache        sync.Map // date → *CNHeatmapResponse
+	dates        []string // cached date list
+	datesMu      sync.RWMutex
+	industryMap  map[string]string // symbol → industry
 }
 
 // NewCNServer creates a new CN server.
-func NewCNServer(dataDir string, store *store.ParquetStore, log *slog.Logger) *CNServer {
+func NewCNServer(dataDir, referenceDir string, store *store.ParquetStore, log *slog.Logger) *CNServer {
 	return &CNServer{
-		dataDir: dataDir,
-		store:   store,
-		log:     log,
+		dataDir:      dataDir,
+		referenceDir: referenceDir,
+		store:        store,
+		log:          log,
 	}
 }
 
-// Init loads the date list. Call before serving.
+// Init loads the date list and industry map. Call before serving.
 func (s *CNServer) Init() error {
 	dates, err := ListCNDates(s.dataDir)
 	if err != nil {
@@ -45,6 +48,14 @@ func (s *CNServer) Init() error {
 	s.dates = dates
 	s.datesMu.Unlock()
 	s.log.Info("CN dates loaded", "count", len(dates))
+
+	indMap, err := LoadIndustryMap(s.referenceDir)
+	if err != nil {
+		s.log.Warn("loading industry map", "error", err)
+		indMap = make(map[string]string)
+	}
+	s.industryMap = indMap
+	s.log.Info("CN industry map loaded", "count", len(indMap))
 	return nil
 }
 
@@ -218,15 +229,16 @@ func (s *CNServer) buildHeatmap(ctx context.Context, date string) (*CNHeatmapRes
 			bar := bars[0]
 			results[i] = result{
 				stock: CNHeatmapStock{
-					Symbol: bar.Symbol,
-					Name:   entry.Name,
-					Index:  entry.Index,
-					Turn:   bar.Turn,
-					PctChg: bar.PctChg,
-					Close:  bar.Close,
-					Amount: bar.Amount,
-					PeTTM:  bar.PeTTM,
-					IsST:   bar.IsST == "1",
+					Symbol:   bar.Symbol,
+					Name:     entry.Name,
+					Index:    entry.Index,
+					Industry: s.industryMap[sym],
+					Turn:     bar.Turn,
+					PctChg:   bar.PctChg,
+					Close:    bar.Close,
+					Amount:   bar.Amount,
+					PeTTM:    bar.PeTTM,
+					IsST:     bar.IsST == "1",
 				},
 				ok: true,
 			}

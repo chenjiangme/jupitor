@@ -37,6 +37,8 @@
 		A10040 /* CNHeatmapViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10040 /* CNHeatmapViewModel.swift */; };
 		A10041 /* CNHeatmapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10041 /* CNHeatmapView.swift */; };
 		A10042 /* CNSymbolHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10042 /* CNSymbolHistoryView.swift */; };
+		A10043 /* CNDatePickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10043 /* CNDatePickerSheet.swift */; };
+		A10044 /* CNIndustryFilterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10044 /* CNIndustryFilterView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -71,6 +73,8 @@
 		B10040 /* CNHeatmapViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CNHeatmapViewModel.swift; sourceTree = "<group>"; };
 		B10041 /* CNHeatmapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CNHeatmapView.swift; sourceTree = "<group>"; };
 		B10042 /* CNSymbolHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CNSymbolHistoryView.swift; sourceTree = "<group>"; };
+		B10043 /* CNDatePickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CNDatePickerSheet.swift; sourceTree = "<group>"; };
+		B10044 /* CNIndustryFilterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CNIndustryFilterView.swift; sourceTree = "<group>"; };
 		C10001 /* Jupitor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jupitor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -157,6 +161,8 @@
 			children = (
 				B10041 /* CNHeatmapView.swift */,
 				B10042 /* CNSymbolHistoryView.swift */,
+				B10043 /* CNDatePickerSheet.swift */,
+				B10044 /* CNIndustryFilterView.swift */,
 			);
 			path = CN;
 			sourceTree = "<group>";
@@ -333,6 +339,8 @@
 				A10040 /* CNHeatmapViewModel.swift in Sources */,
 				A10041 /* CNHeatmapView.swift in Sources */,
 				A10042 /* CNSymbolHistoryView.swift in Sources */,
+				A10043 /* CNDatePickerSheet.swift in Sources */,
+				A10044 /* CNIndustryFilterView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -42,7 +42,11 @@ func main() {
 
 	// Create store and server.
 	ps := store.NewParquetStore(cfg.Storage.DataDir)
-	srv := cnapi.NewCNServer(cfg.Storage.DataDir, ps, logger)
+	referenceDir := "reference"
+	if d := os.Getenv("JUPITOR_REFERENCE_DIR"); d != "" {
+		referenceDir = d
+	}
+	srv := cnapi.NewCNServer(cfg.Storage.DataDir, referenceDir, ps, logger)
 
 	if err := srv.Init(); err != nil {
 		log.Fatalf("initializing CN server: %v", err)

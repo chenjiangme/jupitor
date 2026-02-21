@@ -7,6 +7,32 @@ struct CNHeatmapView: View {
     @State private var layout: [(rect: CGRect, stock: CNHeatmapStock)] = []
     @State private var lastSize: CGSize = .zero
 
+    // Zoom / pan state.
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+
+    private func resetZoom() {
+        withAnimation(.easeOut(duration: 0.2)) {
+            scale = 1.0
+            lastScale = 1.0
+            offset = .zero
+            lastOffset = .zero
+        }
+        vm.isZoomed = false
+    }
+
+    private func clampOffset(_ off: CGSize, scale: CGFloat, viewSize: CGSize) -> CGSize {
+        guard scale > 1 else { return .zero }
+        let maxX = (viewSize.width * scale - viewSize.width) / 2
+        let maxY = (viewSize.height * scale - viewSize.height) / 2
+        return CGSize(
+            width: min(max(off.width, -maxX), maxX),
+            height: min(max(off.height, -maxY), maxY)
+        )
+    }
+
     var body: some View {
         GeometryReader { geo in
             let size = geo.size
@@ -22,12 +48,63 @@ struct CNHeatmapView: View {
                     } symbols: {
                         // Empty — we draw everything directly.
                     }
+                    .scaleEffect(scale)
+                    .offset(offset)
                     .contentShape(Rectangle())
                     .onTapGesture { location in
-                        if let hit = layout.first(where: { $0.rect.contains(location) }) {
+                        // Inverse transform for hit testing.
+                        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+                        let adjusted = CGPoint(
+                            x: (location.x - center.x - offset.width) / scale + center.x,
+                            y: (location.y - center.y - offset.height) / scale + center.y
+                        )
+                        if let hit = layout.first(where: { $0.rect.contains(adjusted) }) {
                             selectedStock = hit.stock
                         }
                     }
+                    .gesture(
+                        TapGesture(count: 2).onEnded { resetZoom() }
+                    )
+                    .gesture(
+                        MagnifyGesture()
+                            .onChanged { value in
+                                let newScale = min(max(lastScale * value.magnification, 1.0), 5.0)
+                                scale = newScale
+                                offset = clampOffset(lastOffset, scale: newScale, viewSize: size)
+                                vm.isZoomed = newScale > 1.05
+                            }
+                            .onEnded { value in
+                                let newScale = min(max(lastScale * value.magnification, 1.0), 5.0)
+                                if newScale < 1.05 {
+                                    resetZoom()
+                                } else {
+                                    scale = newScale
+                                    lastScale = newScale
+                                    offset = clampOffset(offset, scale: newScale, viewSize: size)
+                                    lastOffset = offset
+                                }
+                            }
+                    )
+                    .simultaneousGesture(
+                        scale > 1.05
+                        ? DragGesture()
+                            .onChanged { value in
+                                let newOffset = CGSize(
+                                    width: lastOffset.width + value.translation.width,
+                                    height: lastOffset.height + value.translation.height
+                                )
+                                offset = clampOffset(newOffset, scale: scale, viewSize: size)
+                            }
+                            .onEnded { value in
+                                let newOffset = CGSize(
+                                    width: lastOffset.width + value.translation.width,
+                                    height: lastOffset.height + value.translation.height
+                                )
+                                offset = clampOffset(newOffset, scale: scale, viewSize: size)
+                                lastOffset = offset
+                            }
+                        : nil
+                    )
                 } else {
                     Text("No data")
                         .foregroundStyle(.secondary)
@@ -37,10 +114,12 @@ struct CNHeatmapView: View {
                 lastSize = newSize
                 recomputeLayout(size: newSize)
             }
-            .task(id: "\(vm.currentDate)-\(vm.heatmapData?.date ?? "")-\(vm.indexFilter.rawValue)") {
+            .task(id: "\(vm.currentDate)-\(vm.heatmapData?.date ?? "")-\(vm.indexFilter.rawValue)-\(vm.selectedIndustries.count)-\(vm.excludedIndustries.count)") {
                 if lastSize.width > 0 {
                     recomputeLayout(size: lastSize)
                 }
+                // Reset zoom when data changes.
+                if scale != 1.0 { resetZoom() }
             }
             .onAppear {
                 lastSize = size

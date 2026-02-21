@@ -62,6 +62,36 @@ func readIndexFile(path, index string) (map[string]IndexEntry, error) {
 	return entries, scanner.Err()
 }
 
+// LoadIndustryMap reads the eastmoney_industry.csv reference file and returns
+// a map of symbol → industry name.
+func LoadIndustryMap(referenceDir string) (map[string]string, error) {
+	path := filepath.Join(referenceDir, "cn", "eastmoney_industry.csv")
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	result := make(map[string]string, 6000)
+	scanner := bufio.NewScanner(f)
+	// Skip header line.
+	if scanner.Scan() {
+		// discard header
+	}
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, ",", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		result[parts[0]] = parts[2]
+	}
+	return result, scanner.Err()
+}
+
 // ListCNDates returns sorted dates where both csi300 and csi500 index files exist.
 func ListCNDates(dataDir string) ([]string, error) {
 	csi300Dates, err := listDatesInDir(filepath.Join(dataDir, "cn", "index", "csi300"))
