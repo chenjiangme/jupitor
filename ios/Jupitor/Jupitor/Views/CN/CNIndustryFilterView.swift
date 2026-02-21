@@ -12,7 +12,7 @@ struct CNIndustryFilterView: View {
         NavigationStack {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 8) {
-                    ForEach(vm.industries, id: \.self) { industry in
+                    ForEach(sortedIndustries, id: \.self) { industry in
                         let count = vm.industryCounts[industry] ?? 0
                         let state = filterState(for: industry)
                         Button {
@@ -39,6 +39,7 @@ struct CNIndustryFilterView: View {
                 .padding()
             }
             .background(Color(uiColor: .systemGroupedBackground))
+            .onAppear { sortedIndustries = computeSortedIndustries() }
             .navigationTitle("Industry Filter")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -52,6 +53,24 @@ struct CNIndustryFilterView: View {
                     Button("Done") { dismiss() }
                 }
             }
+        }
+    }
+
+    @State private var sortedIndustries: [String] = []
+
+    private func computeSortedIndustries() -> [String] {
+        vm.industries.sorted { a, b in
+            let sa = sortOrder(filterState(for: a))
+            let sb = sortOrder(filterState(for: b))
+            return sa < sb
+        }
+    }
+
+    private func sortOrder(_ state: FilterState) -> Int {
+        switch state {
+        case .selected: return 0
+        case .normal: return 1
+        case .excluded: return 2
         }
     }
 

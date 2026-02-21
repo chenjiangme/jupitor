@@ -14,6 +14,7 @@ struct RootTabView: View {
     @State private var dragLocked: Bool? // nil=undetermined, true=horizontal, false=vertical
     @State private var verticalOffset: CGFloat = 0
     @State private var isVerticalTransitioning = false
+    @State private var cnFullscreen = false
 
     // All navigable dates: history + live (ascending).
     private var allDates: [String] {
@@ -207,8 +208,22 @@ struct RootTabView: View {
 
                 if marketMode == 1 {
                     // CN heatmap mode.
-                    CNHeatmapView()
-                        .offset(x: panOffset)
+                    ZStack {
+                        CNHeatmapView()
+
+                        if cnFullscreen && !cnVM.showingHistory {
+                            Text(cnVM.currentDate)
+                                .font(.system(size: 40, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.25))
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .offset(x: panOffset)
+                    .onShake {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            cnFullscreen.toggle()
+                        }
+                    }
                 } else {
                     Group {
                         if currentDate.isEmpty {
@@ -247,7 +262,9 @@ struct RootTabView: View {
                     .offset(x: panOffset, y: verticalOffset)
                 }
             }
+            .statusBarHidden(cnFullscreen || cnVM.showingHistory)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar((cnFullscreen || cnVM.showingHistory) ? .hidden : .visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     HStack(spacing: 6) {
@@ -374,8 +391,8 @@ struct RootTabView: View {
                             dragLocked = abs(t.width) > abs(t.height)
                         }
                         if marketMode == 1 {
-                            // CN mode: suppress date swipe when zoomed.
-                            if cnVM.isZoomed { return }
+                            // CN mode: suppress date swipe when zoomed or viewing history.
+                            if cnVM.isZoomed || cnVM.showingHistory { return }
                             if dragLocked == true {
                                 if (t.width < 0 && cnVM.canGoForward) || (t.width > 0 && cnVM.canGoBack) {
                                     panOffset = t.width
@@ -412,8 +429,8 @@ struct RootTabView: View {
                             return
                         }
                         if marketMode == 1 {
-                            // CN mode: suppress date swipe when zoomed.
-                            if cnVM.isZoomed { return }
+                            // CN mode: suppress date swipe when zoomed or viewing history.
+                            if cnVM.isZoomed || cnVM.showingHistory { return }
                             if locked == true {
                                 commitCNSwipe(offset: value.translation.width)
                             }

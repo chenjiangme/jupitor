@@ -16,6 +16,7 @@ final class CNHeatmapViewModel {
     var excludedIndustries: Set<String> = []
     var selectedIndustries: Set<String> = []
     var showIndustryFilter = false
+    var showingHistory = false
 
     enum CNIndexFilter: String, CaseIterable {
         case all = "ALL"
@@ -137,6 +138,15 @@ final class CNHeatmapViewModel {
             if let latest = resp.dates.last {
                 currentDate = latest
                 await loadDate(latest)
+                // If latest date has no data, step back to find one that does.
+                if heatmapData?.stocks?.isEmpty != false {
+                    for i in stride(from: resp.dates.count - 2, through: 0, by: -1) {
+                        let date = resp.dates[i]
+                        currentDate = date
+                        await loadDate(date)
+                        if let stocks = heatmapData?.stocks, !stocks.isEmpty { break }
+                    }
+                }
                 updateIndustries()
                 preloadAdjacent()
             }

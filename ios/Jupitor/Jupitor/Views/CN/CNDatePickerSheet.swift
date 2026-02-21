@@ -32,12 +32,18 @@ struct CNDatePickerSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                switch mode {
-                case .calendar:
-                    calendarView
-                case .monthYear:
-                    monthYearPicker
+            Group {
+                if displayMonth == 0 {
+                    Color.clear
+                } else {
+                    VStack(spacing: 0) {
+                        switch mode {
+                        case .calendar:
+                            calendarView
+                        case .monthYear:
+                            monthYearPicker
+                        }
+                    }
                 }
             }
             .navigationTitle("Select Date")

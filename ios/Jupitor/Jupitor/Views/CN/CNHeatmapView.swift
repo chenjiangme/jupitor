@@ -45,6 +45,90 @@ struct CNHeatmapView: View {
             .concatenating(CGAffineTransform(translationX: offset.width, y: offset.height))
     }
 
+    @ViewBuilder
+    private func treemapCanvas(stocks: [CNHeatmapStock], stats: CNHeatmapStats, size: CGSize) -> some View {
+        let currentScale = scale
+        let currentOffset = offset
+        Canvas { context, canvasSize in
+            drawTreemap(context: context, size: canvasSize, stocks: stocks, stats: stats, zoom: currentScale, offset: currentOffset)
+        } symbols: {
+            // Empty — we draw everything directly.
+        }
+        .clipped()
+        .contentShape(Rectangle())
+        .onTapGesture { location in
+            let transform = zoomTransform()
+            let inverted = transform.inverted()
+            let contentPt = location.applying(inverted)
+            if let hit = layout.first(where: { $0.rect.contains(contentPt) }) {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    selectedStock = hit.stock
+                }
+            }
+        }
+        .gesture(
+            TapGesture(count: 2).onEnded { resetZoom() }
+        )
+        .gesture(
+            MagnifyGesture()
+                .onChanged { value in
+                    let anchor = CGPoint(
+                        x: value.startAnchor.x * size.width,
+                        y: value.startAnchor.y * size.height
+                    )
+                    let newScale = min(max(lastScale * value.magnification, 1.0), 5.0)
+                    let ratio = newScale / lastScale
+                    let newOffset = CGSize(
+                        width: anchor.x - (anchor.x - lastOffset.width) * ratio,
+                        height: anchor.y - (anchor.y - lastOffset.height) * ratio
+                    )
+                    scale = newScale
+                    offset = clampOffset(newOffset, scale: newScale, viewSize: size)
+                    vm.isZoomed = newScale > 1.05
+                }
+                .onEnded { value in
+                    let anchor = CGPoint(
+                        x: value.startAnchor.x * size.width,
+                        y: value.startAnchor.y * size.height
+                    )
+                    let newScale = min(max(lastScale * value.magnification, 1.0), 5.0)
+                    if newScale < 1.05 {
+                        resetZoom()
+                    } else {
+                        let ratio = newScale / lastScale
+                        let newOffset = CGSize(
+                            width: anchor.x - (anchor.x - lastOffset.width) * ratio,
+                            height: anchor.y - (anchor.y - lastOffset.height) * ratio
+                        )
+                        scale = newScale
+                        lastScale = newScale
+                        offset = clampOffset(newOffset, scale: newScale, viewSize: size)
+                        lastOffset = offset
+                    }
+                }
+        )
+        .simultaneousGesture(
+            scale > 1.05
+            ? DragGesture()
+                .onChanged { value in
+                    let newOffset = CGSize(
+                        width: lastOffset.width + value.translation.width,
+                        height: lastOffset.height + value.translation.height
+                    )
+                    offset = clampOffset(newOffset, scale: scale, viewSize: size)
+                }
+                .onEnded { value in
+                    let newOffset = CGSize(
+                        width: lastOffset.width + value.translation.width,
+                        height: lastOffset.height + value.translation.height
+                    )
+                    offset = clampOffset(newOffset, scale: scale, viewSize: size)
+                    lastOffset = offset
+                }
+            : nil
+        )
+    }
+
     var body: some View {
         GeometryReader { geo in
             let size = geo.size
@@ -55,85 +139,7 @@ struct CNHeatmapView: View {
                     ProgressView()
                         .foregroundStyle(.secondary)
                 } else if let stocks = vm.filteredStocks, !stocks.isEmpty, let stats = vm.heatmapData?.stats {
-                    let currentScale = scale // capture for Canvas redraw
-                    let currentOffset = offset
-                    Canvas { context, canvasSize in
-                        drawTreemap(context: context, size: canvasSize, stocks: stocks, stats: stats, zoom: currentScale, offset: currentOffset)
-                    } symbols: {
-                        // Empty — we draw everything directly.
-                    }
-                    .clipped()
-                    .contentShape(Rectangle())
-                    .onTapGesture { location in
-                        // Inverse transform: content = (screen - offset) / scale
-                        let transform = zoomTransform()
-                        let inverted = transform.inverted()
-                        let contentPt = location.applying(inverted)
-                        if let hit = layout.first(where: { $0.rect.contains(contentPt) }) {
-                            selectedStock = hit.stock
-                        }
-                    }
-                    .gesture(
-                        TapGesture(count: 2).onEnded { resetZoom() }
-                    )
-                    .gesture(
-                        MagnifyGesture()
-                            .onChanged { value in
-                                let anchor = CGPoint(
-                                    x: value.startAnchor.x * size.width,
-                                    y: value.startAnchor.y * size.height
-                                )
-                                let newScale = min(max(lastScale * value.magnification, 1.0), 5.0)
-                                let ratio = newScale / lastScale
-                                let newOffset = CGSize(
-                                    width: anchor.x - (anchor.x - lastOffset.width) * ratio,
-                                    height: anchor.y - (anchor.y - lastOffset.height) * ratio
-                                )
-                                scale = newScale
-                                offset = clampOffset(newOffset, scale: newScale, viewSize: size)
-                                vm.isZoomed = newScale > 1.05
-                            }
-                            .onEnded { value in
-                                let anchor = CGPoint(
-                                    x: value.startAnchor.x * size.width,
-                                    y: value.startAnchor.y * size.height
-                                )
-                                let newScale = min(max(lastScale * value.magnification, 1.0), 5.0)
-                                if newScale < 1.05 {
-                                    resetZoom()
-                                } else {
-                                    let ratio = newScale / lastScale
-                                    let newOffset = CGSize(
-                                        width: anchor.x - (anchor.x - lastOffset.width) * ratio,
-                                        height: anchor.y - (anchor.y - lastOffset.height) * ratio
-                                    )
-                                    scale = newScale
-                                    lastScale = newScale
-                                    offset = clampOffset(newOffset, scale: newScale, viewSize: size)
-                                    lastOffset = offset
-                                }
-                            }
-                    )
-                    .simultaneousGesture(
-                        scale > 1.05
-                        ? DragGesture()
-                            .onChanged { value in
-                                let newOffset = CGSize(
-                                    width: lastOffset.width + value.translation.width,
-                                    height: lastOffset.height + value.translation.height
-                                )
-                                offset = clampOffset(newOffset, scale: scale, viewSize: size)
-                            }
-                            .onEnded { value in
-                                let newOffset = CGSize(
-                                    width: lastOffset.width + value.translation.width,
-                                    height: lastOffset.height + value.translation.height
-                                )
-                                offset = clampOffset(newOffset, scale: scale, viewSize: size)
-                                lastOffset = offset
-                            }
-                        : nil
-                    )
+                    treemapCanvas(stocks: stocks, stats: stats, size: size)
                 } else {
                     Text("No data")
                         .foregroundStyle(.secondary)
@@ -154,10 +160,23 @@ struct CNHeatmapView: View {
                 lastSize = size
                 recomputeLayout(size: size)
             }
+            .onChange(of: vm.heatmapData?.date) { _, _ in
+                if lastSize.width > 0 {
+                    recomputeLayout(size: lastSize)
+                }
+            }
         }
-        .sheet(item: $selectedStock) { stock in
-            CNSymbolHistoryView(stock: stock)
-                .environment(vm)
+        .ignoresSafeArea(edges: .bottom)
+        .overlay {
+            if let stock = selectedStock {
+                CNSymbolHistoryView(stock: stock, onDismiss: { selectedStock = nil })
+                    .environment(vm)
+                    .transition(.move(edge: .bottom))
+                    .zIndex(1)
+            }
+        }
+        .onChange(of: selectedStock?.symbol) { _, newVal in
+            vm.showingHistory = newVal != nil
         }
     }
 
@@ -346,10 +365,10 @@ struct CNHeatmapView: View {
             guard effW > 24, effH > 16 else { continue }
 
             let pctText = String(format: "%+.1f%%", stock.pctChg)
-            let pctColor: Color = stock.pctChg > 0 ? Color(red: 0.1, green: 0.9, blue: 0.3) : (stock.pctChg < 0 ? .red : .white)
+            let pctColor = pctChgTextColor(stock.pctChg)
 
             // Font size in content coords. Canvas rasterizes after transform → crisp at all zoom levels.
-            let effFontSize: CGFloat = min(effW / 5, effH / 3.5, 12)
+            let effFontSize: CGFloat = min(effW / 5, effH / 3.5, 28)
             guard effFontSize >= 5 else { continue }
             let fontSize = effFontSize / zoom
 
@@ -387,6 +406,17 @@ struct CNHeatmapView: View {
     }
 
     // MARK: - Color Mapping
+
+    /// Text color for pctChg labels — shifts toward pastel as background brightens.
+    private func pctChgTextColor(_ pctChg: Double) -> Color {
+        let t = min(abs(pctChg) / 10.0, 1.0)
+        if pctChg > 0 {
+            return Color(red: 0.1 + 0.75 * t, green: 0.9 + 0.1 * t, blue: 0.3 + 0.55 * t)
+        } else if pctChg < 0 {
+            return Color(red: 1.0, green: 0.2 + 0.6 * t, blue: 0.2 + 0.6 * t)
+        }
+        return .white
+    }
 
     /// Green = up, red = down (same as US). Intensity scales with magnitude.
     private func pctChgColor(_ pctChg: Double) -> Color {

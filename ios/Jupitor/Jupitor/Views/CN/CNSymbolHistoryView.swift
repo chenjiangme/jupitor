@@ -9,16 +9,20 @@ struct CNSymbolHistoryView: View {
     @State private var errorMessage: String?
     @State private var layout: [(rect: CGRect, day: CNSymbolDay)] = []
     @State private var lastSize: CGSize = .zero
-    @State private var dragOffset: CGFloat = 0
-    @Environment(\.dismiss) private var dismiss
+    @State private var dragOffsetX: CGFloat = 0
+    @State private var dragOffsetY: CGFloat = 0
+    private let stockIndex: String  // "csi300" or "csi500"
+    private let onDismiss: () -> Void
 
-    init(stock: CNHeatmapStock) {
+    init(stock: CNHeatmapStock, onDismiss: @escaping () -> Void) {
         _currentStock = State(initialValue: stock)
+        self.stockIndex = stock.index
+        self.onDismiss = onDismiss
     }
 
-    /// Stocks filtered by current index selection (CSI300/500/ALL).
+    /// Stocks filtered to same index group (CSI 300 or CSI 500) as the initially tapped stock.
     private var stocks: [CNHeatmapStock] {
-        vm.filteredStocks ?? []
+        (vm.filteredStocks ?? []).filter { $0.index == stockIndex }
     }
 
     private var currentIndex: Int {
@@ -26,61 +30,81 @@ struct CNSymbolHistoryView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            GeometryReader { geo in
-                let size = geo.size
-                ZStack {
-                    Color(red: 0.06, green: 0.06, blue: 0.08).ignoresSafeArea()
+        GeometryReader { geo in
+            let size = geo.size
+            ZStack {
+                Color(red: 0.06, green: 0.06, blue: 0.08).ignoresSafeArea()
 
-                    if isLoading {
-                        ProgressView()
-                    } else if let error = errorMessage {
-                        Text(error)
-                            .foregroundStyle(.red)
-                            .font(.caption)
-                    } else if let data = historyData, !data.days.isEmpty {
-                        Canvas { context, canvasSize in
-                            drawTreemap(context: context, size: canvasSize, days: data.days)
-                        }
-                    } else {
-                        Text("No data")
-                            .foregroundStyle(.secondary)
+                if isLoading {
+                    ProgressView()
+                } else if let error = errorMessage {
+                    Text(error)
+                        .foregroundStyle(.red)
+                        .font(.caption)
+                } else if let data = historyData, !data.days.isEmpty {
+                    Canvas { context, canvasSize in
+                        drawTreemap(context: context, size: canvasSize, days: data.days)
                     }
+                } else {
+                    Text("No data")
+                        .foregroundStyle(.secondary)
                 }
-                .offset(x: dragOffset)
-                .gesture(
-                    DragGesture(minimumDistance: 30)
-                        .onChanged { value in
-                            dragOffset = value.translation.width
-                        }
-                        .onEnded { value in
-                            let threshold: CGFloat = 60
-                            if value.translation.width < -threshold {
-                                navigate(by: 1, size: size)
-                            } else if value.translation.width > threshold {
-                                navigate(by: -1, size: size)
-                            }
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                dragOffset = 0
-                            }
-                        }
-                )
-                .onChange(of: size) { _, newSize in
-                    guard newSize != lastSize else { return }
-                    lastSize = newSize
-                    if let data = historyData {
-                        recomputeLayout(size: newSize, days: data.days)
-                    }
-                }
+
+                // Watermark: symbol name centered.
+                Text(currentStock.name)
+                    .font(.system(size: 40, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.25))
+                    .allowsHitTesting(false)
             }
-            .navigationTitle("\(currentStock.name)  \(currentIndex + 1)/\(stocks.count)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+            .offset(x: dragOffsetX, y: max(dragOffsetY, 0))
+            .gesture(
+                DragGesture(minimumDistance: 30)
+                    .onChanged { value in
+                        let h = value.translation.width
+                        let v = value.translation.height
+                        // Decide axis: if mostly vertical-down, track Y; otherwise track X.
+                        if v > 40 && v > abs(h) {
+                            dragOffsetY = v
+                            dragOffsetX = 0
+                        } else {
+                            dragOffsetX = h
+                            dragOffsetY = 0
+                        }
+                    }
+                    .onEnded { value in
+                        let h = value.translation.width
+                        let v = value.translation.height
+
+                        if v > 100 && v > abs(h) {
+                            // Swipe down → dismiss.
+                            withAnimation(.easeInOut(duration: 0.25)) { onDismiss() }
+                            return
+                        }
+
+                        let threshold: CGFloat = 60
+                        if h < -threshold {
+                            navigate(by: 1, size: size)
+                        } else if h > threshold {
+                            navigate(by: -1, size: size)
+                        }
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            dragOffsetX = 0
+                            dragOffsetY = 0
+                        }
+                    }
+            )
+            .onAppear {
+                lastSize = size
+            }
+            .onChange(of: size) { _, newSize in
+                guard newSize != lastSize else { return }
+                lastSize = newSize
+                if let data = historyData {
+                    recomputeLayout(size: newSize, days: data.days)
                 }
             }
         }
+        .ignoresSafeArea(edges: .bottom)
         .task {
             await loadHistory(symbol: currentStock.symbol)
         }
