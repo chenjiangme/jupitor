@@ -49,10 +49,9 @@ struct CNHeatmapView: View {
     private func treemapCanvas(stocks: [CNHeatmapStock], stats: CNHeatmapStats, size: CGSize) -> some View {
         let currentScale = scale
         let currentOffset = offset
+        let currentLayout = layout // Read during view-tree building so SwiftUI tracks changes.
         Canvas { context, canvasSize in
-            drawTreemap(context: context, size: canvasSize, stocks: stocks, stats: stats, zoom: currentScale, offset: currentOffset)
-        } symbols: {
-            // Empty — we draw everything directly.
+            drawTreemap(context: context, size: canvasSize, layout: currentLayout, stocks: stocks, stats: stats, zoom: currentScale, offset: currentOffset)
         }
         .clipped()
         .contentShape(Rectangle())
@@ -144,6 +143,7 @@ struct CNHeatmapView: View {
                     Text("No data")
                         .foregroundStyle(.secondary)
                 }
+
             }
             .onChange(of: size) { _, newSize in
                 lastSize = newSize
@@ -338,7 +338,7 @@ struct CNHeatmapView: View {
 
     // MARK: - Drawing
 
-    private func drawTreemap(context: GraphicsContext, size: CGSize, stocks: [CNHeatmapStock], stats: CNHeatmapStats, zoom: CGFloat = 1.0, offset: CGSize = .zero) {
+    private func drawTreemap(context: GraphicsContext, size: CGSize, layout: [(rect: CGRect, stock: CNHeatmapStock)], stocks: [CNHeatmapStock], stats: CNHeatmapStats, zoom: CGFloat = 1.0, offset: CGSize = .zero) {
         // Apply zoom transform inside Canvas for native-resolution rendering.
         var context = context
         let transform = CGAffineTransform(scaleX: zoom, y: zoom)
