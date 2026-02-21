@@ -252,36 +252,25 @@ struct CNSymbolHistoryView: View {
             let fontSize: CGFloat = min(inset.width / 5, inset.height / 3.5, 14)
             guard fontSize >= 5 else { continue }
 
-            if inset.height > 28 {
-                // Two lines: price + date.
-                let priceLabel = Text(priceText)
-                    .font(.system(size: fontSize, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.9))
-                context.draw(
-                    context.resolve(priceLabel),
-                    at: CGPoint(x: inset.midX, y: inset.midY - fontSize * 0.55),
-                    anchor: .center
-                )
+            let showDate = inset.height > 28
+            let priceY = showDate ? inset.midY - fontSize * 0.55 : inset.midY
 
+            let priceLabel = Text(priceText)
+                .font(.system(size: fontSize, weight: .semibold))
+                .foregroundColor(.white.opacity(0.9))
+            context.draw(
+                context.resolve(priceLabel),
+                at: CGPoint(x: inset.midX, y: priceY),
+                anchor: .center
+            )
+
+            if showDate {
                 let dateLabel = Text(dateStr)
                     .font(.system(size: fontSize * 0.75, weight: .regular))
                     .foregroundColor(.white.opacity(0.5))
                 context.draw(
                     context.resolve(dateLabel),
                     at: CGPoint(x: inset.midX, y: inset.midY + fontSize * 0.55),
-                    anchor: .center
-                )
-            } else {
-                // Single line: price + date combined.
-                let combined = Text(priceText)
-                    .font(.system(size: fontSize * 0.85, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.9))
-                + Text("  \(dateStr)")
-                    .font(.system(size: fontSize * 0.65, weight: .regular))
-                    .foregroundColor(.white.opacity(0.4))
-                context.draw(
-                    context.resolve(combined),
-                    at: CGPoint(x: inset.midX, y: inset.midY),
                     anchor: .center
                 )
             }
