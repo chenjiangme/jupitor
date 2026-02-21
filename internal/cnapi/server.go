@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -26,6 +29,7 @@ type CNServer struct {
 	dates        []string // cached date list
 	datesMu      sync.RWMutex
 	industryMap  map[string]string // symbol → industry
+	filterPath   string            // path to industry-filter.json
 }
 
 // NewCNServer creates a new CN server.
@@ -56,6 +60,8 @@ func (s *CNServer) Init() error {
 	}
 	s.industryMap = indMap
 	s.log.Info("CN industry map loaded", "count", len(indMap))
+
+	s.filterPath = filepath.Join(s.dataDir, "cn", "industry-filter.json")
 	return nil
 }
 
@@ -65,6 +71,8 @@ func (s *CNServer) Handler() http.Handler {
 	mux.HandleFunc("GET /api/cn/heatmap", s.handleHeatmap)
 	mux.HandleFunc("GET /api/cn/dates", s.handleDates)
 	mux.HandleFunc("GET /api/cn/symbol-history/{symbol}", s.handleSymbolHistory)
+	mux.HandleFunc("GET /api/cn/industry-filter", s.handleGetIndustryFilter)
+	mux.HandleFunc("PUT /api/cn/industry-filter", s.handlePutIndustryFilter)
 	return corsMiddleware(mux)
 }
 
@@ -188,6 +196,59 @@ func (s *CNServer) handleSymbolHistory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *CNServer) handleGetIndustryFilter(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile(s.filterPath)
+	if err != nil {
+		// File missing → empty filter.
+		writeJSON(w, CNIndustryFilterResponse{Selected: []string{}, Excluded: []string{}})
+		return
+	}
+	var resp CNIndustryFilterResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		s.log.Error("parsing industry filter", "error", err)
+		writeJSON(w, CNIndustryFilterResponse{Selected: []string{}, Excluded: []string{}})
+		return
+	}
+	if resp.Selected == nil {
+		resp.Selected = []string{}
+	}
+	if resp.Excluded == nil {
+		resp.Excluded = []string{}
+	}
+	writeJSON(w, resp)
+}
+
+func (s *CNServer) handlePutIndustryFilter(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "reading body", http.StatusBadRequest)
+		return
+	}
+	var req CNIndustryFilterResponse
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if req.Selected == nil {
+		req.Selected = []string{}
+	}
+	if req.Excluded == nil {
+		req.Excluded = []string{}
+	}
+
+	out, _ := json.Marshal(req)
+	if err := os.MkdirAll(filepath.Dir(s.filterPath), 0o755); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(s.filterPath, out, 0o644); err != nil {
+		s.log.Error("writing industry filter", "error", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, req)
+}
+
 func (s *CNServer) buildHeatmap(ctx context.Context, date string) (*CNHeatmapResponse, error) {
 	constituents, err := LoadIndexConstituents(s.dataDir, date)
 	if err != nil {
@@ -306,7 +367,7 @@ func percentile(sorted []float64, p float64) float64 {
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)

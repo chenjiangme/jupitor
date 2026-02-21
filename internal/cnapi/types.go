@@ -43,7 +43,13 @@ type CNSymbolDay struct {
 
 // CNSymbolHistoryResponse is the symbol history API response.
 type CNSymbolHistoryResponse struct {
-	Symbol string         `json:"symbol"`
-	Name   string         `json:"name"`
-	Days   []CNSymbolDay  `json:"days"`
+	Symbol string        `json:"symbol"`
+	Name   string        `json:"name"`
+	Days   []CNSymbolDay `json:"days"`
+}
+
+// CNIndustryFilterResponse is the persisted industry filter state.
+type CNIndustryFilterResponse struct {
+	Selected []string `json:"selected"`
+	Excluded []string `json:"excluded"`
 }

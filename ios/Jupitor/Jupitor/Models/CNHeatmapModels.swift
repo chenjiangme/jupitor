@@ -58,3 +58,8 @@ struct CNSymbolHistoryResponse: Codable {
     let name: String
     let days: [CNSymbolDay]
 }
+
+struct CNIndustryFilterResponse: Codable {
+    let selected: [String]
+    let excluded: [String]
+}

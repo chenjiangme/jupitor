@@ -8,6 +8,7 @@ struct CNHeatmapView: View {
     @State private var lastSize: CGSize = .zero
 
     // Zoom / pan state.
+    // Transform: screen = content * scale + offset
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
     @State private var offset: CGSize = .zero
@@ -23,14 +24,25 @@ struct CNHeatmapView: View {
         vm.isZoomed = false
     }
 
+    /// Clamp offset so content covers the entire viewport.
     private func clampOffset(_ off: CGSize, scale: CGFloat, viewSize: CGSize) -> CGSize {
         guard scale > 1 else { return .zero }
-        let maxX = (viewSize.width * scale - viewSize.width) / 2
-        let maxY = (viewSize.height * scale - viewSize.height) / 2
+        // Content spans [offset, offset + viewSize*scale].
+        // Must cover [0, viewSize]: offset <= 0 and offset + viewSize*scale >= viewSize.
+        let minX = viewSize.width * (1 - scale) // negative when scale > 1
+        let maxX: CGFloat = 0
+        let minY = viewSize.height * (1 - scale)
+        let maxY: CGFloat = 0
         return CGSize(
-            width: min(max(off.width, -maxX), maxX),
-            height: min(max(off.height, -maxY), maxY)
+            width: min(max(off.width, minX), maxX),
+            height: min(max(off.height, minY), maxY)
         )
+    }
+
+    /// The affine transform mapping content coords to screen coords.
+    private func zoomTransform() -> CGAffineTransform {
+        CGAffineTransform(scaleX: scale, y: scale)
+            .concatenating(CGAffineTransform(translationX: offset.width, y: offset.height))
     }
 
     var body: some View {
@@ -44,22 +56,20 @@ struct CNHeatmapView: View {
                         .foregroundStyle(.secondary)
                 } else if let stocks = vm.filteredStocks, !stocks.isEmpty, let stats = vm.heatmapData?.stats {
                     let currentScale = scale // capture for Canvas redraw
+                    let currentOffset = offset
                     Canvas { context, canvasSize in
-                        drawTreemap(context: context, size: canvasSize, stocks: stocks, stats: stats, zoom: currentScale)
+                        drawTreemap(context: context, size: canvasSize, stocks: stocks, stats: stats, zoom: currentScale, offset: currentOffset)
                     } symbols: {
                         // Empty — we draw everything directly.
                     }
-                    .scaleEffect(scale)
-                    .offset(offset)
+                    .clipped()
                     .contentShape(Rectangle())
                     .onTapGesture { location in
-                        // Inverse transform for hit testing.
-                        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-                        let adjusted = CGPoint(
-                            x: (location.x - center.x - offset.width) / scale + center.x,
-                            y: (location.y - center.y - offset.height) / scale + center.y
-                        )
-                        if let hit = layout.first(where: { $0.rect.contains(adjusted) }) {
+                        // Inverse transform: content = (screen - offset) / scale
+                        let transform = zoomTransform()
+                        let inverted = transform.inverted()
+                        let contentPt = location.applying(inverted)
+                        if let hit = layout.first(where: { $0.rect.contains(contentPt) }) {
                             selectedStock = hit.stock
                         }
                     }
@@ -69,19 +79,37 @@ struct CNHeatmapView: View {
                     .gesture(
                         MagnifyGesture()
                             .onChanged { value in
+                                let anchor = CGPoint(
+                                    x: value.startAnchor.x * size.width,
+                                    y: value.startAnchor.y * size.height
+                                )
                                 let newScale = min(max(lastScale * value.magnification, 1.0), 5.0)
+                                let ratio = newScale / lastScale
+                                let newOffset = CGSize(
+                                    width: anchor.x - (anchor.x - lastOffset.width) * ratio,
+                                    height: anchor.y - (anchor.y - lastOffset.height) * ratio
+                                )
                                 scale = newScale
-                                offset = clampOffset(lastOffset, scale: newScale, viewSize: size)
+                                offset = clampOffset(newOffset, scale: newScale, viewSize: size)
                                 vm.isZoomed = newScale > 1.05
                             }
                             .onEnded { value in
+                                let anchor = CGPoint(
+                                    x: value.startAnchor.x * size.width,
+                                    y: value.startAnchor.y * size.height
+                                )
                                 let newScale = min(max(lastScale * value.magnification, 1.0), 5.0)
                                 if newScale < 1.05 {
                                     resetZoom()
                                 } else {
+                                    let ratio = newScale / lastScale
+                                    let newOffset = CGSize(
+                                        width: anchor.x - (anchor.x - lastOffset.width) * ratio,
+                                        height: anchor.y - (anchor.y - lastOffset.height) * ratio
+                                    )
                                     scale = newScale
                                     lastScale = newScale
-                                    offset = clampOffset(offset, scale: newScale, viewSize: size)
+                                    offset = clampOffset(newOffset, scale: newScale, viewSize: size)
                                     lastOffset = offset
                                 }
                             }
@@ -291,7 +319,13 @@ struct CNHeatmapView: View {
 
     // MARK: - Drawing
 
-    private func drawTreemap(context: GraphicsContext, size: CGSize, stocks: [CNHeatmapStock], stats: CNHeatmapStats, zoom: CGFloat = 1.0) {
+    private func drawTreemap(context: GraphicsContext, size: CGSize, stocks: [CNHeatmapStock], stats: CNHeatmapStats, zoom: CGFloat = 1.0, offset: CGSize = .zero) {
+        // Apply zoom transform inside Canvas for native-resolution rendering.
+        var context = context
+        let transform = CGAffineTransform(scaleX: zoom, y: zoom)
+            .concatenating(CGAffineTransform(translationX: offset.width, y: offset.height))
+        context.concatenate(transform)
+
         for item in layout {
             let rect = item.rect
             let stock = item.stock
@@ -314,8 +348,7 @@ struct CNHeatmapView: View {
             let pctText = String(format: "%+.1f%%", stock.pctChg)
             let pctColor: Color = stock.pctChg > 0 ? Color(red: 0.1, green: 0.9, blue: 0.3) : (stock.pctChg < 0 ? .red : .white)
 
-            // Compute font size in effective (visual) coords, then scale back to canvas coords.
-            // scaleEffect will magnify canvas → visual, so we draw smaller and let zoom enlarge.
+            // Font size in content coords. Canvas rasterizes after transform → crisp at all zoom levels.
             let effFontSize: CGFloat = min(effW / 5, effH / 3.5, 12)
             guard effFontSize >= 5 else { continue }
             let fontSize = effFontSize / zoom

@@ -34,6 +34,24 @@ actor CNAPIService {
         return try await fetch(components.url!)
     }
 
+    func fetchIndustryFilter() async throws -> CNIndustryFilterResponse {
+        let url = baseURL.appendingPathComponent("api/cn/industry-filter")
+        return try await fetch(url)
+    }
+
+    func saveIndustryFilter(selected: [String], excluded: [String]) async throws {
+        let url = baseURL.appendingPathComponent("api/cn/industry-filter")
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = CNIndustryFilterResponse(selected: selected, excluded: excluded)
+        request.httpBody = try JSONEncoder().encode(body)
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw APIError.requestFailed
+        }
+    }
+
     private func fetch<T: Decodable>(_ url: URL) async throws -> T {
         let (data, response) = try await session.data(from: url)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {

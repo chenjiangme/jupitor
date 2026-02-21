@@ -7,7 +7,7 @@ final class CNHeatmapViewModel {
     var heatmapData: CNHeatmapResponse?
     var isLoading = false
     var error: String?
-    var indexFilter: CNIndexFilter = .all
+    var indexFilter: CNIndexFilter = .csi300
     var showDatePicker = false
     var isZoomed = false
 
@@ -29,6 +29,8 @@ final class CNHeatmapViewModel {
             case .csi500: return .all
             }
         }
+
+        static var `default`: CNIndexFilter { .csi300 }
     }
 
     /// Stocks filtered by current index and industry filters.
@@ -120,6 +122,15 @@ final class CNHeatmapViewModel {
         isLoading = true
         defer { isLoading = false }
 
+        // Load persisted industry filter.
+        do {
+            let filter = try await api.fetchIndustryFilter()
+            selectedIndustries = Set(filter.selected)
+            excludedIndustries = Set(filter.excluded)
+        } catch {
+            // Non-fatal — start with empty filter.
+        }
+
         do {
             let resp = try await api.fetchDates()
             self.dates = resp.dates
@@ -204,6 +215,7 @@ final class CNHeatmapViewModel {
     func resetIndustryFilter() {
         selectedIndustries.removeAll()
         excludedIndustries.removeAll()
+        saveIndustryFilter()
     }
 
     /// Three-state cycle: normal → selected → excluded → normal.
@@ -215,6 +227,15 @@ final class CNHeatmapViewModel {
             excludedIndustries.remove(industry)
         } else {
             selectedIndustries.insert(industry)
+        }
+        saveIndustryFilter()
+    }
+
+    private func saveIndustryFilter() {
+        let selected = Array(selectedIndustries)
+        let excluded = Array(excludedIndustries)
+        Task {
+            try? await api.saveIndustryFilter(selected: selected, excluded: excluded)
         }
     }
 }
