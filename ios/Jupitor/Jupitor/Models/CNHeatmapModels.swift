@@ -29,3 +29,17 @@ struct CNHeatmapResponse: Codable {
 struct CNDatesResponse: Codable {
     let dates: [String]
 }
+
+struct CNSymbolDay: Codable, Identifiable {
+    let date: String
+    let turn: Double
+    let pctChg: Double
+    let close: Double
+    var id: String { date }
+}
+
+struct CNSymbolHistoryResponse: Codable {
+    let symbol: String
+    let name: String
+    let days: [CNSymbolDay]
+}

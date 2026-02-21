@@ -36,6 +36,7 @@
 		A10039 /* CNAPIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10039 /* CNAPIService.swift */; };
 		A10040 /* CNHeatmapViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10040 /* CNHeatmapViewModel.swift */; };
 		A10041 /* CNHeatmapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10041 /* CNHeatmapView.swift */; };
+		A10042 /* CNSymbolHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10042 /* CNSymbolHistoryView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -69,6 +70,7 @@
 		B10039 /* CNAPIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CNAPIService.swift; sourceTree = "<group>"; };
 		B10040 /* CNHeatmapViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CNHeatmapViewModel.swift; sourceTree = "<group>"; };
 		B10041 /* CNHeatmapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CNHeatmapView.swift; sourceTree = "<group>"; };
+		B10042 /* CNSymbolHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CNSymbolHistoryView.swift; sourceTree = "<group>"; };
 		C10001 /* Jupitor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jupitor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -154,6 +156,7 @@
 			isa = PBXGroup;
 			children = (
 				B10041 /* CNHeatmapView.swift */,
+				B10042 /* CNSymbolHistoryView.swift */,
 			);
 			path = CN;
 			sourceTree = "<group>";
@@ -329,6 +332,7 @@
 				A10039 /* CNAPIService.swift in Sources */,
 				A10040 /* CNHeatmapViewModel.swift in Sources */,
 				A10041 /* CNHeatmapView.swift in Sources */,
+				A10042 /* CNSymbolHistoryView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

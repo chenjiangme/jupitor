@@ -53,6 +53,7 @@ func (s *CNServer) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/cn/heatmap", s.handleHeatmap)
 	mux.HandleFunc("GET /api/cn/dates", s.handleDates)
+	mux.HandleFunc("GET /api/cn/symbol-history/{symbol}", s.handleSymbolHistory)
 	return corsMiddleware(mux)
 }
 
@@ -94,6 +95,86 @@ func (s *CNServer) handleHeatmap(w http.ResponseWriter, r *http.Request) {
 
 	s.cache.Store(date, resp)
 	writeJSON(w, resp)
+}
+
+func (s *CNServer) handleSymbolHistory(w http.ResponseWriter, r *http.Request) {
+	symbol := r.PathValue("symbol")
+	if symbol == "" {
+		http.Error(w, "symbol required", http.StatusBadRequest)
+		return
+	}
+
+	days := 120
+	if d := r.URL.Query().Get("days"); d != "" {
+		if n, err := fmt.Sscanf(d, "%d", &days); err != nil || n != 1 || days < 1 {
+			http.Error(w, "invalid days parameter", http.StatusBadRequest)
+			return
+		}
+		if days > 500 {
+			days = 500
+		}
+	}
+
+	// Determine end date: use ?end= param or default to latest available.
+	endDate := r.URL.Query().Get("end")
+	if endDate == "" {
+		s.datesMu.RLock()
+		if len(s.dates) > 0 {
+			endDate = s.dates[len(s.dates)-1]
+		}
+		s.datesMu.RUnlock()
+	}
+
+	if endDate == "" {
+		http.Error(w, "no dates available", http.StatusNotFound)
+		return
+	}
+
+	end, err := time.Parse("2006-01-02", endDate)
+	if err != nil {
+		http.Error(w, "invalid end date", http.StatusBadRequest)
+		return
+	}
+
+	// Go back enough calendar days to cover trading days.
+	start := end.AddDate(0, 0, -days*2)
+
+	bars, err := s.store.ReadCNBaoBars(r.Context(), symbol, start, end)
+	if err != nil {
+		s.log.Error("reading symbol bars", "symbol", symbol, "error", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Keep only the last N trading days.
+	if len(bars) > days {
+		bars = bars[len(bars)-days:]
+	}
+
+	// Look up name from index constituents on the end date.
+	name := symbol
+	constituents, err := LoadIndexConstituents(s.dataDir, endDate)
+	if err == nil {
+		if entry, ok := constituents[symbol]; ok {
+			name = entry.Name
+		}
+	}
+
+	result := make([]CNSymbolDay, len(bars))
+	for i, bar := range bars {
+		result[i] = CNSymbolDay{
+			Date:   bar.Date,
+			Turn:   bar.Turn,
+			PctChg: bar.PctChg,
+			Close:  bar.Close,
+		}
+	}
+
+	writeJSON(w, CNSymbolHistoryResponse{
+		Symbol: symbol,
+		Name:   name,
+		Days:   result,
+	})
 }
 
 func (s *CNServer) buildHeatmap(ctx context.Context, date string) (*CNHeatmapResponse, error) {

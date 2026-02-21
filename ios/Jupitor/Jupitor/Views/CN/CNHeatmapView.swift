@@ -5,6 +5,7 @@ struct CNHeatmapView: View {
 
     @State private var selectedStock: CNHeatmapStock?
     @State private var layout: [(rect: CGRect, stock: CNHeatmapStock)] = []
+    @State private var lastSize: CGSize = .zero
 
     var body: some View {
         GeometryReader { geo in
@@ -15,9 +16,9 @@ struct CNHeatmapView: View {
                 if vm.currentDate.isEmpty || (vm.isLoading && vm.heatmapData == nil) {
                     ProgressView()
                         .foregroundStyle(.secondary)
-                } else if let data = vm.heatmapData, let stocks = data.stocks, !stocks.isEmpty {
+                } else if let stocks = vm.filteredStocks, !stocks.isEmpty, let stats = vm.heatmapData?.stats {
                     Canvas { context, canvasSize in
-                        drawTreemap(context: context, size: canvasSize, stocks: stocks, stats: data.stats)
+                        drawTreemap(context: context, size: canvasSize, stocks: stocks, stats: stats)
                     } symbols: {
                         // Empty — we draw everything directly.
                     }
@@ -27,55 +28,70 @@ struct CNHeatmapView: View {
                             selectedStock = hit.stock
                         }
                     }
-                    .onChange(of: vm.heatmapData?.date) { _, _ in
-                        recomputeLayout(size: size)
-                    }
-                    .onAppear { recomputeLayout(size: size) }
-                    .onChange(of: size) { _, newSize in
-                        recomputeLayout(size: newSize)
-                    }
                 } else {
                     Text("No data")
                         .foregroundStyle(.secondary)
                 }
             }
+            .onChange(of: size) { _, newSize in
+                lastSize = newSize
+                recomputeLayout(size: newSize)
+            }
+            .task(id: "\(vm.currentDate)-\(vm.heatmapData?.date ?? "")-\(vm.indexFilter.rawValue)") {
+                if lastSize.width > 0 {
+                    recomputeLayout(size: lastSize)
+                }
+            }
+            .onAppear {
+                lastSize = size
+                recomputeLayout(size: size)
+            }
         }
         .sheet(item: $selectedStock) { stock in
-            CNStockDetailSheet(stock: stock, stats: vm.heatmapData?.stats)
+            CNSymbolHistoryView(stock: stock)
+                .environment(vm)
         }
     }
 
     // MARK: - Layout Computation
 
     private func recomputeLayout(size: CGSize) {
-        guard let data = vm.heatmapData, let stocks = data.stocks, !stocks.isEmpty else {
+        guard let stocks = vm.filteredStocks, !stocks.isEmpty else {
             layout = []
             return
         }
 
-        // Split into CSI 300 and CSI 500 groups.
         let csi300 = stocks.filter { $0.index == "csi300" }
         let csi500 = stocks.filter { $0.index == "csi500" }
 
-        let total300 = csi300.reduce(0.0) { $0 + max($1.amount, 0) }
-        let total500 = csi500.reduce(0.0) { $0 + max($1.amount, 0) }
-        let totalAmount = total300 + total500
+        // Single index filter: use full area, no split.
+        if csi300.isEmpty {
+            layout = squarify(stocks: csi500, in: CGRect(origin: .zero, size: size))
+            return
+        }
+        if csi500.isEmpty {
+            layout = squarify(stocks: csi300, in: CGRect(origin: .zero, size: size))
+            return
+        }
 
-        guard totalAmount > 0 else {
+        // Both: split vertically by turnover proportion.
+        let total300 = csi300.reduce(0.0) { $0 + max($1.turn, 0) }
+        let total500 = csi500.reduce(0.0) { $0 + max($1.turn, 0) }
+        let totalTurn = total300 + total500
+
+        guard totalTurn > 0 else {
             layout = []
             return
         }
 
-        let fraction300 = total300 / totalAmount
+        let fraction300 = total300 / totalTurn
         let split300Height = size.height * fraction300
 
         var result: [(rect: CGRect, stock: CNHeatmapStock)] = []
 
-        // CSI 300 on top.
         let rect300 = CGRect(x: 0, y: 0, width: size.width, height: split300Height)
         result.append(contentsOf: squarify(stocks: csi300, in: rect300))
 
-        // CSI 500 on bottom.
         let rect500 = CGRect(x: 0, y: split300Height, width: size.width, height: size.height - split300Height)
         result.append(contentsOf: squarify(stocks: csi500, in: rect500))
 
@@ -87,8 +103,8 @@ struct CNHeatmapView: View {
     private func squarify(stocks: [CNHeatmapStock], in rect: CGRect) -> [(rect: CGRect, stock: CNHeatmapStock)] {
         guard !stocks.isEmpty else { return [] }
 
-        let totalAmount = stocks.reduce(0.0) { $0 + max($1.amount, 1) }
-        let areas = stocks.map { max($0.amount, 1) / totalAmount * Double(rect.width * rect.height) }
+        let totalTurn = stocks.reduce(0.0) { $0 + max($1.turn, 0.001) }
+        let areas = stocks.map { max($0.turn, 0.001) / totalTurn * Double(rect.width * rect.height) }
 
         // Sort by area descending for better squarification.
         let sorted = zip(stocks, areas).sorted { $0.1 > $1.1 }
@@ -204,53 +220,38 @@ struct CNHeatmapView: View {
             let inset = rect.insetBy(dx: 0.5, dy: 0.5)
             guard inset.width > 0, inset.height > 0 else { continue }
 
-            // Color by turnover rate.
-            let color = turnoverColor(turn: stock.turn, stats: stats)
+            // Color by pctChg (CN: red=up, green=down).
+            let color = pctChgColor(stock.pctChg)
             context.fill(Path(inset), with: .color(color))
 
             // Text labels on cells large enough.
-            guard inset.width > 30, inset.height > 20 else { continue }
+            guard inset.width > 24, inset.height > 16 else { continue }
 
-            // Stock code (last part after dot).
-            let code = stock.symbol.split(separator: ".").last.map(String.init) ?? stock.symbol
             let pctText = String(format: "%+.1f%%", stock.pctChg)
 
-            // CN convention: red = up, green = down.
-            let pctColor: Color = stock.pctChg > 0 ? .red : (stock.pctChg < 0 ? Color(red: 0.1, green: 0.8, blue: 0.2) : .white)
+            let pctColor: Color = stock.pctChg > 0 ? Color(red: 0.1, green: 0.9, blue: 0.3) : (stock.pctChg < 0 ? .red : .white)
 
-            let fontSize: CGFloat = min(inset.width / 5.5, inset.height / 3.5, 12)
+            let fontSize: CGFloat = min(inset.width / 5, inset.height / 3.5, 12)
             guard fontSize >= 5 else { continue }
 
-            // Code label.
-            let codeText = Text(code)
-                .font(.system(size: fontSize, weight: .medium, design: .monospaced))
+            // Name label (primary).
+            let nameLabel = Text(stock.name)
+                .font(.system(size: fontSize, weight: .medium))
                 .foregroundColor(.white.opacity(0.9))
             context.draw(
-                context.resolve(codeText),
-                at: CGPoint(x: inset.midX, y: inset.midY - fontSize * 0.6),
+                context.resolve(nameLabel),
+                at: CGPoint(x: inset.midX, y: inset.midY - fontSize * 0.55),
                 anchor: .center
             )
 
             // PctChg label.
-            if inset.height > 30 {
+            if inset.height > 28 {
                 let pctLabel = Text(pctText)
                     .font(.system(size: fontSize * 0.85, weight: .semibold))
                     .foregroundColor(pctColor)
                 context.draw(
                     context.resolve(pctLabel),
-                    at: CGPoint(x: inset.midX, y: inset.midY + fontSize * 0.6),
-                    anchor: .center
-                )
-            }
-
-            // Name on larger cells.
-            if inset.width > 55, inset.height > 45 {
-                let nameLabel = Text(stock.name)
-                    .font(.system(size: fontSize * 0.75))
-                    .foregroundColor(.white.opacity(0.6))
-                context.draw(
-                    context.resolve(nameLabel),
-                    at: CGPoint(x: inset.midX, y: inset.midY + fontSize * 1.8),
+                    at: CGPoint(x: inset.midX, y: inset.midY + fontSize * 0.55),
                     anchor: .center
                 )
             }
@@ -268,49 +269,21 @@ struct CNHeatmapView: View {
 
     // MARK: - Color Mapping
 
-    private func turnoverColor(turn: Double, stats: CNHeatmapStats) -> Color {
-        guard stats.turnMax > 0 else { return Color(red: 0.15, green: 0.15, blue: 0.25) }
+    /// Green = up, red = down (same as US). Intensity scales with magnitude.
+    private func pctChgColor(_ pctChg: Double) -> Color {
+        if abs(pctChg) < 0.05 {
+            return Color(red: 0.2, green: 0.2, blue: 0.2)
+        }
 
-        // Log-scale normalization using percentile stats.
-        let logTurn = log(max(turn, 0.01) + 1)
-        let logP50 = log(max(stats.turnP50, 0.01) + 1)
-        let logP90 = log(max(stats.turnP90, 0.01) + 1)
-        let logMax = log(stats.turnMax + 1)
+        // Clamp to ±10% for color scaling (limit up/down).
+        let t = min(abs(pctChg) / 10.0, 1.0)
 
-        if logTurn <= logP50 {
-            // Low: dark blue → cyan
-            let t = logP50 > 0 ? logTurn / logP50 : 0
-            return Color(
-                red: 0.05 + 0.0 * t,
-                green: 0.08 + 0.35 * t,
-                blue: 0.25 + 0.35 * t
-            )
-        } else if logTurn <= logP90 {
-            // Mid: cyan → yellow → orange
-            let t = (logP90 > logP50) ? (logTurn - logP50) / (logP90 - logP50) : 0
-            if t < 0.5 {
-                let u = t * 2
-                return Color(
-                    red: 0.05 + 0.85 * u,
-                    green: 0.43 + 0.37 * u,
-                    blue: 0.60 - 0.50 * u
-                )
-            } else {
-                let u = (t - 0.5) * 2
-                return Color(
-                    red: 0.90 + 0.10 * u,
-                    green: 0.80 - 0.25 * u,
-                    blue: 0.10 - 0.05 * u
-                )
-            }
+        if pctChg > 0 {
+            // Up: dark green → bright green.
+            return Color(red: 0.05 * (1 - t), green: 0.25 + 0.55 * t, blue: 0.08 * (1 - t))
         } else {
-            // High: orange → bright red
-            let t = min((logMax > logP90) ? (logTurn - logP90) / (logMax - logP90) : 1, 1)
-            return Color(
-                red: 1.0,
-                green: 0.55 - 0.45 * t,
-                blue: 0.05 - 0.05 * t
-            )
+            // Down: dark red → bright red.
+            return Color(red: 0.3 + 0.7 * t, green: 0.08 * (1 - t), blue: 0.05 * (1 - t))
         }
     }
 }

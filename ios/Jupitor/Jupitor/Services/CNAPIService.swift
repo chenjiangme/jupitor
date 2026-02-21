@@ -25,6 +25,15 @@ actor CNAPIService {
         return try await fetch(url)
     }
 
+    func fetchSymbolHistory(symbol: String, days: Int = 250, end: String? = nil) async throws -> CNSymbolHistoryResponse {
+        let url = baseURL.appendingPathComponent("api/cn/symbol-history/\(symbol)")
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        var items = [URLQueryItem(name: "days", value: "\(days)")]
+        if let end { items.append(URLQueryItem(name: "end", value: end)) }
+        components.queryItems = items
+        return try await fetch(components.url!)
+    }
+
     private func fetch<T: Decodable>(_ url: URL) async throws -> T {
         let (data, response) = try await session.data(from: url)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {

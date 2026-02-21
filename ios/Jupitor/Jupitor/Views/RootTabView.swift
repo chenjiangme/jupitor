@@ -302,7 +302,7 @@ struct RootTabView: View {
 
                 ToolbarItem(placement: .principal) {
                     if marketMode == 1 {
-                        Text(cnVM.currentDate)
+                        Text(cnVM.currentDate.isEmpty ? "Loading..." : cnVM.currentDate)
                             .font(.headline)
                     } else {
                         VStack(spacing: vm.isReplaying ? 2 : 0) {
@@ -335,6 +335,19 @@ struct RootTabView: View {
                             } label: {
                                 Image(systemName: chartViewMode == 1 ? "list.bullet" : "bubbles.and.sparkles")
                                     .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    cnVM.indexFilter = cnVM.indexFilter.next
+                                }
+                            } label: {
+                                Text(cnVM.indexFilter.rawValue)
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(.orange)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(.white.opacity(0.1), in: Capsule())
                             }
                         }
                         Button { showingSettings = true } label: {

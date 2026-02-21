@@ -31,3 +31,18 @@ type CNHeatmapResponse struct {
 type CNDatesResponse struct {
 	Dates []string `json:"dates"`
 }
+
+// CNSymbolDay is one trading day in symbol history.
+type CNSymbolDay struct {
+	Date   string  `json:"date"`
+	Turn   float64 `json:"turn"`
+	PctChg float64 `json:"pctChg"`
+	Close  float64 `json:"close"`
+}
+
+// CNSymbolHistoryResponse is the symbol history API response.
+type CNSymbolHistoryResponse struct {
+	Symbol string         `json:"symbol"`
+	Name   string         `json:"name"`
+	Days   []CNSymbolDay  `json:"days"`
+}
