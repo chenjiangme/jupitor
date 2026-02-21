@@ -2,6 +2,14 @@
 
 Unified financial platform for US equities and China A-shares. Go handles all core services; Python handles analysis scripts and notebooks.
 
+## Strategy / Market Segments
+
+1. **CN A-Share CSI 800** — Chinese A-shares, CSI 300 + CSI 500 constituents only
+2. **US SPY Sell Option** — SPY options selling strategy
+3. **US SPX + NDX** — S&P 500 and Nasdaq 100 index stocks
+4. **US Ex-Index Active** — Ex-index stocks in the ACTIVE tier
+5. **US Ex-Index Moderate & Sporadic** — Ex-index stocks in the MODERATE and SPORADIC tiers
+
 ## Project Structure
 
 - `cmd/` — Go binaries (each runs as a separate process)
