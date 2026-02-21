@@ -30,6 +30,7 @@ type CNServer struct {
 	datesMu      sync.RWMutex
 	industryMap  map[string]string // symbol → industry
 	filterPath   string            // path to industry-filter.json
+	presetsPath  string            // path to industry-presets.json
 }
 
 // NewCNServer creates a new CN server.
@@ -62,6 +63,7 @@ func (s *CNServer) Init() error {
 	s.log.Info("CN industry map loaded", "count", len(indMap))
 
 	s.filterPath = filepath.Join(s.dataDir, "cn", "industry-filter.json")
+	s.presetsPath = filepath.Join(s.dataDir, "cn", "industry-presets.json")
 	return nil
 }
 
@@ -73,6 +75,9 @@ func (s *CNServer) Handler() http.Handler {
 	mux.HandleFunc("GET /api/cn/symbol-history/{symbol}", s.handleSymbolHistory)
 	mux.HandleFunc("GET /api/cn/industry-filter", s.handleGetIndustryFilter)
 	mux.HandleFunc("PUT /api/cn/industry-filter", s.handlePutIndustryFilter)
+	mux.HandleFunc("GET /api/cn/industry-presets", s.handleGetPresets)
+	mux.HandleFunc("POST /api/cn/industry-presets", s.handlePostPreset)
+	mux.HandleFunc("DELETE /api/cn/industry-presets/{name}", s.handleDeletePreset)
 	return corsMiddleware(mux)
 }
 
@@ -249,6 +254,108 @@ func (s *CNServer) handlePutIndustryFilter(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, req)
 }
 
+func (s *CNServer) loadPresets() ([]CNIndustryPreset, error) {
+	data, err := os.ReadFile(s.presetsPath)
+	if err != nil {
+		return nil, nil // file missing → no presets
+	}
+	var presets []CNIndustryPreset
+	if err := json.Unmarshal(data, &presets); err != nil {
+		return nil, err
+	}
+	return presets, nil
+}
+
+func (s *CNServer) savePresets(presets []CNIndustryPreset) error {
+	out, err := json.Marshal(presets)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(s.presetsPath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(s.presetsPath, out, 0o644)
+}
+
+func (s *CNServer) handleGetPresets(w http.ResponseWriter, r *http.Request) {
+	presets, err := s.loadPresets()
+	if err != nil {
+		s.log.Error("loading presets", "error", err)
+		presets = nil
+	}
+	if presets == nil {
+		presets = []CNIndustryPreset{}
+	}
+	writeJSON(w, CNIndustryPresetsResponse{Presets: presets})
+}
+
+func (s *CNServer) handlePostPreset(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "reading body", http.StatusBadRequest)
+		return
+	}
+	var preset CNIndustryPreset
+	if err := json.Unmarshal(body, &preset); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if preset.Name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	if preset.Selected == nil {
+		preset.Selected = []string{}
+	}
+	if preset.Excluded == nil {
+		preset.Excluded = []string{}
+	}
+
+	presets, _ := s.loadPresets()
+	// Replace existing preset with the same name, or append.
+	found := false
+	for i, p := range presets {
+		if p.Name == preset.Name {
+			presets[i] = preset
+			found = true
+			break
+		}
+	}
+	if !found {
+		presets = append(presets, preset)
+	}
+
+	if err := s.savePresets(presets); err != nil {
+		s.log.Error("saving presets", "error", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, preset)
+}
+
+func (s *CNServer) handleDeletePreset(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+
+	presets, _ := s.loadPresets()
+	filtered := make([]CNIndustryPreset, 0, len(presets))
+	for _, p := range presets {
+		if p.Name != name {
+			filtered = append(filtered, p)
+		}
+	}
+
+	if err := s.savePresets(filtered); err != nil {
+		s.log.Error("saving presets", "error", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *CNServer) buildHeatmap(ctx context.Context, date string) (*CNHeatmapResponse, error) {
 	constituents, err := LoadIndexConstituents(s.dataDir, date)
 	if err != nil {
@@ -367,7 +474,7 @@ func percentile(sorted []float64, p float64) float64 {
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)

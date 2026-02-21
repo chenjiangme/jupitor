@@ -4,6 +4,9 @@ struct CNIndustryFilterView: View {
     @Environment(CNHeatmapViewModel.self) private var vm
     @Environment(\.dismiss) private var dismiss
 
+    @State private var showSaveAlert = false
+    @State private var presetName = ""
+
     private let columns = [
         GridItem(.adaptive(minimum: 100), spacing: 8)
     ]
@@ -11,6 +14,39 @@ struct CNIndustryFilterView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
+                // Presets section.
+                if !vm.presets.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(vm.presets) { preset in
+                                let active = vm.isPresetActive(preset)
+                                Button {
+                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                        vm.applyPreset(preset)
+                                    }
+                                } label: {
+                                    Text(preset.name)
+                                        .font(.caption)
+                                        .fontWeight(active ? .bold : .regular)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(active ? Color.blue.opacity(0.3) : Color.gray.opacity(0.2), in: Capsule())
+                                        .foregroundStyle(active ? .blue : .primary)
+                                }
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        vm.deletePreset(name: preset.name)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                    .padding(.top, 8)
+                }
+
                 LazyVGrid(columns: columns, spacing: 8) {
                     ForEach(sortedIndustries, id: \.self) { industry in
                         let count = vm.industryCounts[industry] ?? 0
@@ -44,14 +80,35 @@ struct CNIndustryFilterView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Reset") {
-                        withAnimation { vm.resetIndustryFilter() }
+                    HStack(spacing: 12) {
+                        Button("Reset") {
+                            withAnimation { vm.resetIndustryFilter() }
+                        }
+                        .disabled(!vm.hasIndustryFilter)
+
+                        Button {
+                            presetName = ""
+                            showSaveAlert = true
+                        } label: {
+                            Image(systemName: "square.and.arrow.down")
+                        }
+                        .disabled(!vm.hasIndustryFilter)
                     }
-                    .disabled(!vm.hasIndustryFilter)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .alert("Save Preset", isPresented: $showSaveAlert) {
+                TextField("Name", text: $presetName)
+                Button("Save") {
+                    let name = presetName.trimmingCharacters(in: .whitespaces)
+                    guard !name.isEmpty else { return }
+                    vm.savePreset(name: name)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Enter a name for this filter preset")
             }
         }
     }

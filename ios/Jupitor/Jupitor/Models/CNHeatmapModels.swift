@@ -63,3 +63,14 @@ struct CNIndustryFilterResponse: Codable {
     let selected: [String]
     let excluded: [String]
 }
+
+struct CNIndustryPreset: Codable, Identifiable {
+    let name: String
+    let selected: [String]
+    let excluded: [String]
+    var id: String { name }
+}
+
+struct CNIndustryPresetsResponse: Codable {
+    let presets: [CNIndustryPreset]
+}

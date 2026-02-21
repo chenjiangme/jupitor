@@ -17,6 +17,7 @@ final class CNHeatmapViewModel {
     var selectedIndustries: Set<String> = []
     var showIndustryFilter = false
     var showingHistory = false
+    var presets: [CNIndustryPreset] = []
 
     enum CNIndexFilter: String, CaseIterable {
         case all = "ALL"
@@ -131,6 +132,9 @@ final class CNHeatmapViewModel {
         } catch {
             // Non-fatal — start with empty filter.
         }
+
+        // Load presets.
+        await loadPresets()
 
         do {
             let resp = try await api.fetchDates()
@@ -247,5 +251,44 @@ final class CNHeatmapViewModel {
         Task {
             try? await api.saveIndustryFilter(selected: selected, excluded: excluded)
         }
+    }
+
+    // MARK: - Presets
+
+    func loadPresets() async {
+        do {
+            let resp = try await api.fetchPresets()
+            presets = resp.presets
+        } catch {
+            // Non-fatal.
+        }
+    }
+
+    func savePreset(name: String) {
+        let selected = Array(selectedIndustries)
+        let excluded = Array(excludedIndustries)
+        Task {
+            try? await api.savePreset(name: name, selected: selected, excluded: excluded)
+            await loadPresets()
+        }
+    }
+
+    func deletePreset(name: String) {
+        presets.removeAll { $0.name == name }
+        Task {
+            try? await api.deletePreset(name: name)
+            await loadPresets()
+        }
+    }
+
+    func applyPreset(_ preset: CNIndustryPreset) {
+        selectedIndustries = Set(preset.selected)
+        excludedIndustries = Set(preset.excluded)
+        saveIndustryFilter()
+    }
+
+    /// Whether the given preset matches the current filter state.
+    func isPresetActive(_ preset: CNIndustryPreset) -> Bool {
+        Set(preset.selected) == selectedIndustries && Set(preset.excluded) == excludedIndustries
     }
 }

@@ -392,6 +392,19 @@ struct CNHeatmapView: View {
                     at: CGPoint(x: inset.midX, y: inset.midY + fontSize * 0.55),
                     anchor: .center
                 )
+
+                // Price label — show when tile has enough vertical space.
+                if effH > 42 {
+                    let priceText = stock.close >= 100 ? String(format: "%.0f", stock.close) : String(format: "%.2f", stock.close)
+                    let priceLabel = Text(priceText)
+                        .font(.system(size: fontSize * 0.7, weight: .regular))
+                        .foregroundColor(.white.opacity(0.5))
+                    context.draw(
+                        context.resolve(priceLabel),
+                        at: CGPoint(x: inset.midX, y: inset.midY + fontSize * 1.5),
+                        anchor: .center
+                    )
+                }
             }
         }
 

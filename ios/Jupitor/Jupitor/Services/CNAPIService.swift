@@ -52,6 +52,35 @@ actor CNAPIService {
         }
     }
 
+    func fetchPresets() async throws -> CNIndustryPresetsResponse {
+        let url = baseURL.appendingPathComponent("api/cn/industry-presets")
+        return try await fetch(url)
+    }
+
+    func savePreset(name: String, selected: [String], excluded: [String]) async throws {
+        let url = baseURL.appendingPathComponent("api/cn/industry-presets")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = CNIndustryPreset(name: name, selected: selected, excluded: excluded)
+        request.httpBody = try JSONEncoder().encode(body)
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw APIError.requestFailed
+        }
+    }
+
+    func deletePreset(name: String) async throws {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let url = baseURL.appendingPathComponent("api/cn/industry-presets/\(encoded)")
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw APIError.requestFailed
+        }
+    }
+
     private func fetch<T: Decodable>(_ url: URL) async throws -> T {
         let (data, response) = try await session.data(from: url)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {

@@ -53,3 +53,15 @@ type CNIndustryFilterResponse struct {
 	Selected []string `json:"selected"`
 	Excluded []string `json:"excluded"`
 }
+
+// CNIndustryPreset is a named industry filter snapshot.
+type CNIndustryPreset struct {
+	Name     string   `json:"name"`
+	Selected []string `json:"selected"`
+	Excluded []string `json:"excluded"`
+}
+
+// CNIndustryPresetsResponse wraps the list of presets.
+type CNIndustryPresetsResponse struct {
+	Presets []CNIndustryPreset `json:"presets"`
+}
