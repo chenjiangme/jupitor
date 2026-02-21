@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage("serverURL") private var serverURL = "http://mbpro:8080"
+    @AppStorage("cnServerURL") private var cnServerURL = "http://mbpro:8081"
     @AppStorage("showDayMode") private var showDayMode = false
     @AppStorage("chartViewMode") private var chartViewMode = 0
     @AppStorage("hidePennyStocks") private var hidePennyStocks = false
@@ -13,8 +14,15 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Server") {
+                Section("US Server") {
                     TextField("Base URL", text: $serverURL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                }
+
+                Section("CN Server") {
+                    TextField("Base URL", text: $cnServerURL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)

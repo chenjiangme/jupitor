@@ -2,8 +2,10 @@ import SwiftUI
 
 struct RootTabView: View {
     @Environment(DashboardViewModel.self) private var vm
+    @Environment(CNHeatmapViewModel.self) private var cnVM
     @AppStorage("showDayMode") private var showDayMode = false
     @AppStorage("chartViewMode") private var chartViewMode = 0  // 0=bubble, 1=rings, 2=list
+    @AppStorage("marketMode") private var marketMode = 0  // 0=US, 1=CN
     @State private var currentDate: String = ""
     @State private var sessionMode: SessionMode = .pre
     @State private var showingSettings = false
@@ -159,114 +161,181 @@ struct RootTabView: View {
         }
     }
 
+    private func commitCNSwipe(offset: CGFloat) {
+        let threshold: CGFloat = 80
+        let w = UIScreen.main.bounds.width
+
+        if offset < -threshold && cnVM.canGoForward {
+            isTransitioning = true
+            withAnimation(.easeOut(duration: 0.15)) { panOffset = -w }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                cnVM.navigate(by: 1)
+                panOffset = w
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.2)) { panOffset = 0 }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                isTransitioning = false
+            }
+        } else if offset > threshold && cnVM.canGoBack {
+            isTransitioning = true
+            withAnimation(.easeOut(duration: 0.15)) { panOffset = w }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                cnVM.navigate(by: -1)
+                panOffset = -w
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.2)) { panOffset = 0 }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                isTransitioning = false
+            }
+        } else {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { panOffset = 0 }
+        }
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
-                sessionMode.backgroundColor.ignoresSafeArea()
-
-                Group {
-                    if currentDate.isEmpty {
-                        ProgressView("Connecting...")
-                            .foregroundStyle(.secondary)
-                    } else if isDataLoading {
-                        ProgressView()
-                            .foregroundStyle(.secondary)
-                    } else if let day = dayData {
-                        let displayDay = vm.isReplaying ? day : (sessionMode == .next ? (nextData ?? day) : day)
-                        switch chartViewMode {
-                        case 1:
-                            SymbolBarListView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
-                                .transition(.opacity)
-                        default:
-                            BubbleChartView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
-                                .transition(.opacity)
-                        }
-                    } else if isLive, let error = vm.error {
-                        VStack(spacing: 12) {
-                            Image(systemName: "wifi.slash")
-                                .font(.largeTitle)
-                                .foregroundStyle(.secondary)
-                            Text(error)
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                            Button("Retry") { vm.start() }
-                                .buttonStyle(.bordered)
-                        }
-                        .padding()
-                    } else {
-                        Text("No data")
-                            .foregroundStyle(.secondary)
-                    }
+                if marketMode == 0 {
+                    sessionMode.backgroundColor.ignoresSafeArea()
+                } else {
+                    Color(red: 0.06, green: 0.06, blue: 0.08).ignoresSafeArea()
                 }
-                .offset(x: panOffset, y: verticalOffset)
+
+                if marketMode == 1 {
+                    // CN heatmap mode.
+                    CNHeatmapView()
+                        .offset(x: panOffset)
+                } else {
+                    Group {
+                        if currentDate.isEmpty {
+                            ProgressView("Connecting...")
+                                .foregroundStyle(.secondary)
+                        } else if isDataLoading {
+                            ProgressView()
+                                .foregroundStyle(.secondary)
+                        } else if let day = dayData {
+                            let displayDay = vm.isReplaying ? day : (sessionMode == .next ? (nextData ?? day) : day)
+                            switch chartViewMode {
+                            case 1:
+                                SymbolBarListView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
+                                    .transition(.opacity)
+                            default:
+                                BubbleChartView(day: displayDay, date: displayDate, watchlistDate: currentDate, sessionMode: sessionMode)
+                                    .transition(.opacity)
+                            }
+                        } else if isLive, let error = vm.error {
+                            VStack(spacing: 12) {
+                                Image(systemName: "wifi.slash")
+                                    .font(.largeTitle)
+                                    .foregroundStyle(.secondary)
+                                Text(error)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
+                                Button("Retry") { vm.start() }
+                                    .buttonStyle(.bordered)
+                            }
+                            .padding()
+                        } else {
+                            Text("No data")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .offset(x: panOffset, y: verticalOffset)
+                }
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     HStack(spacing: 6) {
-                        if isLive && !vm.isReplaying {
-                            HStack(spacing: 4) {
-                                Circle()
-                                    .fill(.green)
-                                    .frame(width: 8, height: 8)
-                                    .pulseAnimation()
-                                Text("LIVE")
-                                    .font(.caption2.bold())
-                                    .foregroundStyle(.green)
-                            }
-                            .fixedSize()
-                        } else if !vm.isReplaying {
-                            Button {
-                                currentDate = vm.date
-                                sessionMode = .reg
-                            } label: {
-                                Text("LIVE")
-                                    .font(.caption2.bold())
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
                         Button {
-                            if vm.isReplaying {
-                                vm.toggleReplay()
-                            } else {
-                                Task { await vm.startReplay(date: currentDate, sessionMode: sessionMode) }
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                marketMode = marketMode == 0 ? 1 : 0
                             }
                         } label: {
-                            Image(systemName: vm.isReplaying ? "stop.circle.fill" : "play.circle")
-                                .foregroundStyle(vm.isReplaying ? .orange : .secondary)
+                            Text(marketMode == 0 ? "US" : "CN")
+                                .font(.caption2.bold())
+                                .foregroundStyle(marketMode == 0 ? .blue : .orange)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.white.opacity(0.1), in: Capsule())
+                        }
+
+                        if marketMode == 0 {
+                            if isLive && !vm.isReplaying {
+                                HStack(spacing: 4) {
+                                    Circle()
+                                        .fill(.green)
+                                        .frame(width: 8, height: 8)
+                                        .pulseAnimation()
+                                    Text("LIVE")
+                                        .font(.caption2.bold())
+                                        .foregroundStyle(.green)
+                                }
+                                .fixedSize()
+                            } else if !vm.isReplaying {
+                                Button {
+                                    currentDate = vm.date
+                                    sessionMode = .reg
+                                } label: {
+                                    Text("LIVE")
+                                        .font(.caption2.bold())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Button {
+                                if vm.isReplaying {
+                                    vm.toggleReplay()
+                                } else {
+                                    Task { await vm.startReplay(date: currentDate, sessionMode: sessionMode) }
+                                }
+                            } label: {
+                                Image(systemName: vm.isReplaying ? "stop.circle.fill" : "play.circle")
+                                    .foregroundStyle(vm.isReplaying ? .orange : .secondary)
+                            }
                         }
                     }
                 }
 
                 ToolbarItem(placement: .principal) {
-                    VStack(spacing: vm.isReplaying ? 2 : 0) {
-                        HStack(spacing: 6) {
-                            Text(currentDate)
-                                .font(.headline)
-                            Text(sessionMode.label)
-                                .font(.caption2.bold())
-                                .foregroundStyle(sessionMode == .day ? Color.secondary : Color.white)
-                            if !vm.isReplaying && !vm.watchlistSymbols.isEmpty {
-                                Text("\(vm.watchlistSymbols.count)")
+                    if marketMode == 1 {
+                        Text(cnVM.currentDate)
+                            .font(.headline)
+                    } else {
+                        VStack(spacing: vm.isReplaying ? 2 : 0) {
+                            HStack(spacing: 6) {
+                                Text(currentDate)
+                                    .font(.headline)
+                                Text(sessionMode.label)
                                     .font(.caption2.bold())
-                                    .foregroundStyle(Color.watchlistColor)
+                                    .foregroundStyle(sessionMode == .day ? Color.secondary : Color.white)
+                                if !vm.isReplaying && !vm.watchlistSymbols.isEmpty {
+                                    Text("\(vm.watchlistSymbols.count)")
+                                        .font(.caption2.bold())
+                                        .foregroundStyle(Color.watchlistColor)
+                                }
                             }
-                        }
-                        if vm.isReplaying {
-                            Text(replayTimeLabel)
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.orange)
+                            if vm.isReplaying {
+                                Text(replayTimeLabel)
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.orange)
+                            }
                         }
                     }
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 12) {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.3)) { chartViewMode = (chartViewMode + 1) % 2 }
-                        } label: {
-                            Image(systemName: chartViewMode == 1 ? "list.bullet" : "bubbles.and.sparkles")
-                                .foregroundStyle(.secondary)
+                        if marketMode == 0 {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.3)) { chartViewMode = (chartViewMode + 1) % 2 }
+                            } label: {
+                                Image(systemName: chartViewMode == 1 ? "list.bullet" : "bubbles.and.sparkles")
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         Button { showingSettings = true } label: {
                             Image(systemName: "gear")
@@ -282,7 +351,16 @@ struct RootTabView: View {
                         if dragLocked == nil {
                             dragLocked = abs(t.width) > abs(t.height)
                         }
-                        if vm.isReplaying {
+                        if marketMode == 1 {
+                            // CN mode: horizontal swipe only for date nav.
+                            if dragLocked == true {
+                                if (t.width < 0 && cnVM.canGoForward) || (t.width > 0 && cnVM.canGoBack) {
+                                    panOffset = t.width
+                                } else {
+                                    panOffset = 0
+                                }
+                            }
+                        } else if vm.isReplaying {
                             if dragLocked == true {
                                 let width = UIScreen.main.bounds.width
                                 let fraction = Double(value.location.x / width)
@@ -310,7 +388,12 @@ struct RootTabView: View {
                             verticalOffset = 0
                             return
                         }
-                        if vm.isReplaying {
+                        if marketMode == 1 {
+                            // CN mode: commit horizontal date swipe.
+                            if locked == true {
+                                commitCNSwipe(offset: value.translation.width)
+                            }
+                        } else if vm.isReplaying {
                             if locked == true {
                                 vm.scrubEnded()
                             } else {
