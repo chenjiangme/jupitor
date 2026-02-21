@@ -32,6 +32,10 @@
 		A10035 /* ConcentricRingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10035 /* ConcentricRingView.swift */; };
 		A10036 /* ChartComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10036 /* ChartComponents.swift */; };
 		A10037 /* SymbolBarListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10037 /* SymbolBarListView.swift */; };
+		A10038 /* CNHeatmapModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10038 /* CNHeatmapModels.swift */; };
+		A10039 /* CNAPIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10039 /* CNAPIService.swift */; };
+		A10040 /* CNHeatmapViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10040 /* CNHeatmapViewModel.swift */; };
+		A10041 /* CNHeatmapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10041 /* CNHeatmapView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -61,6 +65,10 @@
 		B10035 /* ConcentricRingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConcentricRingView.swift; sourceTree = "<group>"; };
 		B10036 /* ChartComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartComponents.swift; sourceTree = "<group>"; };
 		B10037 /* SymbolBarListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SymbolBarListView.swift; sourceTree = "<group>"; };
+		B10038 /* CNHeatmapModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CNHeatmapModels.swift; sourceTree = "<group>"; };
+		B10039 /* CNAPIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CNAPIService.swift; sourceTree = "<group>"; };
+		B10040 /* CNHeatmapViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CNHeatmapViewModel.swift; sourceTree = "<group>"; };
+		B10041 /* CNHeatmapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CNHeatmapView.swift; sourceTree = "<group>"; };
 		C10001 /* Jupitor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jupitor.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -102,6 +110,7 @@
 			isa = PBXGroup;
 			children = (
 				B10002 /* DashboardModels.swift */,
+				B10038 /* CNHeatmapModels.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -110,6 +119,7 @@
 			isa = PBXGroup;
 			children = (
 				B10003 /* APIService.swift */,
+				B10039 /* CNAPIService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -119,6 +129,7 @@
 			children = (
 				B10004 /* DashboardViewModel.swift */,
 				B10034 /* TradeParamsModel.swift */,
+				B10040 /* CNHeatmapViewModel.swift */,
 			);
 			path = ViewModels;
 			sourceTree = "<group>";
@@ -134,8 +145,17 @@
 				E10013 /* Detail */,
 				E10015 /* Shared */,
 				E10014 /* Settings */,
+				E10016 /* CN */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		E10016 /* CN */ = {
+			isa = PBXGroup;
+			children = (
+				B10041 /* CNHeatmapView.swift */,
+			);
+			path = CN;
 			sourceTree = "<group>";
 		};
 		E10007 /* Utilities */ = {
@@ -305,6 +325,10 @@
 				A10035 /* ConcentricRingView.swift in Sources */,
 				A10036 /* ChartComponents.swift in Sources */,
 				A10037 /* SymbolBarListView.swift in Sources */,
+				A10038 /* CNHeatmapModels.swift in Sources */,
+				A10039 /* CNAPIService.swift in Sources */,
+				A10040 /* CNHeatmapViewModel.swift in Sources */,
+				A10041 /* CNHeatmapView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
